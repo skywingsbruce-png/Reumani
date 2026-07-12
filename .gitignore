@@ -1,0 +1,17 @@
+# 密钥，绝对不能进版本库
+.env
+
+# 第三方技能仓库（30MB，自带 git，不纳入）
+nature-skills/
+
+# 运行时产物
+agent_workspace/
+conversations/
+daily_reports/
+runs/
+data_lake/
+action_queue/
+eval_results/
+__pycache__/
+*.pyc
+streamlit_debug.log

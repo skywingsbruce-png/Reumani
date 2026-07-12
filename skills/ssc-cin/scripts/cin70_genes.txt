@@ -1,0 +1,55 @@
+# CIN / 增殖-染色体不稳定 signature 基因集（起始版）
+# 说明：下面是文献中反复出现在 CIN70（Carter et al., Nat Genet 2006）及增殖/有丝分裂
+#       CIN signature 里的高置信核心基因。用于计算样本级 CIN score。
+# ⚠️ 正式发表前，请用 Carter et al. 2006 原文的完整 70 基因列表替换/补全本文件，
+#    以保证与文献可比。每行一个基因 symbol，# 开头为注释。
+TPX2
+PRC1
+FOXM1
+CDK1
+CCNB2
+KIF2C
+AURKA
+AURKB
+BUB1
+BUB1B
+MAD2L1
+CDC20
+CENPA
+CENPE
+CENPF
+KIF11
+KIF23
+KIF20A
+NUSAP1
+NCAPG
+NCAPH
+ASPM
+TOP2A
+MKI67
+CCNB1
+CCNA2
+CDC2
+PLK1
+PLK4
+TTK
+ESPL1
+UBE2C
+RRM2
+EXO1
+MCM2
+MCM10
+RAD51
+RAD54L
+CHEK1
+FANCI
+BRCA1
+BRCA2
+TIMELESS
+H2AFX
+PBK
+DLGAP5
+HJURP
+KIF15
+SPAG5
+ANLN

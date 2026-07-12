@@ -1,0 +1,17 @@
+[
+  {"id": 1, "q": "ACR/EULAR 2013 系统性硬化症分类标准里，哪一条是单独满足即可分类的充分条件？", "key_facts": ["双手手指皮肤增厚延伸至掌指关节近端", "9分"]},
+  {"id": 2, "q": "哪种自身抗体与硬皮病肾危象(SRC)最相关？", "key_facts": ["抗RNA聚合酶III", "anti-RNA polymerase III"]},
+  {"id": 3, "q": "弥漫型SSc中，哪种自身抗体与间质性肺病(ILD)风险相关？", "key_facts": ["抗Scl-70", "抗拓扑异构酶I", "anti-topoisomerase"]},
+  {"id": 4, "q": "抗着丝点抗体(ACA)阳性提示SSc的哪种亚型和高危并发症？", "key_facts": ["局限型", "lcSSc", "肺动脉高压", "PAH"]},
+  {"id": 5, "q": "硬皮病肾危象的一线关键治疗是什么？应避免什么？", "key_facts": ["ACEI", "血管紧张素转化酶抑制剂", "避免大剂量激素"]},
+  {"id": 6, "q": "哪个抗纤维化药物已被批准用于SSc相关间质性肺病？", "key_facts": ["尼达尼布", "nintedanib"]},
+  {"id": 7, "q": "mRSS(改良Rodnan皮肤评分)测量什么？范围是多少？", "key_facts": ["皮肤增厚", "皮肤硬度", "0-51"]},
+  {"id": 8, "q": "lcSSc和dcSSc如何区分？", "key_facts": ["皮肤增厚累及范围", "肘/膝", "近端"]},
+  {"id": 9, "q": "SSc的甲襞毛细血管镜有哪些典型模式？", "key_facts": ["早期", "活动期", "晚期", "early", "active", "late"]},
+  {"id": 10, "q": "GAVE在SSc中指什么？", "key_facts": ["胃窦血管扩张", "gastric antral vascular ectasia"]},
+  {"id": 11, "q": "托珠单抗在SSc中靶向哪条细胞因子通路？", "key_facts": ["IL-6", "白介素6"]},
+  {"id": 12, "q": "自体造血干细胞移植(HSCT)在SSc中的适应人群是？", "key_facts": ["重症", "早期", "弥漫型", "dcSSc"]},
+  {"id": 13, "q": "SSc最常见的死亡原因是什么？", "key_facts": ["间质性肺病", "肺", "ILD"]},
+  {"id": 14, "q": "cGAS-STING通路感应什么，激活什么？", "key_facts": ["胞质DNA", "cytosolic DNA", "I型干扰素", "type I interferon"]},
+  {"id": 15, "q": "SSc的内在基因表达亚型(intrinsic subsets)有哪几种？", "key_facts": ["inflammatory", "fibroproliferative", "limited", "normal-like", "炎症", "纤维增殖"]}
+]
