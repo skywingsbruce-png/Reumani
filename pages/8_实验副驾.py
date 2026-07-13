@@ -59,10 +59,14 @@ with c1:
 with c2:
     polish = st.button("✍️ " + t("LLM 润色成实验规划", "LLM-polish into a plan"))
 
+_sub = f"{disease} · {_sample_map.get(sample, '')} · {assay}".strip(" ·")
+
 if go:
     with st.spinner(t("组装中（含本地文献检索）……", "Assembling (incl. local literature)…")):
         out = suggest_next(_build_ctx(), with_literature=True, top_k=5)
-    st.markdown(out)
+    st.session_state["copilot_plan"] = out
+    st.session_state["copilot_sub"] = _sub
+    st.session_state["copilot_kind"] = t("下一步建议", "Next-step suggestion")
 
 if polish:
     from ssc_pi_agent import DEEPSEEK_API_KEY
@@ -71,8 +75,24 @@ if polish:
     else:
         with st.spinner(t("先组装、再让模型润色成可执行规划……", "Assembling, then polishing into an actionable plan…")):
             plan = synthesize(_build_ctx(), model="deepseek")
-        st.subheader("📋 " + t("实验规划（LLM 润色）", "Experiment plan (LLM-polished)"))
-        st.markdown(plan)
+        st.session_state["copilot_plan"] = plan
+        st.session_state["copilot_sub"] = _sub
+        st.session_state["copilot_kind"] = t("实验规划（LLM 润色）", "Experiment plan (LLM-polished)")
+
+# 展示结果 + 一键导出 PDF（结果存 session_state，翻页/下载不丢）
+if st.session_state.get("copilot_plan"):
+    st.subheader("📋 " + st.session_state.get("copilot_kind", ""))
+    st.markdown(st.session_state["copilot_plan"])
+    try:
+        from pdf_export import build_plan_pdf
+        pdf_bytes = build_plan_pdf(
+            t("实验副驾方案", "Experiment Copilot Plan"),
+            st.session_state.get("copilot_sub", ""),
+            st.session_state["copilot_plan"])
+        st.download_button("📄 " + t("导出 PDF 实验方案", "Export plan as PDF"),
+                           data=pdf_bytes, file_name="experiment_plan.pdf", mime="application/pdf")
+    except Exception as e:
+        st.caption(t(f"PDF 导出不可用：{e}", f"PDF export unavailable: {e}"))
 
 st.divider()
 st.caption(t("⚠️ 输出为科研决策支持，非临床/操作规程；对照、伦理与最终判断由研究者负责。知识层可在 lab_knowledge.py 扩成你们实验室自己的 SOP/panel。",

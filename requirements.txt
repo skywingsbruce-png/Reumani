@@ -32,4 +32,5 @@ igraph
 rank-bm25              # BM25 关键词召回
 sentence-transformers  # dense 向量索引 + cross-encoder 重排序
 # torch 由 sentence-transformers 拉起；CPU 版即可，无需 GPU
+reportlab              # 实验方案 PDF 导出（中文用系统 simsun 字体）
 
