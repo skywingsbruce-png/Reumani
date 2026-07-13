@@ -40,8 +40,9 @@ def _relevant_flow(ctx):
     return hits
 
 
-def suggest_next(ctx, with_literature=True, top_k=5):
-    """确定性组装：把'你在做什么'翻译成结构化的下一步建议。不烧 API。"""
+def suggest_next(ctx, with_literature=True, top_k=5, full_hybrid=False):
+    """确定性组装：把'你在做什么'翻译成结构化的下一步建议。不烧 API。
+    full_hybrid=False 时文献走快速通道(BM25+同义词，秒级)；True 时用完整向量+重排序(较慢)。"""
     out = [f"====== 实验副驾建议 ======",
            f"情境：{ctx.disease or '?'} · 样本={ctx.sample or '?'} · 手段={ctx.assay or '?'}"
            + (f" · panel={ctx.panel}" if ctx.panel else "")
@@ -70,13 +71,21 @@ def suggest_next(ctx, with_literature=True, top_k=5):
     if tips:
         out.append("\n④ 对照 & 严谨性提醒\n" + "\n".join(f"- {t}" for t in tips))
 
-    # 5) 对口文献（复用你的混合检索）
+    # 5) 对口文献（快速通道：BM25+同义词，不加载向量/重排序模型，秒级返回）
+    #    完整向量+重排序留给"混合检索"页；这里只需佐证，full_hybrid=True 可切换。
     if with_literature:
         q = " ".join(x for x in [ctx.disease, ctx.assay, ctx.hypothesis] + ctx.panel if x)
         try:
-            from retrieval import hybrid_search
+            from retrieval import retrieve_docs
             corpus = ctx.disease if ctx.disease in {"SSc", "SLE", "RA", "CIN"} else "all"
-            out.append("\n⑤ 对口文献（本地库，带来源）\n" + hybrid_search(q, corpus=corpus, top_k=top_k))
+            mode = "hybrid" if full_hybrid else "synonym"
+            docs = retrieve_docs(q, corpus=corpus, mode=mode, top_k=top_k)
+            lines = ["\n⑤ 对口文献（本地库，带来源）"]
+            for r in docs:
+                link = (f"https://pubmed.ncbi.nlm.nih.gov/{r['pmid']}/" if r.get("pmid")
+                        else (f"https://doi.org/{r['doi']}" if r.get("doi") else ""))
+                lines.append(f"- [{r.get('year')}] {r.get('title','')[:85]} | {r.get('journal','')} | {link}")
+            out.append("\n".join(lines))
         except Exception as e:
             out.append(f"\n⑤ 文献检索跳过：{e}")
 

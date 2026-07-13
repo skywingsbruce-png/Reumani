@@ -9,6 +9,12 @@
 import os
 from pathlib import Path
 
+# 让 sentence-transformers 离线加载已缓存的模型（避免每次联网查 HF Hub，冷启动从~30s降到几秒）。
+# 注意：要下载一个【新】模型时，先临时设 HF_HUB_OFFLINE=0。
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+
 import numpy as np
 
 import data_lake_query as dlq
