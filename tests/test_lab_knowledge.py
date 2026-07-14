@@ -37,6 +37,21 @@ def test_copilot_assembles_relevant_blocks():
     assert "FMO" in out                         # ④ 流式对照提醒
 
 
+def test_protocol_lookup_and_caveat():
+    import protocols as P
+    r = P.lookup_protocol("CENP-B B细胞")
+    assert "候选" in r and "确认" in r          # 关键方法学要点：候选≠确认
+    assert "ARTISAN" in r and "IMGT" in r        # 10步工具链在
+    assert "9%" in r and "55%" in r              # QC 特异性数字保真
+
+
+def test_copilot_surfaces_matching_protocol():
+    ctx = LabContext(disease="SSc", assay="流式单细胞分选",
+                     panel=["CENP-B", "B细胞"], hypothesis="分选ACA特异B细胞克隆")
+    out = suggest_next(ctx, with_literature=False)
+    assert "相关成熟协议" in out and "CENP-B" in out
+
+
 def test_flow_controls_include_intracellular_note():
     tips = _controls_tips(LabContext(disease="SSc", assay="流式"))
     joined = " ".join(tips)

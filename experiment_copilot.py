@@ -71,7 +71,22 @@ def suggest_next(ctx, with_literature=True, top_k=5, full_hybrid=False):
     if tips:
         out.append("\n④ 对照 & 严谨性提醒\n" + "\n".join(f"- {t}" for t in tips))
 
-    # 5) 对口文献（快速通道：BM25+同义词，不加载向量/重排序模型，秒级返回）
+    # 4.5) 相关成熟协议（SOP，若情境命中协议库）
+    try:
+        import protocols as PROT
+        ctx_text = " ".join([ctx.disease, ctx.assay, ctx.hypothesis] + ctx.panel)
+        phits = PROT.match_protocols(ctx_text)
+        # 疾病要对上，避免泛匹配
+        phits = [(n, p) for n, p in phits if not ctx.disease or p["disease"].lower() == ctx.disease.lower()
+                 or any(k in ctx_text.lower() for k in p["keywords"])]
+        if phits:
+            out.append("\n⑤ 相关成熟协议（SOP，可直接参考步骤）")
+            for n, p in phits[:2]:
+                out.append(PROT.format_protocol(n, p, full=True))
+    except Exception:
+        pass
+
+    # 6) 对口文献（快速通道：BM25+同义词，不加载向量/重排序模型，秒级返回）
     #    完整向量+重排序留给"混合检索"页；这里只需佐证，full_hybrid=True 可切换。
     if with_literature:
         q = " ".join(x for x in [ctx.disease, ctx.assay, ctx.hypothesis] + ctx.panel if x)
@@ -80,7 +95,7 @@ def suggest_next(ctx, with_literature=True, top_k=5, full_hybrid=False):
             corpus = ctx.disease if ctx.disease in {"SSc", "SLE", "RA", "CIN"} else "all"
             mode = "hybrid" if full_hybrid else "synonym"
             docs = retrieve_docs(q, corpus=corpus, mode=mode, top_k=top_k)
-            lines = ["\n⑤ 对口文献（本地库，带来源）"]
+            lines = ["\n⑥ 对口文献（本地库，带来源）"]
             for r in docs:
                 link = (f"https://pubmed.ncbi.nlm.nih.gov/{r['pmid']}/" if r.get("pmid")
                         else (f"https://doi.org/{r['doi']}" if r.get("doi") else ""))

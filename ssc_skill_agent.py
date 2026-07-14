@@ -148,8 +148,9 @@ def lab_lookup(kind: str, query: str) -> str:
     """【湿实验知识库·秒查】确定性查询，不烧算力。kind 取值：
     'antibody'(自身抗体→疾病/亚型/临床意义/检测，如 ACPA/ACA/Scl-70/anti-dsDNA/ANCA) /
     'flow'(流式亚群门控→marker，如 Treg/Th17/Tfh/浆母细胞/循环纤维细胞) /
-    'sample'(样本类型→实验路径骨架+坑，如 全血/皮肤活检/血清)。
-    例：lab_lookup('antibody','SSc') / lab_lookup('flow','纤维细胞') / lab_lookup('sample','全血')。"""
+    'sample'(样本类型→实验路径骨架+坑，如 全血/皮肤活检/血清) /
+    'protocol'(成熟湿实验SOP完整步骤，如 CENP-B/ACA 单B细胞克隆)。
+    例：lab_lookup('antibody','SSc') / lab_lookup('flow','纤维细胞') / lab_lookup('protocol','CENP-B B细胞')。"""
     import lab_knowledge as LK
     kind = (kind or "").lower()
     if kind in ("antibody", "autoantibody", "ab"):
@@ -158,6 +159,9 @@ def lab_lookup(kind: str, query: str) -> str:
         return LK.lookup_flow(query)
     if kind == "sample":
         return LK.sample_pathway(query)
+    if kind in ("protocol", "sop"):
+        import protocols as PROT
+        return PROT.lookup_protocol(query)
     return LK.knowledge_summary()
 
 
