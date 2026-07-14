@@ -9,7 +9,7 @@ from pathlib import Path
 import streamlit as st
 
 from ssc_pi_agent import DEEPSEEK_API_KEY, DEEPSEEK_MODEL
-from ssc_skill_agent import build_skill_agent, WORKSPACE, SKILL_AGENT_SYSTEM
+from ssc_skill_agent import build_skill_agent, WORKSPACE, skill_system
 from skill_loader import discover_skills
 from i18n import t, lang_selector, agent_lang_note
 
@@ -168,7 +168,7 @@ if question:
         st.markdown(question)
 
     if not st.session_state.history:
-        st.session_state.history.append(("system", SKILL_AGENT_SYSTEM + agent_lang_note()))
+        st.session_state.history.append(("system", skill_system(agent_lang_note())))
     st.session_state.history.append(("user", question))
 
     agent = build_skill_agent(st.session_state.model)

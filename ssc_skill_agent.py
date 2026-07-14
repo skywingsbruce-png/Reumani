@@ -240,6 +240,22 @@ SKILL_AGENT_SYSTEM = (
 )
 
 
+def skill_system(extra: str = "") -> str:
+    """组装完整系统提示 = 基础人设 + 【实时读取的长期记忆】 + 额外(如语言指令)。
+    记忆每次调用现读，用户随时纠正随时生效；这是 agent 跨会话"学习"的落点。"""
+    parts = [SKILL_AGENT_SYSTEM]
+    try:
+        from agent_memory import format_for_prompt
+        mem = format_for_prompt()
+        if mem:
+            parts.append(mem)
+    except Exception:
+        pass
+    if extra:
+        parts.append(extra)
+    return "\n\n".join(parts)
+
+
 def build_skill_agent(model: str = "deepseek"):
     """model: 'deepseek'(省钱) 或 'claude'(质量高、更擅长写代码和跟复杂流程)。"""
     llm = judge_llm if model == "claude" else deepseek_llm_pro
