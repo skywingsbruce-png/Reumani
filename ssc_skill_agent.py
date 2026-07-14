@@ -149,8 +149,9 @@ def lab_lookup(kind: str, query: str) -> str:
     'antibody'(自身抗体→疾病/亚型/临床意义/检测，如 ACPA/ACA/Scl-70/anti-dsDNA/ANCA) /
     'flow'(流式亚群门控→marker，如 Treg/Th17/Tfh/浆母细胞/循环纤维细胞) /
     'sample'(样本类型→实验路径骨架+坑，如 全血/皮肤活检/血清) /
-    'protocol'(成熟湿实验SOP完整步骤，如 CENP-B/ACA 单B细胞克隆)。
-    例：lab_lookup('antibody','SSc') / lab_lookup('flow','纤维细胞') / lab_lookup('protocol','CENP-B B细胞')。"""
+    'protocol'(成熟湿实验SOP完整步骤，如 CENP-B/ACA单B细胞克隆、N-糖酶促改造、糖基转移酶CRISPR-KO、补体MAC脂质体、IgG3 O-糖)。
+    query 传 'overview/总览' 可看项目线总览与关系。
+    例：lab_lookup('antibody','SSc') / lab_lookup('flow','纤维细胞') / lab_lookup('protocol','CRISPR 糖基转移酶 KO')。"""
     import lab_knowledge as LK
     kind = (kind or "").lower()
     if kind in ("antibody", "autoantibody", "ab"):
@@ -161,6 +162,8 @@ def lab_lookup(kind: str, query: str) -> str:
         return LK.sample_pathway(query)
     if kind in ("protocol", "sop"):
         import protocols as PROT
+        if any(w in (query or "").lower() for w in ["overview", "总览", "map", "有哪些", "列表"]):
+            return PROT.project_map_text() + "\n\n" + PROT.protocol_summary()
         return PROT.lookup_protocol(query)
     return LK.knowledge_summary()
 
