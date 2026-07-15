@@ -4,6 +4,34 @@ experiment_copilot 会按情境自动带出相关协议；lab_lookup('protocol',
 可继续扩：照此结构(steps/tools/readouts/key_caveat/qc/controls/source)加你们实验室自己的 SOP。
 """
 
+# 研究者线路图：三人的自身反应性B细胞课题如何衔接
+RESEARCHERS = {
+    "Abdulla": {
+        "disease": "SSc",
+        "antigen": "CENP-B / ACA（抗着丝点）",
+        "focus": "怎样【准确找到】CENP-B阳性B细胞、重建ACA抗体，并研究微生物CENP-B同源物(ABP1/CBH1/CBH2)",
+        "protocol": "ACA/CENP-B 自身反应性B细胞完整研究链（Abdulla 博士课题）",
+    },
+    "Sam": {
+        "disease": "SSc + RA",
+        "antigen": "TOP1 / ATA（抗拓扑异构酶I），延伸到 ACPA",
+        "focus": "【最初触发与长期持续】——真菌TOP1分子模拟、TOP1–DNA复合物、缓解后ACPA B细胞仍活化、胞内CCP2染色",
+        "protocol": "TOP1/ATA 与 ACPA 自身反应性B细胞：从初始触发到持续活化（Sam 博士课题）",
+    },
+    "Renee": {
+        "disease": "RA（+ MPO-ANCA 支线）",
+        "antigen": "ACPA（瓜氨酸化蛋白）",
+        "focus": "【把突变BCR变成靶点】——BCR neoepitope 经MHC-I呈递、CD8 T细胞选择性清除；纵向克隆进化；RATP-Ig平台",
+        "protocol": "ACPA B细胞克隆进化与 BCR neoepitope 靶向清除（Renee / Target to B-cure）",
+    },
+}
+RESEARCHER_LINKS = ("三人衔接：Sam 已在 TOP1 体系跑通'单细胞BCR→重组抗体→微生物交叉反应'这条路线；"
+                    "Abdulla 正把相似思路应用到 CENP-B/ACA（并把探针做到sortase定点双标、特异性9%→55%）；"
+                    "Renee 则在 ACPA 体系把这条路线往下游推——不止是重建抗体，而是把克隆特有的突变BCR当作"
+                    "pMHC-I 靶点去清除致病B细胞，并用纵向测序回答'靶点稳不稳'。"
+                    "共同的方法学骨架：抗原探针→流式单细胞分选→BCR测序(ARTISAN/IMGT/克隆家族)→重组单抗验证。"
+                    "共同的边界：探针分选阳性只是候选，必须重组抗体功能验证（Abdulla约55%特异、Renee约50%为真ACPA）。")
+
 # 项目线总览（操纵对象 / 核心操作 / 主要读出）
 PROJECT_MAP = [
     ("抗体 N-糖链体外改造", "已纯化抗体", "加糖基转移酶(体外)", "MALDI-TOF-MS(释放糖链)"),
@@ -112,6 +140,140 @@ PROTOCOLS = {
         "readouts": ["CENP-B特异性ELISA(总/特异 IgG/IgA/IgM)", "单细胞BCR序列(VH/VL配对)", "克隆家族与扩增",
                      "isotype", "体细胞突变", "重组抗体对人CENP-B与微生物同源蛋白的结合"],
         "source": "用户提供（Abdulla 博士课题）",
+    },
+
+    # ============ Sam：从初始触发到持续活化 ============
+    "TOP1/ATA 与 ACPA 自身反应性B细胞：从初始触发到持续活化（Sam 博士课题）": {
+        "disease": "SSc",
+        "target": "SSc 的 TOP1 反应性B细胞(ATA) + RA 的 ACPA B细胞",
+        "keywords": ["top1", "ata", "拓扑异构酶", "抗拓扑", "topoisomerase", "真菌", "酵母",
+                     "saccharomyces", "分子模拟", "交叉反应", "top1-dna", "核蛋白", "凋亡",
+                     "ccp2", "胞内染色", "intracellular", "acpa", "瓜氨酸", "持续活化", "缓解", "复发", "sam"],
+        "goal": ("解释自身免疫反应的完整生命周期：自身反应性B细胞从哪里来→什么抗原最初触发它→"
+                 "如何克隆扩增与亲和力成熟→为什么疾病控制后它仍然存在。覆盖 SSc(TOP1/ATA) 与 RA(ACPA) 两套体系。"),
+        "research_questions": [
+            "能不能找到TOP1反应性B细胞？它们处于初始、记忆还是浆母细胞状态？",
+            "它们有没有被持续激活？是否存在克隆扩增？同一克隆的不同成员是否共同识别TOP1？",
+            "自身反应最初为什么会发生——微生物相似抗原能否触发？",
+            "为什么RA临床缓解后ACPA仍长期存在、停药会复发？",
+        ],
+        "steps": [
+            {"n": 1, "step": "SSc 中的 TOP1 反应性B细胞（抗原驱动特征）",
+             "detail": "不只看血清有无ATA，而是用单细胞分选+BCR测序找到TOP1反应性B细胞。结果：SSc中TOP1反应并非静态血清抗体，"
+                       "患者体内存在正在活化、扩增和进化的TOP1反应性B细胞。可比较IGHV/IGKV/IGLV基因使用、CDR3、体细胞突变、"
+                       "同一克隆家族内不同细胞的关系、IgM向IgG或IgA转换——说明ATA应答具典型【抗原驱动】特征。"},
+            {"n": 2, "step": "TOP1–DNA 复合物增强部分抗体识别",
+             "detail": "TOP1在核内天然与DNA结合。发现对部分抗TOP1单抗，TOP1与DNA形成复合物后识别【增强】。可能解释："
+                       "DNA使TOP1构象变化暴露隐藏表位／抗体识别的是TOP1–DNA复合结构／DNA负电荷与抗体表面正电荷辅助／"
+                       "抗体同时接触TOP1与DNA／DNA提高TOP1局部聚集或呈递效率。"
+                       "→ 真实自身抗原可能不是孤立TOP1蛋白，而是细胞损伤或死亡时释放的【核蛋白–DNA复合物】，"
+                       "也解释了凋亡、组织损伤与核物质释放为何可能促进自身免疫。"},
+            {"n": 3, "step": "真菌 TOP1 可能触发人的抗TOP1反应（分子模拟）",
+             "detail": "部分患者来源抗TOP1克隆抗体可识别真菌抗原（尤其酿酒酵母等真菌的TOP1或相关蛋白）。逻辑链："
+                       "B细胞最初识别真菌TOP1→被激活并发生突变→部分克隆逐渐也能识别人TOP1→形成交叉反应→自身免疫持续发展。"},
+            {"n": 4, "step": "RA 治疗后 ACPA B细胞仍持续活化",
+             "detail": "临床矛盾：炎症与关节症状可被药物控制，但ACPA常长期存在、停药后有些患者复发。发现即使临床控制良好，"
+                       "ACPA B细胞仍可能持续活化——仍存在于外周血、保留活化或增殖特征、继续克隆扩增、继续产生ACPA、"
+                       "自身反应性BCR库未被完全清除。→ 药物可能主要抑制炎症结果，而没有清除驱动疾病的B细胞克隆；"
+                       "自身反应性记忆库仍在、只是暂时被压制，这为复发提供解释。"},
+            {"n": 5, "step": "开发细胞内 CCP2 染色方法（抓低表面BCR的细胞）",
+             "detail": "ACPA B细胞稀少，且部分活化B细胞或浆母细胞表面BCR表达很低。只染表面易漏掉：表面BCR低的细胞、"
+                       "刚被抗原刺激BCR内吞的细胞、浆母细胞样细胞、BCR主要位于胞内合成途径的细胞。方法："
+                       "①先做细胞表面标记 ②固定并通透细胞 ③用CCP2或瓜氨酸化探针染【胞内】免疫球蛋白 "
+                       "④用对应的【精氨酸对照】排除非特异结合 ⑤结合IgG/CD27/CD38等识别ACPA B细胞。"
+                       "提高了对低表面BCR自身反应性B细胞的检出能力。"},
+        ],
+        "mechanism_chain": ("微生物相似抗原 或 核蛋白–DNA复合物 → 触发自身反应性B细胞 → 克隆扩增和体细胞突变 → "
+                            "产生ATA或ACPA → 疾病缓解后仍持续活化 → 形成长期自身免疫记忆和复发基础。"),
+        "key_caveat": ("①真菌交叉反应【不等于】已证明真菌感染'导致'SSc；准确结论是：部分患者的克隆抗体能识别真菌抗原，"
+                       "为微生物触发假说提供机制证据。②临床缓解【不等于】自身免疫反应已经停止。"),
+        "tools": ["患者PBMC分离", "荧光抗原探针", "流式+单细胞分选", "单细胞培养+上清ELISA", "RNA提取/cDNA",
+                  "ARTISAN/5′-RACE PCR", "Sanger或高通量BCR测序", "IMGT+克隆家族", "重组单克隆抗体",
+                  "TOP1 / TOP1–DNA / 真菌抗原 ELISA", "Western blot", "表面及胞内抗原特异性B细胞染色",
+                  "RA临床状态与B细胞表型关联分析"],
+        "readouts": ["TOP1反应性B细胞频率与表型(初始/记忆/浆母)", "BCR序列与克隆家族", "体细胞突变与类别转换",
+                     "TOP1 vs TOP1–DNA vs 真菌抗原结合", "临床缓解状态下ACPA B细胞活化度"],
+        "source": "用户提供（Sam Neppelenbroek 博士论文《Dysregulation of autoreactive B cell responses in autoimmune diseases: from initial triggering to persistent activation》要点；原文PDF在另一台机器，本库依据摘要沉淀）",
+    },
+
+    # ============ Renee：把突变BCR变成靶点 ============
+    "ACPA B细胞克隆进化与 BCR neoepitope 靶向清除（Renee / Target to B-cure）": {
+        "disease": "RA",
+        "target": "RA 的 ACPA 自身反应性B细胞及其突变BCR",
+        "keywords": ["acpa", "瓜氨酸", "ccp4", "cargp4", "bcr neoepitope", "neoepitope", "mhc-i", "mhc",
+                     "cd8", "netmhcpan", "ratp-ig", "k562", "ramos", "纵向", "longitudinal", "克隆进化",
+                     "双轻链", "等位基因包容", "allelic inclusion", "w48", "mpo", "anca", "renee", "肽组"],
+        "goal": ("研究RA中ACPA自身反应性B细胞如何长期存在、如何克隆进化，并尝试把这些B细胞【自己突变出来的BCR序列】"
+                 "变成靶点——让CD8 T细胞经 pMHC-I 选择性清除致病B细胞，而保留绝大多数正常B细胞。(ERC 'Target to B-cure' 核心设想)"),
+        "research_questions": [
+            "ACPA B细胞的突变BCR能否被降解成短肽并经MHC-I展示，成为克隆特有的'BCR neoepitope'？",
+            "能否找到或诱导识别该 肽-MHC 的CD8 T细胞，选择性杀伤ACPA B细胞？",
+            "ACPA克隆一年内会不会消失或换克隆——靶点稳不稳？",
+            "'分选阳性'的候选细胞里，真正的ACPA有多少？",
+        ],
+        "core_hypothesis": [
+            "1. ACPA B细胞在细胞内合成自身BCR",
+            "2. 一部分BCR会被降解成短肽",
+            "3. 这些短肽可能通过MHC-I展示在B细胞表面",
+            "4. 若短肽含ACPA克隆特有的突变，即成为'BCR neoepitope'",
+            "5. 可寻找或诱导识别该肽-MHC复合物的CD8 T细胞",
+            "6. 最终有可能选择性杀死ACPA B细胞，保留绝大多数正常B细胞",
+        ],
+        "steps": [
+            {"n": 1, "step": "证明 BCR 肽能被 MHC-I 展示（细胞模型）",
+             "detail": "最初直接分析患者来源B细胞的MHC-I肽组：质谱能检测到BCR【恒定区】肽段，但没有可靠检测到【可变区】肽段——"
+                       "主要问题很可能是目标细胞太少、患者BCR非常多样、单个克隆信号被稀释。改建更可控的细胞模型："
+                       "选已获得重轻链序列的ACPA单抗(如3F3/2G9/7E4)→把完整ACPA-BCR导入Ramos或K562→给K562同时导入对应患者HLA-I→"
+                       "用绿色荧光/表面IgG确认BCR表达→分选阳性细胞并扩增到足够数量→纯化MHC-I分子、洗脱结合肽→"
+                       "质谱寻找来自ACPA-BCR可变区/突变位点/CDR区的肽段→NetMHCpan预测这些肽与特定HLA的结合能力。"
+                       "结果：患者原始B细胞中的检测未成功；但在表达重组BCR的Ramos与K562中确实可检测到BCR来源肽的MHC-I呈递，"
+                       "部分候选肽还能产生识别细胞模型的CD8 T细胞反应。"},
+            {"n": 2, "step": "纵向追踪 ACPA B细胞一年内的克隆进化",
+             "detail": "在基线、约6个月、约12个月采集RA患者样本。流程：含瓜氨酸抗原探针标记候选ACPA B细胞→单细胞分选到96孔板→"
+                       "【直接裂解】(避免长期培养造成额外损失)→SMART-Seq逆转录获cDNA→ARTISAN PCR分别扩增IgG/IgA/IgM/κ/λ→"
+                       "Sanger测序重轻链→IMGT分析V/D/J、CDR3、productive、体细胞突变→按共同V/J基因与CDR3相似性重建克隆家族→"
+                       "比较同一患者不同时间点的克隆组成。结果：ACPA反应【不是完全静止】——有些克隆家族跨多个时间点持续存在；"
+                       "同一克隆内部出现不同突变分支和抗体亚型；也会出现后来新进入或扩增的克隆；部分IgM克隆家族也可以很大"
+                       "(并非所有ACPA反应都已完全转成IgG/IgA)；一些纵向相关克隆后来经重组单抗确认确有ACPA反应性。"
+                       "→ 若未来按BCR表位清除ACPA B细胞，可能需覆盖【多个主要克隆或多个稳定表位】，而非只针对一个序列。"},
+            {"n": 3, "step": "'分选阳性' ≠ 真正的 ACPA B细胞",
+             "detail": "抗原探针分选可能受非特异结合、链霉亲和素结合、探针聚集或BCR多反应性影响，仅凭被ACPA探针染色不能证明"
+                       "其BCR一定识别瓜氨酸抗原。做法：重建候选细胞的完整单克隆抗体，再比较 CCP4等瓜氨酸抗原 / 对应精氨酸对照"
+                       "CArgP4 / 其他PTM抗原 / 非相关抗原和探针组分。估计：重组成功的'ACPA分选候选'中，平均约【只有一半】"
+                       "最终表现为真正的ACPA。→ 测序库中的候选细胞必须经功能性抗体实验验证。"},
+            {"n": 4, "step": "建立快速重组抗体平台 RATP-Ig",
+             "detail": "传统方法需把每条重链和轻链分别克隆进表达质粒，通常耗时1–3周；为验证数百个候选BCR，将RATP-Ig改造成"
+                       "适配实验室现有ARTISAN PCR产物的工作流：从单细胞获BCR可变区→嵌套PCR加入同源拼接序列→与启动子、"
+                       "抗体恒定区和表达元件快速组装(不必逐个建传统完整质粒克隆)→匹配的重轻链转染HEK293F→收集上清、"
+                       "检测抗体产量与抗原反应性。已从IgG/κ扩展到IgA1、IgA2、IgM和λ轻链。"},
+            {"n": 5, "step": "ACPA 生物学规律",
+             "detail": "真正的ACPA通常具有较高的重链与轻链体细胞突变；ACPA可变区经常出现由突变引入的N-糖基化基序；"
+                       "高突变和可变区糖基化可帮助富集候选，但【都不是绝对判定标准】；ACPA常表现多反应性，可同时识别"
+                       "瓜氨酸化、乙酰化或氨甲酰化抗原；同一克隆家族内不同成员的抗原谱与结合强度可能变化。"
+                       "关于'重链框架区W48决定瓜氨酸识别'：其抗体数据中存在【没有W48但仍ACPA阳性】的抗体，也存在"
+                       "【含W48但仍能识别氨甲酰化抗原】的抗体——W48可能影响部分抗体结构和反应性，但不能作为所有ACPA的统一开关。"},
+            {"n": 6, "step": "最新方向：双轻链与等位基因包容（2025年底起）",
+             "detail": "假说：一条κ链与重链组合形成自身反应性BCR；另一条λ链形成弱反应性或非自身反应性BCR；两种BCR共同表达会"
+                       "'稀释'表面的自身反应性；细胞因此可能逃过中枢或外周耐受清除；后续环境变化又可能让自身反应性受体产生功能。"
+                       "计划：分别重建'同一重链+κ链'与'同一重链+λ链'，比较ACPA等自身抗原结合，并进行胚系回复与广谱抗原筛查。"},
+            {"n": 7, "step": "支线：MPO-ANCA 血管炎",
+             "detail": "参与MPO特异性BCR测序，并重组抗MPO IgG与五聚体IgM。结果提示MPO反应具多克隆性——既有接近胚系的IgM，"
+                       "也有突变抗体；部分抗MPO IgM能引起明显补体沉积。⚠️但患者血清MPO-IgM水平与BVAS疾病活动度没有清晰相关。"},
+        ],
+        "dataset_stats": ("纵向单细胞BCR(2025汇报)：约3312个单细胞，其中1581个获质量合格重链序列。"
+                          "RATP-Ig(2025)：446个抗体构建尝试，322个产生可检测抗体，成功率约72%。"
+                          "ACPA分选候选中约50%经重组验证为真ACPA。"),
+        "key_caveat": ("①BCR肽MHC-I呈递目前是【机制与概念验证】，不是已可用于患者的ACPA疫苗；"
+                       "②分选阳性≠真ACPA（平均约只有一半），候选必须经重组抗体功能验证；"
+                       "③高体细胞突变/可变区N-糖基化可富集候选但非绝对判据；"
+                       "④W48不能作为所有ACPA的统一开关；"
+                       "⑤抗MPO IgM虽可致补体沉积，但血清MPO-IgM与BVAS活动度无清晰相关。"),
+        "tools": ["MHC-I肽组质谱(免疫沉淀+洗脱)", "Ramos/K562 BCR转导 + HLA-I导入", "NetMHCpan", "CD8 T细胞反应检测",
+                  "瓜氨酸抗原探针(CCP4/CArgP4对照)", "流式单细胞分选(直接裂解)", "SMART-Seq", "ARTISAN PCR",
+                  "Sanger", "IMGT + 克隆家族重建", "RATP-Ig 快速组装 + HEK293F", "ELISA(PTM抗原谱)", "补体沉积检测"],
+        "readouts": ["MHC-I洗脱肽中的BCR可变区/CDR肽段", "NetMHCpan结合预测", "CD8 T细胞反应",
+                     "纵向克隆家族组成与突变分支", "重组抗体的ACPA真伪与PTM交叉谱"],
+        "source": "用户提供（Renee 课题 / ERC 'Target to B-cure'，含2025年汇报数据）",
     },
 
     # ============ 项目1：抗体 N-糖链体外酶促改造 ============
@@ -231,6 +393,10 @@ def format_protocol(name, p, full=True):
             out.append("研究问题：")
             for q in p["research_questions"]:
                 out.append(f"  - {q}")
+        if p.get("core_hypothesis"):
+            out.append("核心假说：")
+            for h in p["core_hypothesis"]:
+                out.append(f"  {h}")
         out.append("步骤：")
         for s in p.get("steps", []):
             out.append(f"  {s['n']}. {s['step']} —— {s['detail']}")
@@ -244,6 +410,8 @@ def format_protocol(name, p, full=True):
                 out.append(f"  - {k}：{v}")
         if p.get("dataset_stats"):
             out.append(f"数据规模：{p['dataset_stats']}")
+        if p.get("mechanism_chain"):
+            out.append(f"机制链：{p['mechanism_chain']}")
         if p.get("controls"):
             out.append(f"必要对照：{'、'.join(p['controls'])}")
         if p.get("tools"):
@@ -264,13 +432,23 @@ def lookup_protocol(query):
     return "\n\n".join(format_protocol(n, p, full=True) for n, p in hits[:3])
 
 
+def researchers_text():
+    """研究者线路图：谁做什么、如何衔接。"""
+    lines = ["【研究者线路图】自身反应性B细胞课题"]
+    for who, r in RESEARCHERS.items():
+        lines.append(f"- {who}（{r['disease']}）｜抗原：{r['antigen']}\n    侧重：{r['focus']}\n    协议：{r['protocol']}")
+    lines.append("\n" + RESEARCHER_LINKS)
+    return "\n".join(lines)
+
+
 def project_map_text():
-    """项目线总览表 + 可能的主线逻辑。"""
-    lines = ["【项目线总览】操纵对象 / 核心操作 / 主要读出"]
+    """项目线总览表 + 可能的主线逻辑 + 研究者线路图。"""
+    lines = ["【糖工程/补体 项目线总览】操纵对象 / 核心操作 / 主要读出"]
     for i, (name, obj, op, ro) in enumerate(PROJECT_MAP, 1):
         lines.append(f"{i}. {name}：{obj} | {op} | {ro}")
     lines.append("关系：项目1、2明显相关；项目4可能是项目2的应用或独立;项目3(补体)可能与抗体项目相连或完全独立。")
     lines.append("主线逻辑：" + PROJECT_LOGIC)
+    lines.append("\n" + researchers_text())
     return "\n".join(lines)
 
 

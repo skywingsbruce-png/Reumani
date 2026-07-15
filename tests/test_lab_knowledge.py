@@ -58,6 +58,35 @@ def test_cenpb_full_chain_fidelity():
     assert "序列候选库" in r and "SPR/BLI" in r         # 三道边界(不越线)
 
 
+def test_sam_top1_chain_fidelity():
+    """锁死 Sam 课题(TOP1/ATA→ACPA)的关键结论与边界。"""
+    import protocols as P
+    s = P.lookup_protocol("TOP1 ATA 真菌")
+    assert "核蛋白–DNA复合物" in s              # 真实自身抗原可能是核蛋白-DNA复合物
+    assert "不等于】已证明真菌感染" in s          # 真菌交叉反应≠证明真菌致病
+    assert "临床缓解【不等于】自身免疫反应已经停止" in s
+    assert "精氨酸对照" in s and "通透" in s      # 胞内CCP2染色需通透+精氨酸对照
+
+
+def test_renee_neoepitope_fidelity():
+    """锁死 Renee 课题(BCR neoepitope / RATP-Ig)的关键数字与边界。"""
+    import protocols as P
+    r = P.lookup_protocol("BCR neoepitope RATP-Ig")
+    assert "3312" in r and "1581" in r          # 纵向单细胞规模
+    assert "446" in r and "322" in r            # RATP-Ig 构建/成功
+    assert "只有一半" in r                       # 分选候选约50%为真ACPA
+    assert "统一开关" in r                       # W48 非所有ACPA的统一开关
+    assert "不是已可用于患者的ACPA疫苗" in r      # 概念验证边界
+    assert "没有清晰相关" in r                   # MPO-IgM 与 BVAS 无清晰相关
+
+
+def test_researcher_map():
+    import protocols as P
+    t = P.researchers_text()
+    assert "Abdulla" in t and "Sam" in t and "Renee" in t
+    assert "CENP-B" in t and "TOP1" in t and "ACPA" in t
+
+
 def test_copilot_surfaces_matching_protocol():
     ctx = LabContext(disease="SSc", assay="流式单细胞分选",
                      panel=["CENP-B", "B细胞"], hypothesis="分选ACA特异B细胞克隆")
