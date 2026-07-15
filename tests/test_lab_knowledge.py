@@ -45,6 +45,19 @@ def test_protocol_lookup_and_caveat():
     assert "9%" in r and "55%" in r              # QC 特异性数字保真
 
 
+def test_cenpb_full_chain_fidelity():
+    """锁死 Abdulla 课题链的关键事实，防后续误改。"""
+    import protocols as P
+    r = P.lookup_protocol("CENP-B ACA B细胞")
+    assert "Sortase A" in r and "TAMRA" in r          # sortase 定点标记(非随机化学标记)
+    assert "3F3" in r and "9D11" in r                 # RAMOS 阴性对照(ACPA/ATA)
+    assert "9%" in r and "25–31%" in r and "55%" in r  # 特异性演进保真
+    assert "292" in r and "246" in r                   # 测序统计保真
+    assert "RL2790" in r and "IGHV3-72" in r           # 6D6 完整范例
+    assert "ABP1" in r and "CBH1" in r and "CBH2" in r  # 微生物同源蛋白
+    assert "序列候选库" in r and "SPR/BLI" in r         # 三道边界(不越线)
+
+
 def test_copilot_surfaces_matching_protocol():
     ctx = LabContext(disease="SSc", assay="流式单细胞分选",
                      panel=["CENP-B", "B细胞"], hypothesis="分选ACA特异B细胞克隆")

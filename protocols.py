@@ -19,30 +19,99 @@ PROJECT_LOGIC = ("可能主线：体外给抗体糖链做加法(项目1) → 发
 
 PROTOCOLS = {
     # ============ 免疫学 / SSc ============
-    "ACA-CENP-B 特异性B细胞单细胞克隆与重组抗体验证": {
+    "ACA/CENP-B 自身反应性B细胞完整研究链（Abdulla 博士课题）": {
         "disease": "SSc",
-        "target": "抗着丝点抗体(ACA) / 识别 CENP-B 的 B 细胞",
-        "keywords": ["aca", "抗着丝点", "着丝点", "cenp-b", "cenpb", "b细胞", "b cell",
-                     "单细胞", "single cell", "克隆", "重组抗体", "分选", "sorting", "bcr", "测序", "artisan"],
-        "goal": ("从SSc患者血分选真正结合CENP-B的单个B细胞→单细胞培养/测序→构建重组抗体验证，"
-                 "解析ACA的isotype、克隆扩增、体细胞突变与潜在微生物交叉反应。重点是这条【分选→克隆→测序→重组验证】的途径。"),
-        "steps": [
-            {"n": 1, "step": "确认血清ACA阳性", "detail": "选血清抗着丝点抗体阳性的SSc患者作来源。"},
-            {"n": 2, "step": "双色CENP-B荧光探针", "detail": "重组CENP-B偶联两种荧光染料，只把两色同时阳性者判为真正结合CENP-B。"},
-            {"n": 3, "step": "流式单细胞分选", "detail": "把CENP-B double-positive单个B细胞分选到96/384孔板(每孔一个)。"},
-            {"n": 4, "step": "单细胞培养+上清验证", "detail": "培养后取上清检测是否真结合CENP-B(初筛特异性)。"},
-            {"n": 5, "step": "RNA/cDNA + ARTISAN PCR + Sanger", "detail": "对上清阳性细胞扩增Ig基因，测序得重链、κ或λ轻链序列。"},
-            {"n": 6, "step": "IMGT注释", "detail": "注释V/D/J、CDR3、productive状态与体细胞突变。"},
-            {"n": 7, "step": "克隆家族聚类", "detail": "Change-O/Scoper聚类判断同一克隆家族(克隆扩增)。"},
-            {"n": 8, "step": "选代表链构建重组抗体", "detail": "选代表性重+轻链配对表达重组抗体(克隆名如1G8/2G4等只是示例，重在方法)。"},
-            {"n": 9, "step": "HEK表达+结合验证", "detail": "HEK表达后用ELISA/WB验证是否识别人CENP-B或微生物CENP-B类似蛋白。"},
-            {"n": 10, "step": "解析ACA反应特征", "detail": "综合isotype、克隆扩增、体细胞突变率、潜在微生物交叉反应。"},
+        "target": "抗着丝点抗体(ACA) / 识别 CENP-B 的自身反应性 B 细胞",
+        "keywords": ["aca", "ata", "抗着丝点", "着丝点", "cenp-b", "cenpb", "top1", "拓扑异构酶",
+                     "b细胞", "b cell", "单细胞", "single cell", "克隆", "重组抗体", "分选", "sorting",
+                     "bcr", "测序", "artisan", "ramos", "sortase", "imgt", "6d6", "交叉反应", "分子模拟"],
+        "goal": ("把'SSc患者血里有ACA'推进到'具体是哪个B细胞、它的重轻链是什么、能否重建成抗体、"
+                 "识别CENP-B哪个区域、是否可能由微生物相似抗原触发'。一条从患者样本→抗原探针→单细胞分选→"
+                 "BCR测序→重组抗体→微生物交叉反应的完整研究链。"),
+        "research_questions": [
+            "是哪些B细胞产生ACA？属于IgM/IgG还是IgA？",
+            "是否发生克隆扩增和体细胞突变？同一患者是否有多个不同ACA克隆？",
+            "这些B细胞最初为什么会识别CENP-B？",
+            "微生物蛋白是否与人CENP-B相似，从而触发交叉反应？",
+            "（背景：SSc两类主要自身抗体——ACA靶抗原CENP-B；ATA靶抗原TOP1。单纯测血清抗体回答不了以上问题。）",
         ],
-        "key_caveat": "【候选≠确认】CENP-B染色阳性只是候选B细胞；须经培养上清ELISA或重组抗体验证后才算确认的CENP-B抗体。",
-        "qc": "早期分选背景高、特异性约9%；改用双色探针+blocking+更严格gating后，培养上清CENP-B特异性提升到约55%。",
-        "tools": ["双色CENP-B荧光探针", "流式单细胞分选", "ARTISAN PCR", "Sanger", "IMGT", "Change-O/Scoper", "HEK表达", "ELISA/WB"],
-        "readouts": ["单细胞BCR序列(重/轻链)", "克隆家族", "isotype", "体细胞突变", "重组抗体结合特异性"],
-        "source": "用户提供（Abdulla 课题）",
+        "steps": [
+            {"n": 1, "step": "CENP-B 抗原制备与质控",
+             "detail": "重组表达→细胞裂解+超声→His-tag亲和纯化→Q柱阴离子交换→S柱阳离子交换→SEC体积排阻→"
+                       "SDS-PAGE + anti-His WB确认；比较全长/还原/非还原/TEV切割及不同纯化阶段。CENP-B约80 kDa。"
+                       "⚠️纯度与构象至关重要：聚集、游离荧光染料、非特异蛋白都会造成流式假阳性。"},
+            {"n": 2, "step": "双色荧光探针（sortase 定点标记）",
+             "detail": "早期用普通化学法接PE/AF647——随机标记赖氨酸、可能影响构象、产生背景。改建sortase定点标记："
+                       "制备带sortase识别位点的CENP-B→Sortase A定点连接→分别接Cy5与TAMRA→优化CENP-B浓度/酶浓度/"
+                       "染料浓度/温度/反应时间→SEC去游离染料。得 CENPB-Cy5 + CENPB-TAMRA。"
+                       "同一B细胞须【同时结合两种颜色】才算更可信的CENP-B阳性，可排除只黏一种染料或非特异蛋白的细胞。"},
+            {"n": 3, "step": "工程化 RAMOS 细胞验证探针",
+             "detail": "把已知抗体的BCR导入RAMOS B细胞系，测试不同浓度CENPB-Cy5/TAMRA。目标：ACA-RAMOS双阳性染色；"
+                       "ACPA/ATA对照保持阴性；荧光强度随探针浓度变化；两种探针识别同一批抗原特异性细胞。"
+                       "这些RAMOS后来成为患者分选实验的固定阳性对照。"},
+            {"n": 4, "step": "患者 PBMC 流式单细胞分选",
+             "detail": "门控：活细胞→排除CD3/CD4 T细胞→CD19/CD20阳性B细胞→CENPB-Cy5阳性→CENPB-TAMRA阳性→单细胞分选。"
+                       "同时加IgD/IgM/IgG/CD27/CD38/CD10判断亚群：初始B、IgM记忆B、class-switched记忆B、"
+                       "double-negative B、浆母细胞样。分到96/384孔板；部分直接裂解测序，部分先培养约14天。"},
+            {"n": 5, "step": "培养上清 ELISA 确认是否真产ACA",
+             "detail": "流式双阳性仍不等于一定识别CENP-B。培养后检测上清：Total IgG/IgA/IgM ELISA + "
+                       "CENP-B特异性IgG/IgA/IgM ELISA；必要时比较TOP1、CCP或其他抗原。"},
+            {"n": 6, "step": "BCR 测序与注释",
+             "detail": "单细胞RNA提取或直接裂解→cDNA合成→ARTISAN 5′-RACE PCR→分别扩增IgG/IgA/IgM重链及κ/λ轻链→"
+                       "凝胶检查与纯化→Sanger测序→IMGT/V-QUEST注释→Change-O/Scoper克隆家族分析。"
+                       "IMGT给出：IGHV/IGHD/IGHJ、轻链IGK还是IGL、CDR1/2/3、是否productive/in-frame、"
+                       "有无终止密码子、相对生殖系的体细胞突变数。"},
+            {"n": 7, "step": "生产重组 ACA 单克隆抗体",
+             "detail": "选完整VH/VL配对→序列确认+密码子优化→gBlock或引物设计→In-Fusion克隆→拼到pcDNA3.1重链/轻链载体→"
+                       "细菌转化+Mini/Maxi prep→T7/BGH双向Sanger验证→HEK细胞共转染重链与轻链→收集上清并纯化抗体→"
+                       "ELISA、Western blot确认CENP-B结合。进展报告先后记录4个、后6个经验证的ACA单抗（含IgG/IgM/IgA）。"},
+            {"n": 8, "step": "微生物交叉反应测试（分子模拟假说）",
+             "detail": "选裂殖酵母的CENP-B样蛋白 ABP1 / CBH1 / CBH2——与人CENP-B序列一致性不高，但可能保留局部结构或表位。"
+                       "对其表达、His纯化、离子交换、SEC，再用1G8/2G4/1F10/6D6等ACA单抗做Western blot。"
+                       "若同一患者来源抗体同时识别人CENP-B与微生物同源蛋白，支持'分子模拟/交叉反应'假说。"},
+        ],
+        "reference_clones": {
+            "1G8": "ACA / CENP-B，IgG（阳性）",
+            "2G4": "ACA / CENP-B，IgG（阳性）",
+            "9G5": "ACA，IgM（阳性）",
+            "3F3": "ACPA 对照——不应特异识别CENP-B（阴性对照）",
+            "9D11": "ATA / TOP1 对照——不是ACA（阴性对照）",
+            "1F10": "ACA 单抗，用于微生物同源蛋白WB",
+            "6D6": "最完整范例，见 worked_example",
+        },
+        "worked_example": {
+            "clone": "6D6（来源匿名样本 RL2790）",
+            "isotype": "重链 IgA；轻链 Lambda",
+            "VH": "IGHV3-72 / IGHD6-13 / IGHJ4；CDR-H3: CARSYSSSWFSPGYW",
+            "VL": "IGLV1-44 / IGLJ3；CDR-L3: CAAWDDSLNGRMF",
+            "status": "VH与VL均 productive / in-frame",
+            "records": "有天然DNA、蛋白序列、密码子优化序列、完整表达载体；原始Sanger .ab1 及 Maxi-prep 后 T7/BGH 验证",
+            "completed_chain": "单个B细胞→BCR测序→VH/VL配对→序列优化→表达载体→HEK生产→CENP-B ELISA与Western blot验证",
+        },
+        "dataset_stats": ("CENP-B候选组：292条重链记录、232条轻链记录；处理后246条独特重链、223条productive重链、"
+                          "194个重链克隆家族（其中26个为扩增家族）；约135个productive VH–VL配对细胞，"
+                          "约127个无明显多链歧义。"),
+        "key_caveat": ("【三道边界，别越线】①流式双阳性=候选，须培养上清ELISA或重组抗体验证才算确认的CENP-B抗体；"
+                       "②测序所得是'序列候选库'，不能把全部称为已确认的ACA抗体；"
+                       "③微生物同源蛋白Western阳性仍需ELISA、SPR/BLI、突变与表位定位进一步证明交叉反应。"),
+        "qc": ("分选特异性演进：第一次实验CENP-B特异性约9% → 经FCS/脱脂奶blocking、严格双阳性gating与探针优化后约25–31% → "
+               "更成熟实验约55%（部分记录50–60%）。技术明显进步，但仍说明染色阳性细胞必须ELISA确认。"),
+        "accomplishments": [
+            "建立可重复的CENP-B纯化流程",
+            "制备定点标记的 CENPB-Cy5 / CENPB-TAMRA 双探针",
+            "建立 ACA-RAMOS 阳性对照",
+            "成功分选并培养CENP-B候选B细胞",
+            "分选特异性从约9%提升到约50–60%",
+            "获得大批重链与轻链序列，完成IMGT与克隆家族分析",
+            "生产并验证多种 IgG/IgM/IgA ACA单克隆抗体（含完整范例6D6）",
+            "开始测试微生物CENP-B样蛋白(ABP1/CBH1/CBH2)的交叉反应",
+        ],
+        "tools": ["重组CENP-B(His/TEV)", "Q/S离子交换 + SEC", "SDS-PAGE/anti-His WB", "Sortase A定点标记(Cy5/TAMRA)",
+                  "工程化RAMOS对照", "流式单细胞分选", "单细胞培养+ELISA", "ARTISAN 5′-RACE PCR", "Sanger",
+                  "IMGT/V-QUEST", "Change-O/Scoper", "In-Fusion + pcDNA3.1", "HEK共转染", "ELISA/WB"],
+        "readouts": ["CENP-B特异性ELISA(总/特异 IgG/IgA/IgM)", "单细胞BCR序列(VH/VL配对)", "克隆家族与扩增",
+                     "isotype", "体细胞突变", "重组抗体对人CENP-B与微生物同源蛋白的结合"],
+        "source": "用户提供（Abdulla 博士课题）",
     },
 
     # ============ 项目1：抗体 N-糖链体外酶促改造 ============
@@ -158,15 +227,31 @@ def format_protocol(name, p, full=True):
     if p.get("qc"):
         out.append(f"🎯 QC：{p['qc']}")
     if full:
+        if p.get("research_questions"):
+            out.append("研究问题：")
+            for q in p["research_questions"]:
+                out.append(f"  - {q}")
         out.append("步骤：")
         for s in p.get("steps", []):
             out.append(f"  {s['n']}. {s['step']} —— {s['detail']}")
+        if p.get("reference_clones"):
+            out.append("参考克隆/对照面板：")
+            for k, v in p["reference_clones"].items():
+                out.append(f"  - {k}：{v}")
+        if p.get("worked_example"):
+            out.append("完整范例：")
+            for k, v in p["worked_example"].items():
+                out.append(f"  - {k}：{v}")
+        if p.get("dataset_stats"):
+            out.append(f"数据规模：{p['dataset_stats']}")
         if p.get("controls"):
             out.append(f"必要对照：{'、'.join(p['controls'])}")
         if p.get("tools"):
             out.append(f"工具链：{'、'.join(p['tools'])}")
         if p.get("readouts"):
             out.append(f"读出：{'、'.join(p['readouts'])}")
+        if p.get("accomplishments"):
+            out.append("已完成：" + "；".join(p["accomplishments"]))
     out.append(f"来源：{p.get('source', '')}")
     return "\n".join(out)
 
