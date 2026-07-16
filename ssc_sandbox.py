@@ -13,27 +13,19 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
+
+from schemas import ToolResult, Provenance   # 统一契约（P0-3）
+
+
+def _prov(**params):
+    """沙箱来源信息 Provenance（把沙箱级别/返回码等放进 parameters）。"""
+    return Provenance(tool_name="safe_run_python", tool_version="level2", parameters=params)
+
 
 BASE = Path(__file__).resolve().parent
 SANDBOX_DIR = BASE / "agent_workspace"
 SANDBOX_DIR.mkdir(exist_ok=True)
-
-
-@dataclass
-class ToolResult:
-    """结构化工具结果——区分成功/失败，带来源，绝不把错误伪装成正常文本。"""
-    ok: bool
-    data: object = None
-    error_type: str = None
-    error_message: str = None
-    provenance: dict = field(default_factory=dict)
-
-    def as_text(self):
-        if self.ok:
-            return str(self.data)
-        return f"[工具失败:{self.error_type}] {self.error_message}"
 
 
 # 静态拦截：这些出现即拒绝执行
@@ -77,7 +69,7 @@ def safe_run_python(code: str, timeout: int = 180) -> ToolResult:
     if blocked:
         return ToolResult(ok=False, error_type="blocked",
                           error_message=f"代码被安全策略拦截：{blocked}。请改用允许的操作。",
-                          provenance={"sandbox": "level2", "reason": blocked})
+                          provenance=_prov(reason=blocked))
     script = SANDBOX_DIR / "_agent_run.py"
     script.write_text(code, encoding="utf-8")
     try:
@@ -94,17 +86,17 @@ def safe_run_python(code: str, timeout: int = 180) -> ToolResult:
         if proc.returncode != 0:
             return ToolResult(ok=False, error_type="runtime_error",
                               error_message=out[:6000] or "非零退出且无输出",
-                              provenance={"sandbox": "level2", "returncode": proc.returncode})
+                              provenance=_prov(returncode=proc.returncode))
         if not out.strip():
             out = "（已执行，无输出。若是画图，检查 agent_workspace 是否生成 png。）"
         return ToolResult(ok=True, data=out[:8000],
-                          provenance={"sandbox": "level2", "cwd": str(SANDBOX_DIR)})
+                          provenance=_prov(cwd=str(SANDBOX_DIR)))
     except subprocess.TimeoutExpired:
         return ToolResult(ok=False, error_type="timeout",
-                          error_message=f"执行超时（>{timeout}s）", provenance={"sandbox": "level2"})
+                          error_message=f"执行超时（>{timeout}s）", provenance=_prov())
     except Exception as e:
         return ToolResult(ok=False, error_type="exec_error", error_message=str(e),
-                          provenance={"sandbox": "level2"})
+                          provenance=_prov())
 
 
 if __name__ == "__main__":
