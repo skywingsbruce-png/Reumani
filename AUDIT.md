@@ -37,6 +37,13 @@
 但**没有制度**保证以后不会看着测试分数改它们。
 - 处置：所有调参只在 `eval/dev/` 上做；`eval/test/` 只跑一次报告（写进治理规则，已在 `DATA_GOVERNANCE.md`）。
 
+### F7【高·已修】Verifier 核查 fail-open（默认放行）
+`ssc_a1.py` 旧 `verify()`：Verifier 输出 JSON 解析失败时返回 `passed=True`（"默认放行"）——
+科研核查最该 fail-closed 的地方却 fail-open。
+- 处置（已修）：重写为全面 **fail-closed**——无法调用/超时/空输出/JSON解析失败/缺 passed 字段/
+  passed 非布尔True("true"字符串不认)/工具执行失败/证据不足，**一律判未通过**；证据不足时结论标记
+  "未验证/证据不足"。新增 `VerificationResult` 结构 + `tests/test_verifier_failclosed.py`（9 项，含7个必测场景）。
+
 ### F5【中】可靠性：静默兜底 + 无自动化测试
 - 多处 `try/except` 吞异常后返回文本（如检索、副驾文献、协议加载），失败被"温柔"掩盖，难以发现回归。
 - 27 项测试目前靠人手动跑，无 CI；改动后可能忘跑。

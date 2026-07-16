@@ -9,6 +9,7 @@ SSc-A1：把固定的"正方-反方-裁判"升级成 Planner → Executor → Ve
 每次运行都留可复现记录（runs/<时间戳>/）。
 """
 
+import concurrent.futures
 import json
 import re
 from dataclasses import dataclass, field, asdict
@@ -46,6 +47,43 @@ class AgentState:
 
     def to_dict(self):
         return asdict(self)
+
+
+@dataclass
+class VerificationResult:
+    """核查结果。默认 fail-closed：未证明通过就是【未通过】。"""
+    passed: bool = False
+    status: str = "verification_error"     # passed / not_passed / verification_error /
+                                           # verifier_unavailable / verifier_timeout /
+                                           # tool_execution_failed / insufficient_evidence
+    reason: str = ""
+    missing: list = field(default_factory=list)
+    unsupported_claims: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+
+    def to_dict(self):
+        return asdict(self)
+
+
+def _fail(status, reason, **kw):
+    return VerificationResult(passed=False, status=status, reason=reason, **kw).to_dict()
+
+
+def _aslist(v):
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [str(x) for x in v if str(x).strip()]
+    s = str(v).strip()
+    return [] if s in ("", "无", "none", "None", "N/A", "n/a", "—", "-") else [s]
+
+
+# 可核实引用：PMID / PMC / DOI / PubMed 链接 / GSE 号
+_CIT = re.compile(r"\bPMID[:\s]*\d+|\bPMC\d+|10\.\d{4,}/\S+|pubmed\.ncbi\.nlm\.nih\.gov/\d+|\bGSE\d+", re.I)
+
+
+def _has_citations(text):
+    return bool(_CIT.search(text or ""))
 
 
 def _parse_json(text):
@@ -89,9 +127,32 @@ def execute(state: AgentState, executor_model="deepseek"):
     return final, msgs
 
 
-def verify(state: AgentState, executor_output, judge_model="claude"):
-    """Verifier：核对执行结果是否达成目标、证据是否充分、有无过度解读。返回 dict。"""
+VERIFY_TIMEOUT = 120  # 秒
+
+
+def _verifier_llm_call(prompt, judge_model="claude"):
     llm = judge_llm if judge_model == "claude" else deepseek_llm_pro
+    return llm.invoke(prompt).content
+
+
+def verify(state: AgentState, executor_output, judge_model="claude", *,
+           verifier_call=None, timeout=VERIFY_TIMEOUT, tool_failed=False,
+           require_evidence=True, evidence_cards=None):
+    """【Fail-closed 核查】任何核查异常/无法核实/证据不足，一律判【未通过】，绝不默认放行。
+    返回 VerificationResult.to_dict()。verifier_call 可注入以便测试（签名 (prompt, judge_model)）。"""
+    # 0) 工具执行失败 → 未通过（即使 LLM 生成了看似正常的答案）
+    if tool_failed:
+        return _fail("tool_execution_failed", "工具执行失败，结论不可信")
+
+    # 1) 证据不足：无证据卡且结论没有任何可核实引用 → 未通过，标记未验证/证据不足
+    if require_evidence:
+        cards = evidence_cards if evidence_cards is not None else state.evidence_cards
+        if not cards and not _has_citations(executor_output):
+            return _fail("insufficient_evidence",
+                         "无证据卡且结论无任何可核实引用（PMID/DOI/GSE），标记为未验证/证据不足",
+                         warnings=["结论缺乏来源支撑，不能视为已验证"])
+
+    # 2) 调用 Verifier（带超时；调用异常/超时都 fail-closed）
     prompt = (
         "你是严格的 Verifier。核对下面的执行结果是否真正回答了研究问题、证据是否充分、"
         "有没有编造或过度解读。\n"
@@ -99,12 +160,43 @@ def verify(state: AgentState, executor_output, judge_model="claude"):
         "\"missing\": \"还缺什么（没有就写无）\"}\n\n"
         f"研究问题：{state.user_query}\n\n计划：\n{state.plan}\n\n执行结果：\n{executor_output}"
     )
-    resp = llm.invoke(prompt).content
+    call = verifier_call or _verifier_llm_call
     try:
-        v = _parse_json(resp)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            resp = ex.submit(call, prompt, judge_model).result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        return _fail("verifier_timeout", "Verifier 超时")
+    except Exception as e:
+        return _fail("verifier_unavailable", f"Verifier 无法调用：{e}")
+
+    # 3) 空输出 → 未通过
+    if resp is None or not str(resp).strip():
+        return _fail("verification_error", "Verifier 返回空")
+
+    # 4) JSON 无法解析 → 未通过（原来的 bug 在这里默认放行，已修）
+    try:
+        raw = _parse_json(resp)
     except Exception:
-        v = {"passed": True, "reason": "验证器输出无法解析，默认放行", "missing": resp[:200]}
-    return v
+        return _fail("verification_error", "Verifier output could not be parsed")
+    if not isinstance(raw, dict):
+        return _fail("verification_error", "Verifier 输出不是 JSON 对象")
+
+    # 5) 缺 passed 字段 → 未通过
+    if "passed" not in raw:
+        return _fail("verification_error", "缺少必要字段 passed")
+
+    # 6) passed 必须是【布尔 True】；字符串 "true"/1/None 等一律不放行
+    if raw["passed"] is not True:
+        if raw["passed"] is False:
+            return _fail("not_passed", str(raw.get("reason", "未通过")),
+                         missing=_aslist(raw.get("missing")),
+                         unsupported_claims=_aslist(raw.get("unsupported_claims")))
+        return _fail("verification_error",
+                     f"passed 非布尔 True（收到 {raw['passed']!r}），fail-closed")
+
+    # 7) 真正通过
+    return VerificationResult(passed=True, status="passed", reason=str(raw.get("reason", "")),
+                              missing=_aslist(raw.get("missing"))).to_dict()
 
 
 def _extract_trace(messages):
@@ -146,22 +238,26 @@ def run_agent(user_query, constraints="", max_iterations=2,
         state.observations.append(output)
         state.artifacts.append({"tools_used": _extract_trace(msgs)})
         best_output = output
-        # Verify
-        v = verify(state, output, judge_model=judge_model)
+        # Verify（fail-closed：工具失败时也判未通过）
+        v = verify(state, output, judge_model=judge_model,
+                   tool_failed=bool(state.errors))
         state.verification_results.append(v)
-        if v.get("passed"):
+        if v.get("passed") is True:          # 必须是布尔 True 才算通过
             state.final_answer = output
             break
         # 不通过 → 修订重试（循环保护：retry_count 递增，到上限就停）
         state.retry_count += 1
-        failure_feedback = f"{v.get('reason','')}；缺：{v.get('missing','')}"
+        failure_feedback = f"[{v.get('status','')}] {v.get('reason','')}；缺：{v.get('missing','')}"
 
     # 循环保护触发：超过上限仍未通过，返回当前最佳 + 失败原因，而不是死循环
+    # 关键：明确标记【未验证/证据不足】，绝不把未通过伪装成通过
     if not state.final_answer:
         last = state.verification_results[-1] if state.verification_results else {}
         state.final_answer = (
-            f"（已达最大迭代 {state.max_iterations} 次仍未完全通过验证，返回当前最佳结果）\n\n"
-            f"{best_output}\n\n---\n未通过原因：{last.get('reason','')}；还缺：{last.get('missing','')}"
+            f"⚠️ 未验证 / 证据不足（{last.get('status','no_verification')}）：{last.get('reason','')}\n\n"
+            f"（已达最大迭代 {state.max_iterations} 次仍未通过独立核查，以下为当前最佳结果，"
+            f"仅供参考、未经核实，请勿直接作为科研结论）\n\n{best_output}\n\n---\n"
+            f"还缺：{last.get('missing', [])}"
         )
 
     _save_run(state, stamp)
