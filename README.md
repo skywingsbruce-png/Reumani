@@ -1,5 +1,7 @@
 # MrCat — 风湿免疫科研智能体 / A Biomedical Research Agent for Rheumatology
 
+[![CI](https://github.com/skywingsbruce-png/Reumani/actions/workflows/ci.yml/badge.svg)](https://github.com/skywingsbruce-png/Reumani/actions/workflows/ci.yml)
+
 > 一个受 [Biomni](https://github.com/snap-stanford/Biomni) 启发、面向**系统性硬化症 (SSc) 及风湿免疫疾病**的研究型 AI Agent：
 > 规划 → 检索 → 执行(安全沙箱) → 证据核查 → 假说批量筛杀，全部在本地可复现的数据湖上运行。
 >
@@ -115,12 +117,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 # Web 应用（双语）
 streamlit run ssc_pi_agent_web.py        # 或双击 启动SSc智能体.bat
 
-# 构建向量索引（首次，按需）
+# 构建向量索引（首次，按需；属 optional-large-data）
 python vector_index.py CIN SSc
 
-# 跑测试
-python tests/test_retrieval.py
-python tests/test_sandbox.py
+# 跑测试（unit + integration，无需 data_lake / API key）
+pytest
+# 本地跑需要大数据/向量索引的测试：
+pytest -m optional_large_data
 ```
 
 ## 数据来源 / Data sources

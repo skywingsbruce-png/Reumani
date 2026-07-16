@@ -21,8 +21,13 @@ def _ensure_font():
     global _REGISTERED
     if _REGISTERED:
         return _FONT
-    for path in [r"C:\Windows\Fonts\simsun.ttc", r"C:\Windows\Fonts\msyh.ttc",
-                 r"C:\Windows\Fonts\simhei.ttf"]:
+    candidates = [
+        r"C:\Windows\Fonts\simsun.ttc", r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",           # Linux (Noto CJK)
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",                     # Linux (文泉驿)
+        "/System/Library/Fonts/PingFang.ttc",                              # macOS
+    ]
+    for path in candidates:
         if Path(path).exists():
             try:
                 pdfmetrics.registerFont(TTFont(_FONT, path, subfontIndex=0))

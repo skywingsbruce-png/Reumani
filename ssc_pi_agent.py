@@ -8,11 +8,17 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain.agents import create_agent as create_react_agent
 
-# Windows 控制台默认用 GBK 编码，无法正确输入/输出中文和 emoji，这里切到 UTF-8
-if os.name == "nt":
-    os.system("chcp 65001 >nul")
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+# Windows 控制台默认用 GBK 编码，无法正确输入/输出中文和 emoji，这里切到 UTF-8。
+# 用 try 包住：CI / pytest 捕获流可能没有 reconfigure，且非 Windows 无需 chcp。
+try:
+    if os.name == "nt":
+        os.system("chcp 65001 >nul")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 load_dotenv()
 
@@ -113,17 +119,20 @@ def search_literature(query: str, max_results: int = 10, preprints_only: bool = 
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")  # 如你的账号已开通 deepseek-v4，改成对应的模型名即可
 
+# 占位 key：让【构造】客户端不因缺 key 崩溃（导入/CI/单测无需真实 key）；真实调用时缺 key 才会失败。
+_DS_KEY = DEEPSEEK_API_KEY or "not-configured"
+
 debater_tools = [search_literature]
 
 deepseek_llm_pro = ChatOpenAI(
     model=DEEPSEEK_MODEL,
-    api_key=DEEPSEEK_API_KEY,
+    api_key=_DS_KEY,
     base_url="https://api.deepseek.com",
     temperature=0.3,
 )
 deepseek_llm_con = ChatOpenAI(
     model=DEEPSEEK_MODEL,
-    api_key=DEEPSEEK_API_KEY,
+    api_key=_DS_KEY,
     base_url="https://api.deepseek.com",
     temperature=0.7,
 )
@@ -199,7 +208,7 @@ def run_debate(topic: str, rounds: int = 2) -> str:
 
 judge_llm = ChatAnthropic(
     model="claude-opus-4-8",
-    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+    api_key=os.environ.get("ANTHROPIC_API_KEY") or "not-configured",
 )
 
 judge_tools = [list_directory_pdfs, read_local_pdf]

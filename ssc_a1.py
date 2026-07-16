@@ -18,7 +18,8 @@ from pathlib import Path
 
 from ssc_pi_agent import judge_llm, deepseek_llm_pro
 from ssc_resources import retriever as _resource_retriever
-from ssc_skill_agent import build_skill_agent
+# 注意：build_skill_agent 在 execute() 内惰性导入，避免核查/单测只想用 verify 时
+# 被迫拉起整条工具链（也让无 API key 的 CI 能导入本模块）。
 
 BASE = Path(__file__).resolve().parent
 RUNS_DIR = BASE / "runs"
@@ -115,6 +116,7 @@ def plan(state: AgentState, judge_model="claude", failure_feedback=""):
 
 def execute(state: AgentState, executor_model="deepseek"):
     """用技能 agent 执行计划，返回 (final_text, messages)。"""
+    from ssc_skill_agent import build_skill_agent   # 惰性导入，见文件顶部说明
     agent = build_skill_agent(executor_model)
     task = (
         f"研究问题：{state.user_query}\n\n"

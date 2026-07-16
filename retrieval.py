@@ -91,15 +91,33 @@ def _hgnc():
     return _HGNC_REV, _HGNC_APPROVED
 
 
+# 确定性基因识别：不依赖 data_lake/HGNC（干净克隆也能正确路由）。
+# 内置常用基因种子（本项目相关）+ 含数字的大写符号模式；HGNC 若存在仅作增强。
+COMMON_GENES = {
+    "STING1", "TMEM173", "CGAS", "MB21D1", "TP53", "MYC", "IL6", "IL8", "CXCL8", "CXCL4",
+    "PIGR", "TOP1", "CENPB", "IFNB1", "IFNA1", "STAT1", "STAT3", "IRF3", "IRF7", "TGFB1",
+    "SMAD3", "ACTA2", "COL1A1", "SFRP2", "PDGFRB", "TLR7", "TLR8", "TLR9", "FOXP3", "CD19",
+}
+_GENE_NUM = re.compile(r"^[A-Z][A-Z0-9]*[0-9][A-Z0-9]*$")   # 含数字的大写符号，如 STING1/TP53/IL6
+
+
+def _looks_like_gene(t):
+    if t != t.upper():          # 必须原样即为大写
+        return False
+    tu = t.upper()
+    if tu in COMMON_GENES or _GENE_NUM.match(tu):
+        return True
+    _, approved = _hgnc()       # HGNC 存在则增强，不存在也不影响上面两条
+    return tu in approved
+
+
 def classify_query(q):
-    """精确(基因/ID) vs 混合(机制/概念)。"""
+    """精确(基因/ID) vs 混合(机制/概念)。确定性，不依赖本地数据。"""
     if _EXACT_ID.search(q):
         return "exact"
-    _, approved = _hgnc()
     toks = re.findall(r"[A-Za-z0-9]{2,8}", q)
-    gene_like = [t for t in toks if t.upper() in approved and t.upper() == t]
-    # 短查询且主要是基因符号 → 精确
-    if gene_like and len(toks) <= 3:
+    gene_like = [t for t in toks if _looks_like_gene(t)]
+    if gene_like and len(toks) <= 3:      # 短查询且主要是基因符号 → 精确
         return "exact"
     return "hybrid"
 
