@@ -263,10 +263,22 @@ def skill_system(extra: str = "") -> str:
     return "\n\n".join(parts)
 
 
-def build_skill_agent(model: str = "deepseek"):
-    """model: 'deepseek'(省钱) 或 'claude'(质量高、更擅长写代码和跟复杂流程)。"""
+def _tools_by_name():
+    return {t.name: t for t in SKILL_AGENT_TOOLS}
+
+
+def build_skill_agent(model: str = "deepseek", allowed_tools=None):
+    """model: 'deepseek'(省钱) 或 'claude'。
+    allowed_tools=None 时给全部工具（向后兼容，供网页问答用）；
+    传入工具名列表时【只】把这些工具交给 Executor —— 未授权/未知的工具物理上无法被调用。"""
     llm = judge_llm if model == "claude" else deepseek_llm_pro
-    return create_react_agent(llm, SKILL_AGENT_TOOLS)
+    if allowed_tools is None:
+        return create_react_agent(llm, SKILL_AGENT_TOOLS)
+    from tool_registry import resolve
+    resolve(allowed_tools)                       # 未知工具名 → 抛错，绝不静默忽略
+    m = _tools_by_name()
+    tools = [m[n] for n in allowed_tools if n in m]
+    return create_react_agent(llm, tools)
 
 
 # 便捷默认实例

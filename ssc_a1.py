@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ssc_pi_agent import judge_llm, deepseek_llm_pro
 from ssc_resources import retriever as _resource_retriever
+from tool_registry import select_tool_names, apply_approvals, all_tool_names
 # 注意：build_skill_agent 在 execute() 内惰性导入，避免核查/单测只想用 verify 时
 # 被迫拉起整条工具链（也让无 API key 的 CI 能导入本模块）。
 
@@ -42,6 +43,8 @@ class AgentState:
     verification_results: list = field(default_factory=list)
     artifacts: list = field(default_factory=list)
     final_answer: str = ""
+    tool_trace: list = field(default_factory=list)   # 工具选择/拒绝/调用轨迹（权限控制可审计）
+    allowed_tools: list = field(default_factory=list)  # 本任务被授权的工具名
     # 循环保护，防止 Planner-Executor-Verifier 死循环
     retry_count: int = 0
     max_iterations: int = 2
@@ -103,21 +106,24 @@ def _parse_json(text):
 def plan(state: AgentState, judge_model="claude", failure_feedback=""):
     llm = judge_llm if judge_model == "claude" else deepseek_llm_pro
     fb = f"\n\n上一轮验证未通过，原因：\n{failure_feedback}\n请针对性修订计划。" if failure_feedback else ""
+    allowed = state.allowed_tools or all_tool_names()
     prompt = (
         "你是 SSc 科研 Planner。根据研究问题和可用资源，制定一个简洁、可执行的研究计划"
-        "（3-6 步，每步说清用哪个资源/工具、要得到什么、如何验证）。\n\n"
+        "（3-6 步，每步说清用哪个工具、要得到什么、如何验证）。\n\n"
         f"研究问题：{state.user_query}\n"
         f"约束：{state.constraints or '无'}\n\n"
         f"可用资源（已由检索器筛选）：\n{state.selected_resources}{fb}\n\n"
+        f"【硬性】你只能规划使用以下真实存在且本任务已授权的工具名，禁止发明或使用其它工具名：\n{allowed}\n\n"
         "只输出计划步骤，不要现在就执行。"
     )
     return llm.invoke(prompt).content
 
 
 def execute(state: AgentState, executor_model="deepseek"):
-    """用技能 agent 执行计划，返回 (final_text, messages)。"""
+    """用技能 agent 执行计划，返回 (final_text, messages)。
+    Executor 只拿到 state.allowed_tools —— 未授权/未知工具物理上无法被调用。"""
     from ssc_skill_agent import build_skill_agent   # 惰性导入，见文件顶部说明
-    agent = build_skill_agent(executor_model)
+    agent = build_skill_agent(executor_model, allowed_tools=state.allowed_tools or None)
     task = (
         f"研究问题：{state.user_query}\n\n"
         f"请严格按以下计划执行，用工具做真实检索/分析，不要编造：\n{state.plan}\n\n"
@@ -218,11 +224,16 @@ def _extract_trace(messages):
 # ==========================================
 def run_agent(user_query, constraints="", max_iterations=2,
               executor_model="deepseek", judge_model="claude",
-              stamp=None):
+              stamp=None, approved_tools=None):
     state = AgentState(user_query=user_query, constraints=constraints,
                        max_iterations=max_iterations)
     # 阶段0：资源检索
     state.selected_resources = _resource_retriever.bundle_text(user_query, top_k=12)
+    # 阶段0.5：工具权限控制 —— 确定性选工具 → 高风险未批准的物理排除 → 记入 trace
+    selected = select_tool_names(user_query)
+    for n in selected:
+        state.tool_trace.append({"event": "selected", "tool": n, "detail": ""})
+    state.allowed_tools = apply_approvals(selected, approved_tools, trace=state.tool_trace)
 
     failure_feedback = ""
     best_output = ""
