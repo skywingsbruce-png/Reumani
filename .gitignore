@@ -4,6 +4,10 @@
 # 第三方技能仓库（30MB，自带 git，不纳入）
 nature-skills/
 
+# 评测中间产物（可由 eval_harness.py 重新生成；人工 labels.jsonl 仍会被跟踪）
+eval/**/*.template
+eval/results/
+
 # 运行时产物
 agent_workspace/
 conversations/

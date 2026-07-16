@@ -1,10 +1,11 @@
 """
-检索基准（rigorous benchmark, 步骤对比）——量化混合检索比纯关键词强多少。
-对比三档：keyword(纯BM25) / synonym(+同义词扩展) / hybrid(再加向量+重排序)。
-相关性用"银标准"：文档需命中每个概念组各一词才算相关(must_all groups)。
-指标：precision@10（前10命中相关的比例）+ hit@10（前10是否至少一篇相关）。
-纯本地跑，不调外部 API。用法：python retrieval_eval.py
-⚠️ v1 是概念覆盖型银标准；正式发表建议再补人工标注的 PMID 金标准集。
+⚠️⚠️ 已降级为【开发期 sanity check，非泛化评测】⚠️⚠️
+审计 F1：本文件的查询几乎全部由 retrieval.SYNONYMS 的词条构成，属"用同义词自测自己"，
+其 precision 数字【不能】作为泛化能力证据（详见 AUDIT.md / DATA_GOVERNANCE.md）。
+- 正式效果评测请用 eval_harness.py（人工 PMID 金标准 + 冻结 test 集）。
+- 保留本文件仅作快速冒烟检查：改同义词后看词典大致有没有生效，不作对外汇报。
+
+（原说明）三档对比 keyword/synonym/hybrid，相关性用概念组银标准，本地跑不调 API。
 """
 
 import json
@@ -91,7 +92,8 @@ def run(k=10):
     payload = {"run_at": datetime.now().isoformat(timespec="seconds"), "k": k,
                "n_queries": n, "summary": summary, "rows": rows}
     (OUT / "retrieval_benchmark.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("\n===== 汇总（越高越好）=====")
+    print("\n⚠️ 这是 DEV sanity（同义词自测自己），不是泛化评测；对外数字请用 eval_harness.py")
+    print("===== 汇总（越高越好）=====")
     for m in modes:
         print(f"  {m:<8}  mean P@10={summary[m]['mean_p@10']:.3f}   hit@10率={summary[m]['hit@10_rate']:.3f}")
     print(f"\n写入 {OUT / 'retrieval_benchmark.json'}")
