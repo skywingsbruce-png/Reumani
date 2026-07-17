@@ -289,6 +289,8 @@ VerifyStatus = Literal[
     "passed", "not_passed", "verification_error",
     "verifier_unavailable", "verifier_timeout",
     "tool_execution_failed", "insufficient_evidence",
+    # 四层 Verifier 专用
+    "citation_error", "claim_contradicted", "claim_unsupported", "adversarial_counterevidence",
 ]
 
 
