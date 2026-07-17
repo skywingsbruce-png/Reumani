@@ -57,25 +57,48 @@ def read_skill(skill_name: str) -> str:
 # ==========================================
 # 执行类工具
 # ==========================================
+# read_file 只允许读这些根目录内的文件（resolve 后仍需落在其中；拒绝任意绝对路径/穿越/.env）
+_ALLOWED_READ_ROOTS = [WORKSPACE, BASE / "data_lake", BASE / "skills"]
+
+
+def _within_allowed(p: Path) -> bool:
+    try:
+        rp = p.resolve()
+    except Exception:
+        return False
+    if rp.name == ".env" or rp.suffix == ".env":
+        return False
+    for root in _ALLOWED_READ_ROOTS:
+        try:
+            rp.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 @tool
 def read_file(path: str) -> str:
-    """读取本地文本 / CSV / 代码文件的内容（用于查看数据列名、脚本内容等）。返回前 20000 字符。"""
+    """读取【允许目录内】的本地文本/CSV/代码（agent_workspace / data_lake / skills）。返回前 20000 字符。
+    只读允许目录：解析后仍须落在允许根内，拒绝任意绝对路径、路径穿越与 .env。"""
     try:
         p = Path(path)
         if not p.is_absolute():
             p = WORKSPACE / path
-        text = p.read_text(encoding="utf-8", errors="replace")
-        return text[:20000]
+        if not _within_allowed(p):
+            return "[拒绝] 只能读取 agent_workspace / data_lake / skills 目录内的文件（禁止任意绝对路径、.. 穿越、.env）。"
+        return p.resolve().read_text(encoding="utf-8", errors="replace")[:20000]
     except Exception as e:
         return f"读取失败：{e}"
 
 
 @tool
 def run_python(code: str) -> str:
-    """在【安全沙箱】里执行 Python 代码做数据分析、统计、画图（火山图/森林图等）。
-    工作目录 agent_workspace，已装 pandas/numpy/scipy/matplotlib/scanpy 等。
+    """在【受限沙箱(Level 2,非强隔离)】里执行 Python 代码做数据分析、统计、画图（火山图/森林图等）。
+    一任务一独立目录，已装 pandas/numpy/scipy/matplotlib/scanpy 等。
     画图用 matplotlib 并 plt.savefig 存 .png（会自动显示在网页上）。
-    安全策略(Level2)：运行时剥离所有 API 密钥；禁止 subprocess/系统命令/删除文件/读取.env。
+    受限策略(Level2)：运行时剥离所有 API 密钥；禁止 subprocess/系统命令/删除文件/读取.env/路径穿越；
+    仅适用于公开、非敏感数据（患者数据须等 Level 3 容器隔离）。
     返回结构化结果（成功给输出，失败明确报错，不会把失败伪装成正常文本）。"""
     result = _safe_run_python(code)
     return result.as_text()

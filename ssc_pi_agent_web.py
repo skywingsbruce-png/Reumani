@@ -115,7 +115,7 @@ def render_trace(messages):
 
 def render_images(since_ts):
     imgs = []
-    for p in sorted(WORKSPACE.glob("*")):
+    for p in sorted(WORKSPACE.rglob("*")):   # 含各任务独立 runs/ 子目录里的图
         if p.suffix.lower() in (".png", ".jpg", ".jpeg") and p.stat().st_mtime >= since_ts - 1 \
                 and not p.name.startswith("_"):
             imgs.append(p)

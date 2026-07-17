@@ -79,6 +79,7 @@
 | 十.5 Scientific-Eval | `eval/scientific_eval.md`：未参与开发的GEO/预注册/固定代码再开测试数据/专家盲评/独立队列复制/记录批次混杂多重检验/区分探索性与验证性 | — | ✅ 规范 |
 | 十一 文献清洗 | `lit_cleaning.py` 四层：确定性检查(PMID/DOI/去重/撤稿更正/类型/人-动物-细胞/全文)→LLM只做抽取→程序规则(动物≠临床/横断面≠因果/无样本量不编造/摘要≠全文证据/预印本必标/无定位≠关键证据)→人工审核优先级(临床/新发现/共识冲突/两模型不一致/低置信/进know-how-protocol-benchmark)；不让单一LLM独断质量；11 项测试 | — | ✅ |
 | 十二 分层记忆 | `memory_store.py`：五层(system_policy/validated_domain_knowledge/project_memory/session_memory/candidate_memory)+15字段MemoryRecord；只注入已审核可信层，candidate不影响高风险；观察内容(网页/PDF)只进candidate且过注入检测→隔离；支持审核/撤销/版本历史/查哪些答案用过；agent_memory委托兼容；7项测试 | 安全 | ✅ |
+| 十三 沙箱加固 | Level-2：一任务一独立目录/脚本(防并发覆盖)、输出密钥脱敏、read_file 只读允许目录(resolve后校验/拒任意绝对路径/穿越/.env)、措辞不再称"安全沙箱"、限公开非敏感数据；`docs/sandbox_level3.md` 容器隔离规划；5项加固测试 | 安全 | ✅ Level2加固，Level3待建 |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |
