@@ -66,6 +66,7 @@
 | P0-2 | 干净克隆全测通过 + CI（基因路由去数据依赖/占位key/测试分级/最小fixture/GitHub Actions） | F5,F6 | ✅ 42→50 passed |
 | P0-3 | 统一核心数据契约 `schemas.py`（Pydantic v2，11模型+Provenance+Artifact，严格校验；失败不可伪装成功） | — | ✅ 已接线：ToolResult(沙箱)、VerificationResult(ssc_a1)、ResourceSpec(ssc_resources 43资源)。待迁：EvidenceCard(需LLM输出重整)、AgentState(随结构化Planner一并收敛) |
 | 工具权限 | Tool Retriever 从"推荐"升级为"权限控制"：`tool_registry.py`（确定性选工具→resolve校验真实存在→高风险未批准物理排除→PermissionedToolset做权限+参数schema+审批+trace）；Executor 只拿授权工具；未知名报错；8 项权限绕过测试 | — | ✅ |
+| 结构化Planner | `planner.py`：Planner 产出经 schema 验证的 ResearchPlan（每步 success_criteria 必填、tool_name 必须∈allowed_tools、maximum_retries 程序封顶、LLM 不能自行扩权）；解析/验证失败即停，绝不自由文本降级；7 项测试 | — | ✅ |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |

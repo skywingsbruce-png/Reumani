@@ -95,17 +95,30 @@ class ResourceSpec(_Strict):
 
 # ---------- 计划 ----------
 class PlanStep(_Strict):
-    n: int
-    goal: str
-    tool: Optional[str] = None
+    step_id: int
+    objective: str
+    tool_name: str                                # 必须是本任务 allowed_tools 里的真实工具
+    arguments: dict[str, object] = Field(default_factory=dict)
     expected_output: str
-    verification: str                             # 这一步如何验证
+    success_criteria: str                         # 必填：每步必须定义成功条件
+    risk_level: Literal["low", "medium", "high"] = "low"
+    requires_human_approval: bool = False
+    on_failure: Literal["stop", "retry", "skip"] = "stop"
 
 
 class ResearchPlan(_Strict):
-    query: str
+    question: str
+    constraints: str = ""
+    selected_resources: list[str] = Field(default_factory=list)
     steps: list[PlanStep]
-    constraints: Optional[str] = None
+    stop_conditions: list[str] = Field(default_factory=list)
+    maximum_retries: int = 2
+
+    @model_validator(mode="after")
+    def _non_empty(self):
+        if not self.steps:
+            raise ValueError("ResearchPlan 至少要有一个步骤")
+        return self
 
 
 # ---------- 证据 ----------

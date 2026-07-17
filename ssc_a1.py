@@ -46,6 +46,7 @@ class AgentState:
     final_answer: str = ""
     tool_trace: list = field(default_factory=list)   # 工具选择/拒绝/调用轨迹（权限控制可审计）
     allowed_tools: list = field(default_factory=list)  # 本任务被授权的工具名
+    research_plan: dict = field(default_factory=dict)  # 结构化计划（ResearchPlan.model_dump）
     # 循环保护，防止 Planner-Executor-Verifier 死循环
     retry_count: int = 0
     max_iterations: int = 2
@@ -221,11 +222,27 @@ def run_agent(user_query, constraints="", max_iterations=2,
         state.tool_trace.append({"event": "selected", "tool": n, "detail": ""})
     state.allowed_tools = apply_approvals(selected, approved_tools, trace=state.tool_trace)
 
+    from planner import make_plan, render_plan_text, PlanValidationError
+    plan_llm = judge_llm if judge_model == "claude" else deepseek_llm_pro
+
     failure_feedback = ""
     best_output = ""
     while state.retry_count < state.max_iterations:
-        # Plan
-        state.plan = plan(state, judge_model=judge_model, failure_feedback=failure_feedback)
+        # Plan：结构化 + schema 验证；tool_name 必须在 allowed_tools 内；
+        # 解析/验证失败 → 立即停止，【绝不】自由文本降级执行
+        try:
+            rplan = make_plan(plan_llm, state.user_query, state.constraints,
+                              state.selected_resources, state.allowed_tools,
+                              max_retries_cap=state.max_iterations, feedback=failure_feedback)
+        except PlanValidationError as e:
+            state.errors.append(f"计划非法：{e}")
+            state.tool_trace.append({"event": "plan_rejected", "tool": "", "detail": str(e)[:200]})
+            state.final_answer = (
+                f"⚠️ 计划非法，已停止（fail-closed，不做自由文本降级执行）：\n{e}")
+            _save_run(state, stamp)
+            return state
+        state.research_plan = rplan.model_dump()
+        state.plan = render_plan_text(rplan)
         # Execute
         try:
             output, msgs = execute(state, executor_model=executor_model)

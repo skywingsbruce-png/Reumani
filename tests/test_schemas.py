@@ -59,8 +59,22 @@ def test_evidence_card_requires_source():
 
 @pytest.mark.unit
 def test_research_plan_nested_typed():
-    p = ResearchPlan(query="q", steps=[PlanStep(n=1, goal="g", expected_output="o", verification="v")])
-    assert p.steps[0].n == 1
+    p = ResearchPlan(question="q", steps=[PlanStep(
+        step_id=1, objective="g", tool_name="search_literature",
+        expected_output="o", success_criteria="拿到≥3篇相关文献")])
+    assert p.steps[0].step_id == 1 and p.steps[0].tool_name == "search_literature"
+
+
+@pytest.mark.unit
+def test_plan_step_requires_success_criteria():
+    with pytest.raises(ValidationError):        # 缺 success_criteria → 拒绝
+        PlanStep(step_id=1, objective="g", tool_name="t", expected_output="o")
+
+
+@pytest.mark.unit
+def test_research_plan_rejects_empty_steps():
+    with pytest.raises(ValidationError):
+        ResearchPlan(question="q", steps=[])
 
 
 if __name__ == "__main__":
