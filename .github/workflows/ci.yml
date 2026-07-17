@@ -6,22 +6,95 @@ on:
   pull_request:
     branches: [main]
 
+# 所有 job 都：不调付费模型、不下载大型 GEO、不依赖本地 data_lake、不依赖开发机向量索引、不读 .env。
+# pytest.ini 默认 -m "not optional_large_data" 已排除需大数据/模型的测试。
+
 jobs:
-  test:
-    name: unit+integration (${{ matrix.os }} / py${{ matrix.python-version }})
+  lint:
+    name: 1) lint / compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - name: byte-compile all modules (syntax/import-safety)
+        run: python -m compileall -q .
+
+  unit:
+    name: 2) unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]   # 9) Windows/Linux matrix
         python-version: ["3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install CI deps (lightweight, no big data / no API)
-        run: python -m pip install --upgrade pip && pip install -r requirements-ci.txt
-      - name: Run unit + integration tests
-        # 无 API key、无 data_lake：默认 addopts 已跳过 optional_large_data
-        run: pytest
+        with: { python-version: ${{ matrix.python-version }} }
+      - run: pip install -r requirements-ci.txt
+      - run: pytest
+
+  contract:
+    name: 3) contract tests (schemas)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - run: pytest tests/test_schemas.py tests/test_evidence_cards.py tests/test_claim_graph.py tests/test_memory_store.py
+
+  retrieval:
+    name: 4) retrieval regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - run: pytest tests/test_retrieval.py tests/test_integration_retrieval.py tests/test_eval_harness.py
+
+  verifier:
+    name: 5) verifier fail-closed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - run: pytest tests/test_verifier_failclosed.py tests/test_verifier_layers.py
+
+  safety:
+    name: 6) safety tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - run: pytest tests/test_safety_eval.py tests/test_sandbox.py tests/test_sandbox_hardening.py tests/test_tool_permissions.py
+
+  e2e_mock:
+    name: 7) small end-to-end mock
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - run: pytest tests/test_e2e_mock.py
+
+  requirements_consistency:
+    name: 8) requirements / import consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt
+      - name: pip check + import core modules
+        run: |
+          pip check
+          python -c "import schemas, retrieval, verifier, planner, claim_graph, tool_registry, memory_store, lit_ranking, lit_cleaning, hypothesis_triage, eval_harness, evidence_build, safety"
