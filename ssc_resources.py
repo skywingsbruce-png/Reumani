@@ -10,39 +10,14 @@ SSc-E1：科研资源环境（Biomni-E1 的 SSc 版）。
 
 import json
 import re
-from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+from schemas import ResourceSpec   # 统一契约（P0-3）：ResourceSpec 定义收敛到 schemas.py
 
 BASE = Path(__file__).resolve().parent
 DATA_LAKE_DIR = BASE / "data_lake"
 DATA_LAKE_DIR.mkdir(exist_ok=True)
-
-
-# ==========================================
-# 资源的结构化定义
-# ==========================================
-@dataclass
-class ResourceSpec:
-    name: str
-    kind: str                       # tool | database | software | knowhow
-    domains: list = field(default_factory=list)
-    description: str = ""
-    input_schema: dict = field(default_factory=dict)
-    output_schema: dict = field(default_factory=dict)
-    input_types: list = field(default_factory=list)   # 输入格式：csv/h5ad/gene_list/text/pmid...
-    output_types: list = field(default_factory=list)
-    task_types: list = field(default_factory=list)    # 任务类型：literature/evidence/enrichment/clustering...
-    risk_level: str = "low"         # low | medium | high
-    timeout_seconds: int = 30
-    implemented: bool = True         # False = 已注册但未实现（诚实占位）
-    callable_path: str = ""          # "模块:函数"，供工具调用
-    data_version: str = ""           # 数据湖快照版本
-    data_updated_at: str = ""        # 快照时间戳（可复现）
-    notes: str = ""
-
-    def to_dict(self):
-        return asdict(self)
 
 
 class ResourceRegistry:

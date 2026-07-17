@@ -74,15 +74,23 @@ class ToolResult(_Strict):
 class ResourceSpec(_Strict):
     name: str
     kind: str                                     # tool / database / software / knowhow ...
-    description: str
     domains: list[str] = Field(default_factory=list)
+    description: str = ""
+    input_schema: dict[str, object] = Field(default_factory=dict)
+    output_schema: dict[str, object] = Field(default_factory=dict)
     input_types: list[str] = Field(default_factory=list)
     output_types: list[str] = Field(default_factory=list)
     task_types: list[str] = Field(default_factory=list)
-    risk_level: Literal["low", "medium", "high"] = "low"
-    implemented: bool = False
-    callable_path: Optional[str] = None
-    data_version: Optional[str] = None
+    risk_level: str = "low"                       # low / medium / high（宽松，兼容既有注册表）
+    timeout_seconds: int = 30
+    implemented: bool = True                       # False = 已注册但未实现（诚实占位）
+    callable_path: str = ""
+    data_version: str = ""
+    data_updated_at: str = ""
+    notes: str = ""
+
+    def to_dict(self):                             # 兼容既有 registry.to_json() 的 s.to_dict()
+        return self.model_dump()
 
 
 # ---------- 计划 ----------

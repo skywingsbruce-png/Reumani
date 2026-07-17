@@ -19,6 +19,7 @@ from pathlib import Path
 from ssc_pi_agent import judge_llm, deepseek_llm_pro
 from ssc_resources import retriever as _resource_retriever
 from tool_registry import select_tool_names, apply_approvals, all_tool_names
+from schemas import VerificationResult   # 统一契约（P0-3）
 # 注意：build_skill_agent 在 execute() 内惰性导入，避免核查/单测只想用 verify 时
 # 被迫拉起整条工具链（也让无 API key 的 CI 能导入本模块）。
 
@@ -53,24 +54,9 @@ class AgentState:
         return asdict(self)
 
 
-@dataclass
-class VerificationResult:
-    """核查结果。默认 fail-closed：未证明通过就是【未通过】。"""
-    passed: bool = False
-    status: str = "verification_error"     # passed / not_passed / verification_error /
-                                           # verifier_unavailable / verifier_timeout /
-                                           # tool_execution_failed / insufficient_evidence
-    reason: str = ""
-    missing: list = field(default_factory=list)
-    unsupported_claims: list = field(default_factory=list)
-    warnings: list = field(default_factory=list)
-
-    def to_dict(self):
-        return asdict(self)
-
-
 def _fail(status, reason, **kw):
-    return VerificationResult(passed=False, status=status, reason=reason, **kw).to_dict()
+    # 统一用 schemas.VerificationResult（严格校验），返回 dict 供主循环使用
+    return VerificationResult(passed=False, status=status, reason=reason, **kw).model_dump()
 
 
 def _aslist(v):
@@ -204,7 +190,7 @@ def verify(state: AgentState, executor_output, judge_model="claude", *,
 
     # 7) 真正通过
     return VerificationResult(passed=True, status="passed", reason=str(raw.get("reason", "")),
-                              missing=_aslist(raw.get("missing"))).to_dict()
+                              missing=_aslist(raw.get("missing"))).model_dump()
 
 
 def _extract_trace(messages):
