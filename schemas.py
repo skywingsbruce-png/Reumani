@@ -121,28 +121,125 @@ class ResearchPlan(_Strict):
         return self
 
 
-# ---------- 证据 ----------
+# ---------- 证据（分层）----------
+EvidenceTier = Literal["abstract", "fulltext", "analysis"]
+PublicationStatus = Literal["published", "preprint", "retracted", "corrected", "unknown"]
+EvidenceDirection = Literal["supports", "refutes", "mixed", "inconclusive", "correlational"]
+# 只读摘要的结论强度上限：候选/初筛
+ABSTRACT_MAX_GRADES = {"候选", "初筛", "candidate", "screening"}
+NOT_REPORTED = "未报告"          # 找不到信息统一写这个，禁止猜测
+
+
 class EvidenceCard(_Strict):
-    """文献证据卡片。"""
-    claim: str
-    study_type: Optional[str] = None
+    """证据卡基类。所有卡必须保留 provenance。用三个子类区分证据层级（能支撑多强的结论）。"""
+    evidence_id: str
+    tier: EvidenceTier
+    title: str
+    provenance: Provenance                        # 原始来源，必填
+    pmid: Optional[str] = None
+    pmcid: Optional[str] = None
+    doi: Optional[str] = None
+    publication_version: Optional[str] = None
+    publication_status: PublicationStatus = "unknown"
+    study_type: str = NOT_REPORTED
+    species: str = NOT_REPORTED
+    tissue_or_cell: Optional[str] = None
+    disease_subtype: Optional[str] = None
     sample_size: Optional[str] = None
-    population: Optional[str] = None
-    main_finding: str
-    limitations: Optional[str] = None
-    evidence_strength: Literal["strong", "moderate", "weak", "unknown"] = "unknown"
-    source: str                                   # PMID / DOI / 本地PDF页码，必填
+    intervention_or_exposure: Optional[str] = None
+    comparator: Optional[str] = None
+    outcome: Optional[str] = None
+    effect_size: Optional[str] = None
+    confidence_interval: Optional[str] = None
+    raw_p_value: Optional[str] = None
+    adjusted_p_value: Optional[str] = None
+    main_claims: list[str] = Field(default_factory=list)
+    supporting_excerpt: str = ""                   # 支持性原文摘录；无 → 不能作关键结论证据
+    source_section: Optional[str] = None
+    source_page: Optional[str] = None
+    source_figure_or_table: Optional[str] = None
+    limitations: list[str] = Field(default_factory=list)
+    evidence_direction: EvidenceDirection = "inconclusive"
+    extraction_confidence: float = 0.0
+    evidence_grade: str = "候选"
+    human_review_status: str = "pending"
+
+    @model_validator(mode="after")
+    def _integrity_rules(self):
+        # 更正论文必须记录更正版本
+        if self.publication_status == "corrected" and not self.publication_version:
+            raise ValueError("更正(corrected)论文必须记录 publication_version")
+        return self
+
+    # ---- 可追溯性 / 可用性判断（供检索与核查层调用）----
+    def traceability(self) -> str:
+        loc = self.source_section or self.source_page or self.source_figure_or_table
+        return "high" if loc else "low"          # 没有来源定位 → 低可追溯
+
+    def usable_for_key_conclusion(self):
+        """能否作为关键结论证据。返回 (bool, 原因列表)。"""
+        reasons = []
+        if not self.supporting_excerpt.strip():
+            reasons.append("无 supporting_excerpt，不能作为关键结论证据")
+        if self.publication_status == "retracted":
+            reasons.append("撤稿论文不得用于正向结论")
+        if self.tier == "abstract":
+            reasons.append("仅摘要级证据，只能作候选/初筛，不能声称全文证明")
+        if self.traceability() == "low":
+            reasons.append("低可追溯性（缺来源定位）")
+        return (len(reasons) == 0, reasons)
+
+    def clinical_caveats(self):
+        """临床外推的硬性告诫（动物/体外/相关性/预印本）。"""
+        c = []
+        sp = (self.species or "").lower()
+        tc = (self.tissue_or_cell or "").lower()
+        if sp and sp not in ("human", "人", "患者", "homo sapiens", NOT_REPORTED.lower()):
+            c.append("动物研究不能直接支持临床疗效")
+        if any(k in tc for k in ("cell line", "细胞系", "in vitro", "体外", "organoid", "类器官", "primary cell")):
+            c.append("体外研究不能直接支持患者治疗")
+        if self.evidence_direction == "correlational" or (self.study_type or "").find("横断面") >= 0 \
+                or "cross-sectional" in (self.study_type or "").lower():
+            c.append("横断面/相关性不能自动升级为因果")
+        if self.publication_status == "preprint":
+            c.append("预印本，未经同行评审")
+        return c
 
 
-class AnalysisEvidenceCard(_Strict):
-    """计算分析证据卡片（数据分析产出的证据）。"""
-    dataset: str                                  # 如 GSE58095
-    method: str                                   # 如 signature 相关性
-    result: str
-    statistic: Optional[str] = None               # 如 "r=0.35, p=0.005"
-    n: Optional[int] = None
-    provenance: Provenance
-    limitations: Optional[str] = None
+class AbstractEvidenceCard(EvidenceCard):
+    """只据标题+摘要。结论强度上限：候选/初筛。"""
+    tier: Literal["abstract"] = "abstract"
+
+    @model_validator(mode="after")
+    def _cap_grade(self):
+        if self.evidence_grade not in ABSTRACT_MAX_GRADES:
+            raise ValueError(f"AbstractEvidenceCard 的 evidence_grade 上限为 候选/初筛，收到 {self.evidence_grade!r}"
+                             "（只读摘要不能声称全文证明）")
+        return self
+
+
+class FullTextEvidenceCard(EvidenceCard):
+    """据全文/图表/补充材料，且有明确来源定位。"""
+    tier: Literal["fulltext"] = "fulltext"
+
+    @model_validator(mode="after")
+    def _need_excerpt(self):
+        if not self.supporting_excerpt.strip():
+            raise ValueError("FullTextEvidenceCard 必须提供 supporting_excerpt")
+        return self
+
+
+class AnalysisEvidenceCard(EvidenceCard):
+    """据 Reumani 自己运行的数据分析结果。provenance 必须能追溯到数据集与方法。"""
+    tier: Literal["analysis"] = "analysis"
+    dataset: str
+    method: str
+
+    @model_validator(mode="after")
+    def _need_data_provenance(self):
+        if not (self.provenance.dataset_version or self.provenance.source or self.dataset):
+            raise ValueError("AnalysisEvidenceCard 必须能追溯到数据来源(dataset/provenance)")
+        return self
 
 
 class Claim(_Strict):
@@ -210,6 +307,8 @@ class RunManifest(_Strict):
 
 __all__ = [
     "Provenance", "Artifact", "ToolRequest", "ToolResult", "ResourceSpec",
-    "PlanStep", "ResearchPlan", "EvidenceCard", "AnalysisEvidenceCard", "Claim",
+    "PlanStep", "ResearchPlan", "EvidenceCard", "AbstractEvidenceCard",
+    "FullTextEvidenceCard", "AnalysisEvidenceCard", "Claim",
     "VerificationResult", "AgentState", "RunManifest", "VerifyStatus",
+    "EvidenceTier", "PublicationStatus", "EvidenceDirection", "NOT_REPORTED",
 ]

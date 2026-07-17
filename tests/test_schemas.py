@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from schemas import (Provenance, ToolResult, VerificationResult, EvidenceCard,
+from schemas import (Provenance, ToolResult, VerificationResult,
                      ResearchPlan, PlanStep)
 
 P = Provenance(tool_name="t")
@@ -48,13 +48,6 @@ def test_verification_passed_status_consistency():
     with pytest.raises(ValidationError):
         VerificationResult(passed=True, status="not_passed")
     assert VerificationResult(passed=True, status="passed").passed is True
-
-
-@pytest.mark.unit
-def test_evidence_card_requires_source():
-    with pytest.raises(ValidationError):
-        EvidenceCard(claim="c", main_finding="f")             # 缺 source → 拒绝
-    assert EvidenceCard(claim="c", main_finding="f", source="PMID:1").source == "PMID:1"
 
 
 @pytest.mark.unit
