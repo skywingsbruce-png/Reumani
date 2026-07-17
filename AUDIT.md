@@ -71,6 +71,7 @@
 | 文献分层使用 | 全量保存不删；`LiteratureQuality` 质量标签 + `lit_ranking.py` A–F 分级（据研究设计，**不用影响因子**）+ 按任务动态选择（临床/预后/机制/可行性/探索）+ 透明多因子排序（质量×相关性×直接性×可重复性×可追溯性×任务契合，非单一不透明总分）；撤稿移出结论排序但保留数据；6 项测试 | — | ✅ |
 | Claim–Evidence Graph | `claim_graph.py`：答案拆成原子 Claim，每个按【自己的证据要求】单独裁决（6 种 verdict）；相关≠因果、动物/体外≠临床、缺证据→insufficient；证据要求不能互相替代；未解析证据 id 单列；需人工复核自动标记；10 项测试（含四示例 Claim） | — | ✅ |
 | 四层 Verifier | `verifier.py`：Schema(工具状态/字段)+Citation(PMID/DOI格式+来源定位+抓伪造DOI)+Claim-Evidence(复用claim_graph)+Adversarial(不读Planner推理,重生成反证检索式,第二LLM非金标准)；整体 fail-closed；关键结论/未跑反证→human_review；15 项测试 | — | ✅ |
+| 修正筛杀器 | `hypothesis_triage.py`：结论改 supportive_association/no_detectable_support/inconsistent/technically_unresolved（去掉证明/证伪/杀死）；加 signature重叠/命中率/样本量/Pearson+Spearman/BH-FDR/Fisher CI/随机null分布/leave-one-out；显式声明未评估的混杂；禁止仅凭 p<0.05+过半显著就建议放弃湿实验；8 项测试 | — | ✅ |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |

@@ -83,10 +83,11 @@ def run_python(code: str) -> str:
 
 @tool
 def triage_hypothesis(signature_a: str, signature_b: str, geo_datasets: str) -> str:
-    """【假说批量筛杀】给两个基因 signature（内置名如 CIN/cGAS_STING/IFN_ISG/TGF_fibrosis/senescence，
+    """【假说关联排查（观察性）】给两个基因 signature（内置名如 CIN/cGAS_STING/IFN_ISG/TGF_fibrosis/senescence，
     或逗号分隔的基因列表）和一批 GEO 数据集编号（逗号分隔，如 GSE58095），
-    自动在每个数据集算 signature 相关性，判定假说【存活/被杀/存疑】。
-    用于快速、免费地在真实公开数据上筛掉大部分假说，只留值得做湿实验的。"""
+    在每个数据集算 signature 关联并做严谨性检查（重叠/命中率/样本量/Pearson+Spearman/FDR/CI/零分布/leave-one-out），
+    给四选一结论：supportive_association / no_detectable_support / inconsistent / technically_unresolved。
+    ⚠️ 这是关联排查不是因果判定，不用"证明/证伪/杀死"措辞；不能仅凭 p 值就建议放弃湿实验。"""
     from hypothesis_triage import triage, format_report
 
     def _parse(s):
