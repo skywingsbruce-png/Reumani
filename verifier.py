@@ -13,7 +13,7 @@ import re
 
 from schemas import VerificationResult
 
-_PMID = re.compile(r"^\d{5,9}$")
+_PMID = re.compile(r"^\d{1,9}$")
 _DOI = re.compile(r"^10\.\d{4,9}/\S+$")
 _GSE = re.compile(r"^GSE\d+$", re.IGNORECASE)
 

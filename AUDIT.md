@@ -77,6 +77,7 @@
 | 十.3 Agent-Eval | `eval/agent_eval.md`：12 项(工具选择/计划可执行/参数/真实成功/真实引用/Claim支持/主动反证/相关升因果/正确停止/3次稳定性/成本/人工修正)+硬红线 | — | ✅ 规范 |
 | 十.4 Safety-Eval | 强化沙箱(路径穿越/绝对敏感路径/pathlib删除/socket/动态导入/eval/ctypes/os.spawn)+资源耗尽超时；非沙箱层：恶意CSV不执行、提示注入检测(工具返回/记忆 `safety.py`)、伪造DOI、Verifier非法结构；14 项对抗测试 + `eval/safety_eval.md`(诚实记录Level-2局限) | 安全 | ✅ |
 | 十.5 Scientific-Eval | `eval/scientific_eval.md`：未参与开发的GEO/预注册/固定代码再开测试数据/专家盲评/独立队列复制/记录批次混杂多重检验/区分探索性与验证性 | — | ✅ 规范 |
+| 十一 文献清洗 | `lit_cleaning.py` 四层：确定性检查(PMID/DOI/去重/撤稿更正/类型/人-动物-细胞/全文)→LLM只做抽取→程序规则(动物≠临床/横断面≠因果/无样本量不编造/摘要≠全文证据/预印本必标/无定位≠关键证据)→人工审核优先级(临床/新发现/共识冲突/两模型不一致/低置信/进know-how-protocol-benchmark)；不让单一LLM独断质量；11 项测试 | — | ✅ |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |
