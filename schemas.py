@@ -242,6 +242,28 @@ class AnalysisEvidenceCard(EvidenceCard):
         return self
 
 
+class LiteratureQuality(_Strict):
+    """论文质量标签（结构化，不是一个不透明总分）。据研究设计打标，【不看期刊影响因子】。
+    全量保存策略：低等级论文也留在数据湖，只是按任务动态降权，不删除。"""
+    study_type: str = NOT_REPORTED
+    human_evidence: bool = False
+    animal_evidence: bool = False
+    in_vitro_evidence: bool = False
+    sample_size: Optional[int] = None
+    longitudinal: Optional[bool] = None
+    multicenter: Optional[bool] = None
+    randomized: Optional[bool] = None
+    preregistered: Optional[bool] = None
+    adjusted_analysis: Optional[bool] = None
+    multiplicity_control: Optional[str] = None
+    independent_replication: Optional[bool] = None
+    full_text_available: bool = False
+    preprint: bool = False
+    retracted: bool = False
+    corrected: bool = False
+    extraction_confidence: float = 0.0
+
+
 class Claim(_Strict):
     text: str
     supported: Literal["yes", "no", "insufficient"] = "insufficient"
@@ -311,4 +333,5 @@ __all__ = [
     "FullTextEvidenceCard", "AnalysisEvidenceCard", "Claim",
     "VerificationResult", "AgentState", "RunManifest", "VerifyStatus",
     "EvidenceTier", "PublicationStatus", "EvidenceDirection", "NOT_REPORTED",
+    "LiteratureQuality",
 ]
