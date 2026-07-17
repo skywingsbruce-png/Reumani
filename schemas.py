@@ -242,6 +242,32 @@ class AnalysisEvidenceCard(EvidenceCard):
         return self
 
 
+MemoryKind = Literal["system_policy", "validated_domain_knowledge", "project_memory",
+                     "session_memory", "candidate_memory"]
+MemoryReviewStatus = Literal["approved", "pending", "rejected", "revoked", "superseded"]
+
+
+class MemoryRecord(_Strict):
+    """一条长期记忆。分层：candidate_memory 未经审核不得影响高风险结论；
+    网页/PDF/工具等观察内容只能进 candidate，且过注入检测，防止变成全局规则。"""
+    memory_id: str
+    text: str
+    kind: MemoryKind = "candidate_memory"
+    source: str = ""
+    created_by: str = ""
+    created_at: str = ""
+    scope: str = "global"                       # global / project / session
+    disease: Optional[str] = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    confidence: float = 0.5
+    review_status: MemoryReviewStatus = "pending"
+    reviewed_by: Optional[str] = None
+    expires_at: Optional[str] = None
+    supersedes: Optional[str] = None
+    revoked_at: Optional[str] = None
+    used_in: list[str] = Field(default_factory=list)   # 哪些答案/run 用过它
+
+
 class LiteratureQuality(_Strict):
     """论文质量标签（结构化，不是一个不透明总分）。据研究设计打标，【不看期刊影响因子】。
     全量保存策略：低等级论文也留在数据湖，只是按任务动态降权，不删除。"""
@@ -349,4 +375,5 @@ __all__ = [
     "VerificationResult", "AgentState", "RunManifest", "VerifyStatus",
     "EvidenceTier", "PublicationStatus", "EvidenceDirection", "NOT_REPORTED",
     "LiteratureQuality", "ClaimType", "CausalStrength", "ClaimVerdict",
+    "MemoryRecord", "MemoryKind", "MemoryReviewStatus",
 ]
