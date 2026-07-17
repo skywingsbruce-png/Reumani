@@ -264,11 +264,24 @@ class LiteratureQuality(_Strict):
     extraction_confidence: float = 0.0
 
 
+ClaimType = Literal["existence", "association", "causal", "mechanistic", "clinical_efficacy", "other"]
+CausalStrength = Literal["none", "correlational", "associative", "mechanistic", "causal", "unknown"]
+ClaimVerdict = Literal["supported", "partially_supported", "not_supported",
+                       "contradicted", "insufficient_evidence", "technically_unverifiable"]
+
+
 class Claim(_Strict):
+    """原子主张。不同 claim_type 的证据要求不同，不能互相替代（相关≠因果，动物≠临床）。"""
+    claim_id: str
     text: str
-    supported: Literal["yes", "no", "insufficient"] = "insufficient"
-    evidence_refs: list[str] = Field(default_factory=list)   # PMID/DOI/卡片id
-    confidence: Literal["high", "medium", "low"] = "low"
+    claim_type: ClaimType = "other"
+    causal_strength: CausalStrength = "unknown"          # 该 claim 所【主张】的因果强度
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    unresolved_evidence_ids: list[str] = Field(default_factory=list)
+    verdict: ClaimVerdict = "insufficient_evidence"
+    uncertainty: str = ""
+    human_review_required: bool = False
 
 
 # ---------- 核查 ----------
@@ -333,5 +346,5 @@ __all__ = [
     "FullTextEvidenceCard", "AnalysisEvidenceCard", "Claim",
     "VerificationResult", "AgentState", "RunManifest", "VerifyStatus",
     "EvidenceTier", "PublicationStatus", "EvidenceDirection", "NOT_REPORTED",
-    "LiteratureQuality",
+    "LiteratureQuality", "ClaimType", "CausalStrength", "ClaimVerdict",
 ]

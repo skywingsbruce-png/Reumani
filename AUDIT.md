@@ -69,6 +69,7 @@
 | 结构化Planner | `planner.py`：Planner 产出经 schema 验证的 ResearchPlan（每步 success_criteria 必填、tool_name 必须∈allowed_tools、maximum_retries 程序封顶、LLM 不能自行扩权）；解析/验证失败即停，绝不自由文本降级；7 项测试 | — | ✅ |
 | 分层证据卡 | 三层证据卡 Abstract/FullText/Analysis（全部保留 provenance）+ 科学诚信规则：无 excerpt 不能作关键结论、缺定位标低可追溯、摘要卡只初筛、动物/体外/相关性硬性告诫、预印本标记、撤稿不作正向、更正记版本、缺失写"未报告"不猜测；`evidence_build.py` 构造器；12 项测试 | — | ✅（取代之前 deferred 的 EvidenceCard 迁移）|
 | 文献分层使用 | 全量保存不删；`LiteratureQuality` 质量标签 + `lit_ranking.py` A–F 分级（据研究设计，**不用影响因子**）+ 按任务动态选择（临床/预后/机制/可行性/探索）+ 透明多因子排序（质量×相关性×直接性×可重复性×可追溯性×任务契合，非单一不透明总分）；撤稿移出结论排序但保留数据；6 项测试 | — | ✅ |
+| Claim–Evidence Graph | `claim_graph.py`：答案拆成原子 Claim，每个按【自己的证据要求】单独裁决（6 种 verdict）；相关≠因果、动物/体外≠临床、缺证据→insufficient；证据要求不能互相替代；未解析证据 id 单列；需人工复核自动标记；10 项测试（含四示例 Claim） | — | ✅ |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |
