@@ -38,10 +38,19 @@ _FORBIDDEN = [
     (r"\bos\.unlink\b", "禁止删除文件"),
     (r"\bos\.rmdir\b", "禁止删除目录"),
     (r"\bshutil\.rmtree\b", "禁止递归删除"),
+    (r"\bos\.(exec|spawn|fork)\w*", "禁止 os.exec/spawn/fork"),
+    (r"\.unlink\s*\(|\.rmdir\s*\(", "禁止 pathlib 删除文件/目录"),
     (r"\.env\b", "禁止访问 .env"),
+    (r"\.\./|\.\.\\", "禁止路径穿越(..)"),
+    (r"id_rsa|\.ssh|/etc/passwd|/etc/shadow|shadow\b", "禁止读取敏感系统文件"),
+    (r"[Cc]:[\\/]+Windows|System32", "禁止访问系统目录"),
     (r"ANTHROPIC_API_KEY|DEEPSEEK_API_KEY|OPENAI_KEY|OPENAI_API_KEY", "禁止访问 API 密钥"),
     (r"\bpip\s+install\b|pip\.main|install\(", "禁止在代码里装包"),
-    (r"__import__\s*\(\s*['\"]subprocess", "禁止动态导入 subprocess"),
+    (r"__import__\s*\(\s*['\"](subprocess|os|ctypes|socket)", "禁止动态导入危险模块"),
+    (r"importlib.*import_module\s*\(\s*['\"](subprocess|os|ctypes|socket)", "禁止 importlib 导入危险模块"),
+    (r"\bsocket\.\w+|\bsocket\s*\(", "禁止原始 socket（外传风险）"),
+    (r"\bctypes\b", "禁止 ctypes"),
+    (r"\beval\s*\(|\bexec\s*\(", "禁止 eval/exec"),
 ]
 
 
