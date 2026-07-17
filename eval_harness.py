@@ -105,42 +105,106 @@ def ndcg_at_k(ret, gold, k):
     return dcg / idcg if idcg > 0 else 0.0
 
 
+# 分级相关性：两名专家标注 must(必找)/high(高度相关)/acceptable(可接受)/irrelevant/misleading
+GRADE = {"must": 3, "high": 2, "acceptable": 1, "irrelevant": 0, "misleading": -1,
+         "3": 3, "2": 2, "1": 1, "0": 0, "-1": -1, 3: 3, 2: 2, 1: 1, 0: 0, -1: -1, True: 1}
+
+
+def ndcg_graded(ret, grade_map, k):
+    """分级 nDCG@k：用相关等级(must=3/high=2/acceptable=1)算增益。"""
+    def gain(g):
+        return (2 ** max(g, 0) - 1)
+    dcg = sum(gain(grade_map.get(p, 0)) / math.log2(i + 2) for i, p in enumerate(ret[:k]))
+    ideal = sorted((max(g, 0) for g in grade_map.values()), reverse=True)[:k]
+    idcg = sum(gain(g) / math.log2(i + 2) for i, g in enumerate(ideal))
+    return round(dcg / idcg, 4) if idcg > 0 else 0.0
+
+
+def must_find_recall(ret, must_set, k):
+    if not must_set:
+        return None
+    return round(len(set(ret[:k]) & must_set) / len(must_set), 3)
+
+
 def _load_gold(split):
-    """qid -> set(相关 pmid)。仅取人工 labels.jsonl 里 relevant∈{1,'1',true}。"""
+    """qid -> {pmid: grade}。分级标注；grade>0 视为相关，grade>=3 为 must-find。"""
     gold = {}
     for r in _load_jsonl(EVAL / split / "labels.jsonl"):
-        if r.get("relevant") in (1, "1", True):
-            gold.setdefault(str(r["qid"]), set()).add(str(r.get("pmid")))
+        g = GRADE.get(r.get("relevant"), 0)
+        gold.setdefault(str(r["qid"]), {})[str(r.get("pmid"))] = g
     return gold
 
 
-def score(split, k=10, final=False):
-    # test 冻结守卫
+def _rel_set(gmap):
+    return {p for p, g in gmap.items() if g > 0}
+
+
+def _must_set(gmap):
+    return {p for p, g in gmap.items() if g >= 3}
+
+
+_EXACT_CATEGORIES = {"exact_id", "gene_symbol"}
+
+
+def score(split, k=10, final=False, latency_clock=None):
+    """报告完整指标（不只 mean P@10）。latency_clock 可注入以便测试；默认用 time.perf_counter。"""
     if split == "test" and not final:
         return ("⛔ test 是冻结集，score test 需加 --final。开发调参请只用 dev。"
                 "（这样设计是为防止无意中反复看 test 调参——见 DATA_GOVERNANCE.md）")
-    from retrieval import retrieve_docs
+    import time
+    from retrieval import retrieve_docs, classify_query
+    clock = latency_clock or time.perf_counter
     qs = {str(x["qid"]): x for x in _load_jsonl(EVAL / split / "queries.jsonl")}
     gold = _load_gold(split)
     if not gold:
-        return f"{split}/labels.jsonl 没有已标注(relevant=1)的样本——请先完成人工标注。"
-    agg = {m: {"recall": [], "mrr": [], "ndcg": []} for m in POOL_MODES}
-    for qid, g in gold.items():
+        return f"{split}/labels.jsonl 没有已标注样本——请先完成人工分级标注。"
+
+    agg = {m: {"recall10": [], "recall50": [], "p10": [], "mrr": [], "ndcg": [],
+               "must": [], "no_result": 0, "latency": []} for m in POOL_MODES}
+    n_misroute, n_q = 0, 0
+    for qid, gmap in gold.items():
         item = qs.get(qid)
         if not item:
             continue
+        n_q += 1
+        rel, must = _rel_set(gmap), _must_set(gmap)
+        # 错误路由率（与检索模式无关，按查询类别判一次）
+        cat = item.get("category", "")
+        expected = "exact" if cat in _EXACT_CATEGORIES else "hybrid"
+        if classify_query(item["q"]) != expected:
+            n_misroute += 1
         for m in POOL_MODES:
-            ret = [_pmid(d) for d in retrieve_docs(item["q"], corpus=item.get("corpus", "all"), mode=m, top_k=k)]
-            r = recall_at_k(ret, g, k)
-            if r is not None:
-                agg[m]["recall"].append(r)
-            agg[m]["mrr"].append(mrr(ret, g))
-            agg[m]["ndcg"].append(ndcg_at_k(ret, g, k))
+            t0 = clock()
+            docs = retrieve_docs(item["q"], corpus=item.get("corpus", "all"), mode=m, top_k=50)
+            agg[m]["latency"].append(clock() - t0)
+            ret = [_pmid(d) for d in docs]
+            if not ret:
+                agg[m]["no_result"] += 1
+            r10 = recall_at_k(ret, rel, 10)
+            r50 = recall_at_k(ret, rel, 50)
+            if r10 is not None:
+                agg[m]["recall10"].append(r10)
+            if r50 is not None:
+                agg[m]["recall50"].append(r50)
+            agg[m]["p10"].append(precision_at_k(ret, rel, 10))
+            agg[m]["mrr"].append(mrr(ret, rel))
+            agg[m]["ndcg"].append(ndcg_graded(ret, gmap, 10))
+            mf = must_find_recall(ret, must, 10)
+            if mf is not None:
+                agg[m]["must"].append(mf)
+
     def _mean(xs):
-        return round(sum(xs) / len(xs), 3) if xs else None
-    summary = {m: {f"recall@{k}": _mean(agg[m]["recall"]), "mrr": _mean(agg[m]["mrr"]),
-                   f"ndcg@{k}": _mean(agg[m]["ndcg"])} for m in POOL_MODES}
-    payload = {"split": split, "k": k, "n_labeled_queries": len(gold), "final": final,
+        return round(sum(xs) / len(xs), 4) if xs else None
+    summary = {m: {
+        "recall@10": _mean(a["recall10"]), "recall@50": _mean(a["recall50"]),
+        "precision@10": _mean(a["p10"]), "mrr": _mean(a["mrr"]),
+        "ndcg@10": _mean(a["ndcg"]), "must_find_recall@10": _mean(a["must"]),
+        "no_result_rate": round(a["no_result"] / n_q, 3) if n_q else None,
+        "mean_latency_s": _mean(a["latency"]),
+    } for m, a in agg.items()}
+    payload = {"split": split, "n_queries": n_q, "final": final,
+               "misroute_rate": round(n_misroute / n_q, 3) if n_q else None,
+               "cost": "本地检索，无 API 费用",
                "corpus_snapshot": _corpus_snapshot(),
                "run_at": datetime.now().isoformat(timespec="seconds"), "summary": summary}
     (EVAL / "results").mkdir(exist_ok=True)
@@ -148,7 +212,7 @@ def score(split, k=10, final=False):
     (EVAL / "results" / f"{tag}.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     if split == "test" and final:
         (EVAL / "results" / "TEST_WAS_TOUCHED.log").open("a", encoding="utf-8").write(
-            f"{payload['run_at']} 跑了 test --final（{len(gold)}题）\n")
+            f"{payload['run_at']} 跑了 test --final（{n_q}题）\n")
     return payload
 
 

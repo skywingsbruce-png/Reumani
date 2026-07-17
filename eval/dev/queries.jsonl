@@ -1,10 +1,15 @@
-# dev 查询集（自然语言研究问题；可反复用于调参）。每行一条 JSON：{"qid","q","corpus"}
-# 相关性金标准由人工填在 dev/labels.jsonl（见 ../README.md）。这些查询【不是】照 SYNONYMS 编的。
-{"qid": "d01", "q": "Which fibroblast populations drive skin fibrosis in systemic sclerosis?", "corpus": "SSc"}
-{"qid": "d02", "q": "Evidence linking cytosolic DNA sensing to interferon activation in scleroderma", "corpus": "SSc"}
-{"qid": "d03", "q": "Does chromosomal instability trigger innate immune activation?", "corpus": "CIN"}
-{"qid": "d04", "q": "Type I interferon signature as a biomarker of disease activity in lupus", "corpus": "SLE"}
-{"qid": "d05", "q": "Anti-citrullinated protein antibodies and bone erosion in rheumatoid arthritis", "corpus": "RA"}
-{"qid": "d06", "q": "Endothelial injury and microvascular remodeling in systemic sclerosis", "corpus": "SSc"}
-{"qid": "d07", "q": "How does cellular senescence contribute to tissue fibrosis?", "corpus": "SSc"}
-{"qid": "d08", "q": "Single-cell characterization of B cell subsets in autoimmune disease", "corpus": "all"}
+# dev 查询集（自然语言 + 分层类别）。每行：{"qid","q","corpus","category"}
+# category: exact_id / gene_symbol / mechanism / phenotype / treatment / omics_dataset / counterevidence
+# 相关性金标准由【至少两名专家】分级填在 dev/labels.jsonl：must/high/acceptable/irrelevant/misleading。
+{"qid": "d01", "q": "Which fibroblast populations drive skin fibrosis in systemic sclerosis?", "corpus": "SSc", "category": "mechanism"}
+{"qid": "d02", "q": "Evidence linking cytosolic DNA sensing to interferon activation in scleroderma", "corpus": "SSc", "category": "mechanism"}
+{"qid": "d03", "q": "Does chromosomal instability trigger innate immune activation?", "corpus": "CIN", "category": "mechanism"}
+{"qid": "d04", "q": "Type I interferon signature as a biomarker of disease activity in lupus", "corpus": "SLE", "category": "phenotype"}
+{"qid": "d05", "q": "Anti-citrullinated protein antibodies and bone erosion in rheumatoid arthritis", "corpus": "RA", "category": "phenotype"}
+{"qid": "d06", "q": "nintedanib for interstitial lung disease in systemic sclerosis", "corpus": "SSc", "category": "treatment"}
+{"qid": "d07", "q": "STING1", "corpus": "SSc", "category": "gene_symbol"}
+{"qid": "d08", "q": "GSE58095", "corpus": "SSc", "category": "exact_id"}
+{"qid": "d09", "q": "single-cell RNA-seq datasets of systemic sclerosis skin", "corpus": "SSc", "category": "omics_dataset"}
+{"qid": "d10", "q": "系统性硬化症 成纤维细胞 纤维化 机制", "corpus": "SSc", "category": "mechanism"}
+{"qid": "d11", "q": "evidence AGAINST cGAS-STING driving fibrosis in scleroderma", "corpus": "SSc", "category": "counterevidence"}
+{"qid": "d12", "q": "PIGR expression 系统性硬化症", "corpus": "SSc", "category": "mechanism"}

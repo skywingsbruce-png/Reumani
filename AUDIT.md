@@ -72,7 +72,11 @@
 | Claim–Evidence Graph | `claim_graph.py`：答案拆成原子 Claim，每个按【自己的证据要求】单独裁决（6 种 verdict）；相关≠因果、动物/体外≠临床、缺证据→insufficient；证据要求不能互相替代；未解析证据 id 单列；需人工复核自动标记；10 项测试（含四示例 Claim） | — | ✅ |
 | 四层 Verifier | `verifier.py`：Schema(工具状态/字段)+Citation(PMID/DOI格式+来源定位+抓伪造DOI)+Claim-Evidence(复用claim_graph)+Adversarial(不读Planner推理,重生成反证检索式,第二LLM非金标准)；整体 fail-closed；关键结论/未跑反证→human_review；15 项测试 | — | ✅ |
 | 修正筛杀器 | `hypothesis_triage.py`：结论改 supportive_association/no_detectable_support/inconsistent/technically_unresolved（去掉证明/证伪/杀死）；加 signature重叠/命中率/样本量/Pearson+Spearman/BH-FDR/Fisher CI/随机null分布/leave-one-out；显式声明未评估的混杂；禁止仅凭 p<0.05+过半显著就建议放弃湿实验；8 项测试 | — | ✅ |
+| 十.1 三分数据 | knowledge_base(=data_lake)/dev_set(eval/dev)/held_out_test_set(eval/test 冻结)；反污染禁令写入 `DATA_GOVERNANCE.md`+`eval/README.md` | F1 | ✅ |
+| 十.2 Retrieval-Eval | 查询分层(exact_id/gene/mechanism/phenotype/treatment/omics/counterevidence+中英混合)+两名专家分级标注(must/high/acceptable/irrelevant/misleading)+完整指标(Recall@10/@50、P@10、nDCG@10分级、MRR、must-find召回、无结果率、错误路由率、延迟、成本，非仅mean P@10)；4 项指标测试 | F1-F4 | ✅ 框架就绪待标注 |
+| 十.3 Agent-Eval | `eval/agent_eval.md`：12 项(工具选择/计划可执行/参数/真实成功/真实引用/Claim支持/主动反证/相关升因果/正确停止/3次稳定性/成本/人工修正)+硬红线 | — | ✅ 规范 |
 | 十.4 Safety-Eval | 强化沙箱(路径穿越/绝对敏感路径/pathlib删除/socket/动态导入/eval/ctypes/os.spawn)+资源耗尽超时；非沙箱层：恶意CSV不执行、提示注入检测(工具返回/记忆 `safety.py`)、伪造DOI、Verifier非法结构；14 项对抗测试 + `eval/safety_eval.md`(诚实记录Level-2局限) | 安全 | ✅ |
+| 十.5 Scientific-Eval | `eval/scientific_eval.md`：未参与开发的GEO/预注册/固定代码再开测试数据/专家盲评/独立队列复制/记录批次混杂多重检验/区分探索性与验证性 | — | ✅ 规范 |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |

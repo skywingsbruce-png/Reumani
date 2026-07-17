@@ -40,6 +40,28 @@ def test_gold_only_counts_relevant_one():
     assert gold == {"q1": {"p1"}}
 
 
+def test_ndcg_graded_rewards_higher_grade_on_top():
+    gm = {"a": 3, "b": 1}
+    top = E.ndcg_graded(["a", "b", "x"], gm, 3)
+    bot = E.ndcg_graded(["x", "b", "a"], gm, 3)
+    assert round(top, 3) == 1.0 and bot < top
+
+
+def test_must_find_recall():
+    assert E.must_find_recall(["a", "x"], {"a", "c"}, 10) == 0.5
+    assert E.must_find_recall(["a"], set(), 10) is None
+
+
+def test_graded_gold_sets():
+    gmap = {"p1": 3, "p2": 1, "p3": 0, "p4": -1}      # must / acceptable / irrelevant / misleading
+    assert E._rel_set(gmap) == {"p1", "p2"}           # grade>0 视为相关
+    assert E._must_set(gmap) == {"p1"}                # grade>=3 为 must-find
+
+
+def test_grade_legend_parses_labels():
+    assert E.GRADE["must"] == 3 and E.GRADE["misleading"] == -1 and E.GRADE["acceptable"] == 1
+
+
 def test_test_split_frozen_guard():
     # 未加 final，score test 必须拒绝（不读检索、直接返回提示）
     r = E.score("test", final=False)
