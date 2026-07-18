@@ -47,6 +47,7 @@ class AgentState:
     tool_trace: list = field(default_factory=list)   # 工具选择/拒绝/调用轨迹（权限控制可审计）
     allowed_tools: list = field(default_factory=list)  # 本任务被授权的工具名
     research_plan: dict = field(default_factory=dict)  # 结构化计划（ResearchPlan.model_dump）
+    shadow: dict = field(default_factory=dict)          # Shadow Mode：新链(证据/Claim/四层核查)记录+对比
     # 循环保护，防止 Planner-Executor-Verifier 死循环
     retry_count: int = 0
     max_iterations: int = 2
@@ -211,7 +212,7 @@ def _extract_trace(messages):
 # ==========================================
 def run_agent(user_query, constraints="", max_iterations=2,
               executor_model="deepseek", judge_model="claude",
-              stamp=None, approved_tools=None):
+              stamp=None, approved_tools=None, shadow=True, claim_extractor=None):
     state = AgentState(user_query=user_query, constraints=constraints,
                        max_iterations=max_iterations)
     # 阶段0：资源检索
@@ -227,6 +228,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
 
     failure_feedback = ""
     best_output = ""
+    last_msgs = None
     while state.retry_count < state.max_iterations:
         # Plan：结构化 + schema 验证；tool_name 必须在 allowed_tools 内；
         # 解析/验证失败 → 立即停止，【绝不】自由文本降级执行
@@ -254,6 +256,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
         state.observations.append(output)
         state.artifacts.append({"tools_used": _extract_trace(msgs)})
         best_output = output
+        last_msgs = msgs
         # Verify（fail-closed：工具失败时也判未通过）
         v = verify(state, output, judge_model=judge_model,
                    tool_failed=bool(state.errors))
@@ -276,6 +279,21 @@ def run_agent(user_query, constraints="", max_iterations=2,
             f"还缺：{last.get('missing', [])}"
         )
 
+    # Shadow Mode：把新链(证据卡→Claim→Claim图→四层 verify_all)接进真实运行链，
+    # 【只记录+对比，不改最终答案】。任何异常都不影响主流程与用户可见行为。
+    if shadow and last_msgs is not None:
+        try:
+            from shadow import run_shadow, default_claim_extractor
+            old_v = state.verification_results[-1] if state.verification_results else {}
+            state.shadow = run_shadow(
+                question=state.user_query, plan=state.research_plan,
+                allowed_tools=state.allowed_tools, selected_tools=selected,
+                final_text=best_output, messages=last_msgs, old_verify=old_v,
+                claim_extractor=claim_extractor or default_claim_extractor(executor_model),
+                model_id=executor_model, stamp=stamp)
+        except Exception as e:
+            state.errors.append(f"shadow 记录失败(不影响主流程)：{e}")
+
     _save_run(state, stamp)
     return state
 
@@ -287,6 +305,9 @@ def _save_run(state: AgentState, stamp=None):
     (d / "run.json").write_text(
         json.dumps(state.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     (d / "final_answer.md").write_text(state.final_answer, encoding="utf-8")
+    if state.shadow:                       # Shadow：完整 RunManifest 单独存一份，便于审计
+        (d / "shadow_manifest.json").write_text(
+            json.dumps(state.shadow, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(d)
 
 
