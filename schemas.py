@@ -20,6 +20,9 @@ class _Strict(BaseModel):
 
 
 # ---------- 来源与产物 ----------
+ContentLevel = Literal["metadata_only", "abstract", "full_text", "local_dataset", "computational_analysis"]
+
+
 class Provenance(_Strict):
     tool_name: str
     tool_version: Optional[str] = None
@@ -28,6 +31,9 @@ class Provenance(_Strict):
     parameters: dict[str, object] = Field(default_factory=dict)
     code_commit: Optional[str] = None
     dataset_version: Optional[str] = None         # 语料/数据集快照 id
+    source_ids: list[str] = Field(default_factory=list)   # PMID/DOI/GSE 等
+    content_level: ContentLevel = "metadata_only"          # 证据可达的最高层级
+    content_hash: Optional[str] = None
 
 
 class Artifact(_Strict):
@@ -45,6 +51,8 @@ class ToolRequest(_Strict):
 
 
 class ToolResult(_Strict):
+    schema_version: str = "toolresult-v1"
+    tool_name: str = ""
     ok: bool
     data: Optional[object] = None                 # 成功时的载荷(天然动态)
     error_type: Optional[str] = None
@@ -375,5 +383,5 @@ __all__ = [
     "VerificationResult", "AgentState", "RunManifest", "VerifyStatus",
     "EvidenceTier", "PublicationStatus", "EvidenceDirection", "NOT_REPORTED",
     "LiteratureQuality", "ClaimType", "CausalStrength", "ClaimVerdict",
-    "MemoryRecord", "MemoryKind", "MemoryReviewStatus",
+    "MemoryRecord", "MemoryKind", "MemoryReviewStatus", "ContentLevel",
 ]

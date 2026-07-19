@@ -12,9 +12,15 @@ SSc-A1：把固定的"正方-反方-裁判"升级成 Planner → Executor → Ve
 import concurrent.futures
 import json
 import re
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
+
+
+def _gen_run_id():
+    """唯一 run_id：时间戳 + UUID，避免同秒并发覆盖同一 run 目录/manifest。"""
+    return datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
 
 from ssc_pi_agent import judge_llm, deepseek_llm_pro
 from ssc_resources import retriever as _resource_retriever
@@ -70,12 +76,9 @@ def _aslist(v):
     return [] if s in ("", "无", "none", "None", "N/A", "n/a", "—", "-") else [s]
 
 
-# 可核实引用：PMID / PMC / DOI / PubMed 链接 / GSE 号
-_CIT = re.compile(r"\bPMID[:\s]*\d+|\bPMC\d+|10\.\d{4,}/\S+|pubmed\.ncbi\.nlm\.nih\.gov/\d+|\bGSE\d+", re.I)
-
-
 def _has_citations(text):
-    return bool(_CIT.search(text or ""))
+    import ids                                    # 委托唯一 ID 权威，不在此重复正则
+    return ids.has_citation(text)
 
 
 def _parse_json(text):
@@ -215,6 +218,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
               stamp=None, approved_tools=None, shadow=True, claim_extractor=None):
     state = AgentState(user_query=user_query, constraints=constraints,
                        max_iterations=max_iterations)
+    run_id = stamp or _gen_run_id()          # 唯一 run_id，用于 run 目录与 shadow manifest
     # 阶段0：资源检索
     state.selected_resources = _resource_retriever.bundle_text(user_query, top_k=12)
     # 阶段0.5：工具权限控制 —— 确定性选工具 → 高风险未批准的物理排除 → 记入 trace
@@ -241,7 +245,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
             state.tool_trace.append({"event": "plan_rejected", "tool": "", "detail": str(e)[:200]})
             state.final_answer = (
                 f"⚠️ 计划非法，已停止（fail-closed，不做自由文本降级执行）：\n{e}")
-            _save_run(state, stamp)
+            _save_run(state, run_id)
             return state
         state.research_plan = rplan.model_dump()
         state.plan = render_plan_text(rplan)
@@ -290,11 +294,13 @@ def run_agent(user_query, constraints="", max_iterations=2,
                 allowed_tools=state.allowed_tools, selected_tools=selected,
                 final_text=best_output, messages=last_msgs, old_verify=old_v,
                 claim_extractor=claim_extractor or default_claim_extractor(executor_model),
-                model_id=executor_model, stamp=stamp)
+                model_id=executor_model, stamp=run_id)
         except Exception as e:
-            state.errors.append(f"shadow 记录失败(不影响主流程)：{e}")
+            # Shadow 失败绝不改变旧最终答案，只结构化记录
+            state.shadow = {"shadow_status": "failed", "shadow_error_type": type(e).__name__,
+                            "shadow_error_message": str(e)[:300]}
 
-    _save_run(state, stamp)
+    _save_run(state, run_id)
     return state
 
 

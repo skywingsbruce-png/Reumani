@@ -13,17 +13,18 @@ Shadow Mode（Commit A）：把新数据链(EvidenceCard → Claim → Claim Gra
 import json
 import re
 import subprocess
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-from schemas import AbstractEvidenceCard, Provenance, Claim
+from schemas import Claim
 from claim_graph import ClaimEvidenceGraph
 import verifier as V
+import ids                      # 唯一 ID 权威
+import evidence_build as EB     # 唯一证据卡构建方
 
-# 真实来源提取：只认工具输出里【实际出现】的 PubMed 链接 / DOI / PMID 标注
-_PMID_URL = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d{1,9})")
-_PMID_TAG = re.compile(r"PMID[:\s]+(\d{1,9})")
-_DOI_URL = re.compile(r"doi\.org/(10\.[^\s|)\]]+)")
+# shadow 只做编排/适配：ID 抽取用 ids.py，证据卡构建用 evidence_build.py，规则不在此重写。
+_SCHEMA = "toolresult-v1"          # 只信任此 schema_version 的 artifact
 _FAIL_MARKERS = ["[工具失败", "读取失败", "检索失败", "[拒绝]", "未检索到", "解析失败",
                  "失败：", "被受限沙箱", "permission_denied", "approval_required"]
 
@@ -34,6 +35,11 @@ def git_commit():
                               timeout=5).stdout.strip() or "unknown"
     except Exception:
         return "unknown"
+
+
+def _run_id():
+    """唯一 run_id：时间戳 + UUID 短码，避免同秒并发覆盖。"""
+    return datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
 
 
 # ---------- 1) 从真实 messages 抽取工具事件 ----------
@@ -62,8 +68,31 @@ def extract_tool_events(messages):
         name = _attr(m, "name", "") or (calls.get(cid, {}).get("tool_name", ""))
         args = calls.get(cid, {}).get("arguments", {})
         content = _attr(m, "content", "")
-        events.append(adapt_legacy_result(name, args, content if isinstance(content, str) else str(content)))
+        content = content if isinstance(content, str) else str(content)
+        artifact = _attr(m, "artifact", None)      # 官方 content_and_artifact 结构化载荷
+        # 只有 schema_version 正确的 artifact 才被信任；否则降级为 legacy（伪JSON/错版本不能自动升级）
+        if isinstance(artifact, dict) and artifact.get("schema_version") == _SCHEMA:
+            events.append(_from_artifact(name, args, content, artifact))
+        else:
+            ev = adapt_legacy_result(name, args, content)
+            if isinstance(artifact, dict):
+                ev["warnings"].append(f"artifact schema_version 非法({artifact.get('schema_version')})→降级为 legacy")
+            events.append(ev)
     return events
+
+
+def _from_artifact(tool_name, arguments, content, art):
+    """结构化 ToolResult（来自 content_and_artifact）→ 事件；工具失败不能带 ok=True。"""
+    return {
+        "tool_name": tool_name, "arguments": arguments,
+        "ok": bool(art.get("ok")),
+        "data": content,                 # 供 LLM 阅读
+        "structured": art,               # 结构化 ToolResult（供 Verifier/证据构建）
+        "error": art.get("error_message"),
+        "provenance": art.get("provenance", {"tool_name": tool_name}),
+        "warnings": art.get("warnings", []),
+        "artifacts": art.get("artifacts", []),
+    }
 
 
 def adapt_legacy_result(tool_name, arguments, content):
@@ -79,40 +108,38 @@ def adapt_legacy_result(tool_name, arguments, content):
     }
 
 
-# ---------- 2) 只从带真实来源的结果建 EvidenceCard ----------
-def build_evidence_cards(events, max_per_event=5):
+# ---------- 2) 建 EvidenceCard（全部委托 evidence_build，shadow 不写证据规则）----------
+def build_evidence_cards(events):
     cards, seen = [], set()
     for e in events:
-        if not e["ok"] or not e["data"]:
+        if not e["ok"]:
             continue
-        text = e["data"]
-        pmids = _PMID_URL.findall(text) + _PMID_TAG.findall(text)
-        dois = _DOI_URL.findall(text)
-        for pmid in list(dict.fromkeys(pmids))[:max_per_event]:
-            eid = f"PMID:{pmid}"
-            if eid in seen:
-                continue
-            seen.add(eid)
-            cards.append(_card(eid, pmid=pmid, source=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                               tool=e["tool_name"]))
-        for doi in list(dict.fromkeys(dois))[:max_per_event]:
-            eid = f"DOI:{doi}"
-            if eid in seen:
-                continue
-            seen.add(eid)
-            cards.append(_card(eid, doi=doi, source=f"https://doi.org/{doi}", tool=e["tool_name"]))
+        art = e.get("structured")
+        if art:
+            cl = (art.get("provenance") or {}).get("content_level")
+            data = art.get("data") or {}
+            if cl == "abstract" and isinstance(data, dict) and data.get("papers"):
+                for p in data["papers"]:
+                    cards.append(EB.abstract_card_from_paper(p, tool_name=e["tool_name"],
+                                                             query=data.get("query", "")))
+            elif cl == "computational_analysis" and isinstance(data, dict):
+                cards.append(EB.analysis_card(
+                    evidence_id=f"analysis:{data.get('hypothesis','')[:30]}",
+                    title=data.get("hypothesis", "analysis"),
+                    dataset=",".join(data.get("dataset_ids", []) or data.get("datasets", []) or ["?"]),
+                    method=data.get("method", "signature correlation"),
+                    statistic=data.get("statistic"), direction=data.get("direction", "inconclusive"),
+                    code_commit=(art.get("provenance") or {}).get("code_commit")))
+            # local_dataset：是数据不是文献证据，不建 EvidenceCard
+        else:
+            # legacy 字符串：只取真实出现的 PMID/DOI，交 evidence_build 建摘要卡
+            for c in EB.abstract_cards_from_ids(ids.extract_pmids(e["data"]),
+                                                ids.extract_dois(e["data"]), e["tool_name"]):
+                if c.evidence_id in seen:
+                    continue
+                seen.add(c.evidence_id)
+                cards.append(c)
     return cards
-
-
-def _card(eid, *, pmid=None, doi=None, source="", tool=""):
-    # 摘要级、legacy 来源：不编造样本量/原文；不能作关键结论
-    return AbstractEvidenceCard(
-        evidence_id=eid, title="(来自工具检索结果)",
-        provenance=Provenance(tool_name=tool, source=source,
-                              parameters={"provenance_quality": "legacy_unstructured"}),
-        pmid=str(pmid) if pmid else None, doi=str(doi) if doi else None,
-        publication_status="unknown", supporting_excerpt="",
-        evidence_grade="初筛", extraction_confidence=0.2, human_review_status="pending")
 
 
 # ---------- 3) 从 Executor 输出提取原子 Claim（extractor 可注入；不改写相关为因果）----------
@@ -186,7 +213,8 @@ def run_shadow(question, *, plan=None, allowed_tools=None, selected_tools=None,
 
     manifest = {
         "shadow_verification": True,
-        "run_id": stamp or datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "shadow_status": "ok",
+        "run_id": stamp or _run_id(),
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "git_commit": git_commit(), "model_id": model_id,
         "question": question,
@@ -203,4 +231,5 @@ def run_shadow(question, *, plan=None, allowed_tools=None, selected_tools=None,
         "comparison": comparison,
         "note": "Shadow：新链只记录+对比，最终裁决仍由旧 ssc_a1.verify 决定；用户可见行为不变。",
     }
-    return manifest
+    from manifest_safety import sanitize_manifest
+    return sanitize_manifest(manifest)

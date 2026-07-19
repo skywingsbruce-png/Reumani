@@ -83,6 +83,7 @@
 | 十四 GitHub工程化 | CI 扩为 9 job(lint编译/unit矩阵/contract/retrieval/verifier/safety/e2e-mock/requirements一致性/Win-Linux)；默认不调付费模型/不下大数据/不依赖data_lake与向量索引/不读.env；`reumani/` 包骨架+兼容re-export+`MIGRATION.md`(不动现有入口)；小型e2e-mock测试 | — | ✅ |
 | 十五 暂不做清单 | `CONSTRAINTS.md`：不训模型/不追150工具/不接低质库/不控设备/不称Level2为安全沙箱/不把摘要当全文/相关当因果/LLM当金标准/dev当最终成绩/无benchmark不宣传超Biomni/不删旧入口/不破numpy<2 | — | ✅ |
 | Commit A Shadow | `shadow.py` 接进 SSc-A1 真实链(ssc_a1.py:288)：从真实tool messages抽结构化结果(LegacyToolResultAdapter)→只带真实来源建EvidenceCard→原子Claim(不改相关为因果)→claim_graph→四层verify_all；**只记录+对比，旧verify仍决定最终答案**；全存RunManifest；13项a–m测试；用户行为不变 | — | ✅ Shadow(未夺权) |
+| Commit A.5 消重+结构化证据 | `ids.py`(ID唯一权威)+`evidence_build`(证据卡唯一构建)+shadow纯编排；schemas扩ToolResult/Provenance(schema_version/content_level/content_hash/source_ids)；三核心工具(search_evidence/query_data_lake/triage_hypothesis)改官方 `content_and_artifact`(结构化artifact)；`tool_envelope`(ToolResult校验,失败≠ok)；`manifest_safety`接线(递归脱敏/字段白名单/限长限体积/丢弃Authorization-Cookie-env/相对路径/PHI警告/版本)；UUID run_id防并发覆盖；schema_version错误→降级legacy；22项A.5测试(含真实LangChain消息链) | 安全 | ✅ |
 | 1 | 可靠性：兜底告警化 + 一键测试脚本 + 语料快照工具 | F5,F6 | 待做 |
 | 2 | **金标准评测**：建 `eval/dev` `eval/test`(冻结)，人工 PMID 相关性；旧基准降级为 dev sanity | F1,F2,F3,F4 | 🔧 框架就绪，待人工标注（eval_harness.py + eval/；旧 retrieval_eval.py 已加降级横幅） |
 | 3 | 文献与证据分层：用 LLM 给文献打质量分→分层，比较"少而净 vs 多而噪"（用户实战教训） | — | 待做 |

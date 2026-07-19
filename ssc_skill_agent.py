@@ -104,8 +104,8 @@ def run_python(code: str) -> str:
     return result.as_text()
 
 
-@tool
-def triage_hypothesis(signature_a: str, signature_b: str, geo_datasets: str) -> str:
+@tool(response_format="content_and_artifact")
+def triage_hypothesis(signature_a: str, signature_b: str, geo_datasets: str) -> tuple:
     """【假说关联排查（观察性）】给两个基因 signature（内置名如 CIN/cGAS_STING/IFN_ISG/TGF_fibrosis/senescence，
     或逗号分隔的基因列表）和一批 GEO 数据集编号（逗号分隔，如 GSE58095），
     在每个数据集算 signature 关联并做严谨性检查（重叠/命中率/样本量/Pearson+Spearman/FDR/CI/零分布/leave-one-out），
@@ -121,23 +121,47 @@ def triage_hypothesis(signature_a: str, signature_b: str, geo_datasets: str) -> 
             return parts if len(parts) > 1 else parts[0]
         return s
 
+    from hypothesis_triage import format_report
+    from tool_envelope import make_toolresult
     dsets = [x.strip() for x in geo_datasets.replace(" ", ",").split(",") if x.strip()]
-    rep = triage(_parse(signature_a), _parse(signature_b), dsets)
-    return format_report(rep)
+    try:
+        rep = triage(_parse(signature_a), _parse(signature_b), dsets)
+    except Exception as e:
+        art = make_toolresult("triage_hypothesis", False, None, content_level="computational_analysis",
+                              error_type="analysis_error", error_message=str(e)[:200],
+                              parameters={"signature_a": str(signature_a), "signature_b": str(signature_b),
+                                          "datasets": dsets})
+        return f"分析失败：{e}", art
+    from hypothesis_triage import resolve_signature
+    valid = [x for x in rep.get("per_dataset", []) if "error" not in x]
+    sig_dirs = {x["direction"] for x in valid if x.get("fdr", 1) < 0.05}
+    has_fdr = any(x.get("fdr") is not None for x in valid)
+    multiplicity = "adjusted" if has_fdr else ("not_applicable" if len(valid) <= 1 else "not_adjusted")
+    try:
+        ga, gb = resolve_signature(_parse(signature_a)), resolve_signature(_parse(signature_b))
+        gene_counts = {"A": len(set(ga)), "B": len(set(gb))}
+    except Exception:
+        gene_counts = {"A": None, "B": None}
+    data = dict(rep)
+    data.update({"dataset_ids": rep.get("datasets", []),
+                 "signature_a": str(signature_a), "signature_b": str(signature_b),
+                 "signature_gene_counts": gene_counts,
+                 "genes_hit": [x.get("genes_hit") for x in valid],
+                 "sample_counts": [x.get("n") for x in valid],
+                 "method": "signature correlation (multi-dataset)",
+                 "statistic": f"{rep.get('n_significant_fdr')}/{rep.get('n_usable')} datasets FDR-significant",
+                 "direction": (sig_dirs.pop() if len(sig_dirs) == 1 else "mixed"),
+                 "multiplicity_status": multiplicity,
+                 "adjusted_q": [x.get("fdr") for x in valid]})
+    art = make_toolresult("triage_hypothesis", True, data, content_level="computational_analysis",
+                          source="local GEO (offline)", source_ids=rep.get("datasets", []),
+                          parameters={"signature_a": str(signature_a), "signature_b": str(signature_b)},
+                          warnings=rep.get("caveats", []))
+    return format_report(rep), art
 
 
-@tool
-def query_data_lake(kind: str, query: str = "") -> str:
-    """查询本地数据湖（离线、可复现）。kind 取值：
-    'corpus'(在本地1.2万篇SSc文献里检索) / 'trend'(某主题逐年发文趋势) /
-    'targets'(某风湿病的Open Targets靶点) / 'gwas'(某性状GWAS关联基因) /
-    'geneset'(按关键词找通路/基因集) / 'getset'(取某基因集完整基因) /
-    'scrna'(SSc单细胞数据集索引) / 'summary'(数据湖概览)。
-    例：query_data_lake('corpus','chromosomal instability fibroblast')。"""
-    kind = (kind or "").lower()
-    # 支持 "SLE: 关键词" 指定文献库；不带前缀则跨全部库
-    corpus = "all"
-    q = query
+def _query_data_lake_str(kind, query):
+    corpus, q = "all", query
     m = re.match(r"^\s*(SSc|SLE|RA|CIN)\s*[:：]\s*(.+)$", query, re.IGNORECASE)
     if m:
         corpus, q = m.group(1), m.group(2)
@@ -165,6 +189,48 @@ def query_data_lake(kind: str, query: str = "") -> str:
     if kind == "regulators":
         return _dlq.gene_regulators(query)
     return _dlq.data_lake_summary()
+
+
+@tool(response_format="content_and_artifact")
+def query_data_lake(kind: str, query: str = "") -> tuple:
+    """查询本地数据湖（离线、可复现）。返回可读结果 + 结构化 artifact(content_level=local_dataset)。
+    kind：corpus/trend/targets/gwas/geneset/getset/scrna/ppi/ppi_common/tf_targets/regulators/summary。
+    ⚠️ 区分【数据湖不可用】(ok=False, data_unavailable)与【查询无命中】(ok=True, n_records=0)，不把二者混同。"""
+    from tool_envelope import make_toolresult
+    kind = (kind or "").lower()
+    lake = BASE / "data_lake"
+    if not lake.exists():
+        art = make_toolresult("query_data_lake", False, None, content_level="local_dataset",
+                              error_type="data_unavailable",
+                              error_message="本地数据湖不存在（≠查询无命中，请勿判为'未发现证据'）",
+                              parameters={"kind": kind, "query": query})
+        return "【数据湖不可用】未构建 data_lake/，无法判断有无证据。", art
+    try:
+        result = _query_data_lake_str(kind, query)
+    except Exception as e:
+        art = make_toolresult("query_data_lake", False, None, content_level="local_dataset",
+                              error_type="query_error", error_message=str(e)[:200],
+                              parameters={"kind": kind, "query": query})
+        return f"查询失败：{e}", art
+    snap = _dlq.corpus_stats() if hasattr(_dlq, "corpus_stats") else None
+    _empty = ["未检索到", "未找到", "没有找到", "命中 0", "0 篇", "为空", "无结果", "找不到"]
+    is_zero = (not result.strip()) or any(mk in result for mk in _empty)
+    availability = "zero_hits" if is_zero else ("version_missing" if snap is None else "success")
+    warnings = []
+    if availability == "zero_hits":
+        warnings.append("零命中：仅表示本地库无匹配，≠该领域没有研究")
+    if availability == "version_missing":
+        warnings.append("数据湖版本/快照缺失，可复现性受限")
+    data = {"namespace": kind, "query": query, "availability": availability,
+            "data_lake_version": str(snap)[:200] if snap else "unknown",
+            "source_file": "data_lake", "source_file_hash": None,
+            "result_text": result[:4000], "n_records": (0 if is_zero else None),
+            "search_parameters": {"kind": kind, "query": query}, "warnings": warnings,
+            "content_level": "local_dataset"}
+    art = make_toolresult("query_data_lake", True, data, content_level="local_dataset",
+                          source="local data_lake", dataset_version=data["data_lake_version"],
+                          parameters={"kind": kind, "query": query}, warnings=warnings)
+    return result, art
 
 
 @tool
@@ -212,14 +278,43 @@ def retrieve_resources(query: str) -> str:
     return _resource_retriever.bundle_text(query, top_k=12)
 
 
-@tool
-def search_evidence(query: str, n: int = 8) -> str:
-    """【两阶段证据检索】检索文献并连摘要一起抓回，再提取成结构化证据卡片
-    （研究类型/样本量/研究对象/主要发现/局限/证据强度）。
-    当需要评估证据强度、样本量、研究设计，而不是只看标题时，用这个而不是 search_literature。"""
-    papers = search_with_abstracts(query, n=n)
-    cards = make_evidence_cards(papers, model="deepseek")
-    return format_cards(cards)
+def _paper_struct(p, query):
+    pt = (p.get("pub_type", "") or "")
+    jr = (p.get("journal", "") or "")
+    preprint = ("preprint" in (pt + jr).lower()
+                or any(x in (p.get("link", "") or "").lower() for x in ["biorxiv", "medrxiv"]))
+    abstract = (p.get("abstract") or "")
+    has_abs = bool(abstract.strip())
+    return {"pmid": p.get("pmid"), "pmcid": p.get("pmcid"), "doi": p.get("doi"),
+            "title": p.get("title"), "authors": p.get("authors"), "journal": jr,
+            "year": p.get("year"), "publication_type": pt,
+            "abstract": abstract[:2000],
+            "supporting_excerpt": abstract[:400] if has_abs else "",   # 真实摘要逐字片段，不LLM改写
+            "source_database": "Europe PMC", "query": query,
+            "content_level": "abstract" if has_abs else "metadata_only",  # 无摘要→降级
+            "preprint": preprint, "retraction_status": "unknown", "link": p.get("link")}
+
+
+@tool(response_format="content_and_artifact")
+def search_evidence(query: str, n: int = 8) -> tuple:
+    """【两阶段证据检索】检索文献并连摘要一起抓回（Europe PMC）。返回给 LLM 的可读摘要 + 供 Verifier/Shadow
+    读取的结构化 artifact（每篇 PMID/DOI/title/journal/year/abstract/真实摘要片段/preprint/来源）。
+    评估证据时用这个（而非 search_literature 只给标题）。摘要级证据 content_level=abstract。"""
+    from tool_envelope import make_toolresult
+    try:
+        papers = [_paper_struct(p, query) for p in search_with_abstracts(query, n=n)]
+    except Exception as e:
+        art = make_toolresult("search_evidence", False, None, content_level="abstract",
+                              error_type="search_error", error_message=str(e)[:200])
+        return f"检索失败：{e}", art
+    src_ids = [str(p["pmid"] or p["doi"]) for p in papers if (p["pmid"] or p["doi"])]
+    art = make_toolresult("search_evidence", True, {"papers": papers, "query": query},
+                          content_level="abstract", source="Europe PMC", source_ids=src_ids,
+                          warnings=(["无结果"] if not papers else []))
+    content = "\n".join(
+        f"- [{p['year']}] {p['title'][:90]} | {p['journal']} | PMID:{p['pmid']} | 摘要:{p['abstract'][:200]}"
+        for p in papers) or "未检索到相关文献。"
+    return content, art
 
 
 @tool

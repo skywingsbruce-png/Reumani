@@ -9,13 +9,8 @@
 整体 fail-closed：四层全过才算通过；任何一层不过 → 不通过。
 """
 
-import re
-
 from schemas import VerificationResult
-
-_PMID = re.compile(r"^\d{1,9}$")
-_DOI = re.compile(r"^10\.\d{4,9}/\S+$")
-_GSE = re.compile(r"^GSE\d+$", re.IGNORECASE)
+import ids                      # 唯一 ID 权威（PMID/DOI 校验不在此重写）
 
 
 def _fail(status, reason, **kw):
@@ -46,9 +41,9 @@ def citation_verify(evidence_cards, checker=None):
     for c in evidence_cards or []:
         eid = getattr(c, "evidence_id", "?")
         pmid, doi = getattr(c, "pmid", None), getattr(c, "doi", None)
-        if pmid and not _PMID.match(str(pmid)):
+        if pmid and not ids.valid_pmid(pmid):
             problems.append(f"{eid}: PMID 格式非法({pmid})")
-        if doi and not _DOI.match(str(doi)):
+        if doi and not ids.valid_doi(doi):
             problems.append(f"{eid}: DOI 格式非法/疑伪造({doi})")
         src = getattr(getattr(c, "provenance", None), "source", None)
         if not (pmid or doi or src):

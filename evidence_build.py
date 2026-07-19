@@ -7,6 +7,7 @@
 """
 
 from schemas import (AbstractEvidenceCard, AnalysisEvidenceCard, Provenance, NOT_REPORTED)
+import ids
 
 
 def _preprint(paper):
@@ -50,6 +51,49 @@ def abstract_card_from_extraction(card: dict, paper: dict) -> AbstractEvidenceCa
         evidence_grade="初筛",                        # 摘要级上限
         human_review_status="pending",
     )
+
+
+def abstract_cards_from_ids(pmids, dois, tool_name, source=""):
+    """【唯一】从工具输出里【真实出现】的 PMID/DOI 构建摘要级证据卡（legacy 路径）。
+    不猜测样本量/原文；content_level=abstract；不能作关键结论。"""
+    cards = []
+    for pmid in pmids:
+        if not ids.valid_pmid(pmid):
+            continue
+        cards.append(_id_card(f"PMID:{pmid}", tool_name, pmid=str(pmid),
+                              src=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"))
+    for doi in dois:
+        if not ids.valid_doi(doi):
+            continue
+        cards.append(_id_card(f"DOI:{doi}", tool_name, doi=str(doi), src=f"https://doi.org/{doi}"))
+    return cards
+
+
+def _id_card(eid, tool_name, *, pmid=None, doi=None, src=""):
+    prov = Provenance(tool_name=tool_name, source=src, content_level="abstract",
+                      source_ids=[eid], parameters={"provenance_quality": "legacy_unstructured"})
+    return AbstractEvidenceCard(evidence_id=eid, title="(来自工具检索结果)", provenance=prov,
+                               pmid=pmid, doi=doi, publication_status="unknown",
+                               supporting_excerpt="", evidence_grade="初筛",
+                               extraction_confidence=0.2, human_review_status="pending")
+
+
+def abstract_card_from_paper(paper, *, tool_name="search_evidence", query=""):
+    """从 search_evidence 的【结构化 paper】构建摘要卡。supporting_excerpt 取自真实摘要，不LLM改写。"""
+    pmid, doi = paper.get("pmid"), paper.get("doi")
+    level = paper.get("content_level", "abstract")             # abstract 或 metadata_only
+    excerpt = (paper.get("supporting_excerpt") or "")[:400] if level == "abstract" else ""
+    status = "preprint" if paper.get("preprint") else "published"
+    prov = Provenance(tool_name=tool_name, source=paper.get("link") or "", content_level=level,
+                      retrieved_at=paper.get("retrieved_at"), source_ids=[str(pmid or doi or "")],
+                      parameters={"query": query, "source_database": paper.get("source_database", "Europe PMC")})
+    return AbstractEvidenceCard(
+        evidence_id=str(pmid or doi or paper.get("title", "")[:40]),
+        title=paper.get("title", NOT_REPORTED), provenance=prov,
+        pmid=str(pmid) if pmid else None, doi=str(doi) if doi else None,
+        publication_status=status, supporting_excerpt=excerpt,
+        main_claims=[], evidence_grade="初筛", extraction_confidence=0.4,
+        human_review_status="pending")
 
 
 def analysis_card(evidence_id, title, dataset, method, *, result="", statistic=None,
