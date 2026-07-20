@@ -16,25 +16,31 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
-from pilot.budget_gate import BudgetExceeded, BudgetGate      # noqa: E402
+from pilot.hard_gate import (BudgetExceeded, GateConfigError, HardBudgetGate,  # noqa: E402
+                             assert_all_paid_entrypoints_wrapped, wrap_all)
 from pilot.round2_tasks import TASKS                          # noqa: E402
 
 OUT = BASE / "pilot" / "round2_results"
 
-# §3.2 冻结硬上限
-LIMITS = dict(max_usd=25.00, max_calls_global=200, max_calls_per_task=12, task_timeout_s=600)
+# §3.2 冻结硬上限（**本次 A.6.2 不修改上限**：每题仍为 12，改动须走协议 v2）
+LIMITS = dict(max_usd_global=25.00, max_usd_stage=25.00, max_usd_task=5.00,
+              max_calls_global=200, max_calls_task=12,
+              max_calls_per_model={"claude-opus-4-8": 6, "deepseek-chat": 12},
+              task_timeout_s=600, max_retries=2, default_max_tokens=4096)
 
 
-def _attach(gate):
-    """运行时把闸门挂到已有 LLM 对象上——不修改 ssc_pi_agent 源码。"""
+def _wrap_paid_entrypoints(gate):
+    """把所有付费入口就地换成 GatedModel；任何一个包不住 → 拒绝启动，不降级为软闸门。"""
     import ssc_pi_agent as P
-    for name in ("judge_llm", "deepseek_llm_pro", "deepseek_llm_con"):
-        llm = getattr(P, name, None)
-        if llm is not None:
-            try:
-                llm.callbacks = [gate]
-            except Exception as e:
-                print(f"  [warn] 无法给 {name} 挂 callback: {e}")
+    specs = [
+        (P, "judge_llm", "planner_verifier", "claude-opus-4-8", 4096),
+        (P, "deepseek_llm_pro", "executor_claim", "deepseek-chat", 4096),
+    ]
+    if getattr(P, "deepseek_llm_con", None) is not None:
+        specs.append((P, "deepseek_llm_con", "executor_con", "deepseek-chat", 4096))
+    wrapped = wrap_all(gate, specs)
+    assert_all_paid_entrypoints_wrapped([(P, a) for _, a, _, _, _ in specs])
+    print(f"已包装付费入口：{wrapped}")
     return P
 
 
@@ -112,8 +118,9 @@ def _metrics(state, task, seconds):
 
 def run_stage(stage, task_ids):
     OUT.mkdir(parents=True, exist_ok=True)
-    gate = BudgetGate(**LIMITS)
-    _attach(gate)
+    gate = HardBudgetGate(stage=stage, ledger_path=OUT / f"{stage}_ledger.jsonl", **LIMITS)
+    gate.check_switches()          # 两个显式开关缺一不可，且 CI 中一律拒绝
+    _wrap_paid_entrypoints(gate)   # 包不住就抛 GateConfigError，Pilot 不启动
     from ssc_a1 import run_agent
 
     results, halted = [], None
@@ -127,10 +134,9 @@ def run_stage(stage, task_ids):
                               max_iterations=2, shadow=True)
             m = _metrics(state, task, time.monotonic() - t0)
             m["error"] = None
-            gate.check_timeout()
-        except BudgetExceeded as e:
-            halted = f"{tid}: BudgetExceeded: {e}"
-            print(f"  !! 硬上限触发，立即停止：{e}")
+        except (BudgetExceeded, GateConfigError) as e:
+            halted = f"{tid}: {type(e).__name__}: {e}"
+            print(f"  !! 硬闸门触发（网络请求前拒绝），立即停止：{e}")
             break
         except Exception as e:
             m = {"task_id": tid, "error": f"{type(e).__name__}: {e}",
@@ -139,15 +145,18 @@ def run_stage(stage, task_ids):
             print(f"  !! 运行异常（记录不修代码）：{type(e).__name__}: {e}")
         finally:
             gate.end_task()
-        m["cost"] = gate.per_task.get(tid)
+        m["cost"] = gate.summary()
         results.append(m)
-        print(f"  ✓ 累计 ${gate.usd:.4f} / {gate.calls_global} calls")
+        print(f"  ✓ 已承诺 ${gate.committed_usd:.4f} / {gate.calls_global} calls")
 
     out = {"stage": stage, "limits": LIMITS, "budget": gate.summary(),
            "halted": halted, "results": results}
-    p = OUT / f"{stage}_metrics.json"
+    p = OUT / f"{stage}_metrics.json"          # 注意：不覆盖 Stage 1 历史失败记录
+    if p.exists():
+        p = OUT / f"{stage}_metrics_{int(time.time())}.json"
     p.write_text(json.dumps(out, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print(f"\n写入 {p}\n预算：${gate.usd:.4f} / ${LIMITS['max_usd']}  调用：{gate.calls_global}")
+    print(f"\n写入 {p}\n已承诺：${gate.committed_usd:.4f} / "
+          f"${LIMITS['max_usd_global']}  调用：{gate.calls_global}")
     return out
 
 
