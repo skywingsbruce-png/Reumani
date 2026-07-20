@@ -38,12 +38,15 @@ STAGE1_TOTAL_TIMEOUT_S = 1500
 def _wrap_paid_entrypoints(gate):
     """构造 Pilot 专用加固模型（钉死模型 + 非思考 + max_retries=0 + 有限 timeout），
     再就地替换生产模块的付费入口。任何一项不过 → 拒绝启动，不降级为软闸门。"""
-    import ssc_pi_agent as P
+    PT.assert_import_order_clean()            # 必须在包装前：ssc_a1/ssc_skill_agent 不得已导入
     roles, runconf = PT.build_pilot_roles(gate, anthropic_model=ANTHROPIC_MODEL,
                                           deepseek_model=DEEPSEEK_MODEL)
+    import ssc_pi_agent as P
     P.judge_llm = roles["planner"]            # Planner 与 Verifier 共用 judge 入口
     P.deepseek_llm_pro = roles["executor"]
+    runconf["neutralized"] = PT.neutralize_unused_paid_clients(gate)
     assert_all_paid_entrypoints_wrapped([(P, "judge_llm"), (P, "deepseek_llm_pro")])
+    runconf["bindings_verified"] = PT.assert_bindings_after_import(roles, gate)
     print(f"运行配置：{runconf}")
     return P, runconf
 

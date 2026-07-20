@@ -41,13 +41,48 @@ def _finite(x):
     return isinstance(x, (int, float)) and x > 0 and x != float("inf")
 
 
+ENV_DEEPSEEK_KEY = "DEEPSEEK_API_KEY"
+ENV_ANTHROPIC_KEY = "ANTHROPIC_API_KEY"
+
+
+def _secret_from_env(var_name):
+    """读取密钥并包成 SecretStr。缺失/空/纯空白 → 在构造客户端**之前** fail-closed。
+
+    铁律：异常信息、日志、repr、账本、Manifest、运行配置里都只出现**变量名**，
+    绝不出现密钥值本身。不提供默认占位 key 用于真实 Pilot。
+    """
+    import os
+    from pathlib import Path
+
+    raw = os.environ.get(var_name)
+    if raw is None or not str(raw).strip():
+        # Pilot 的构造刻意早于 ssc_pi_agent 导入（导入顺序防御），所以 .env 还没被加载过。
+        # 这里自己加载一次；load_dotenv 只写 os.environ，不返回也不打印任何值。
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+            raw = os.environ.get(var_name)
+        except Exception:
+            pass
+    if raw is None or not str(raw).strip():
+        raise GateConfigError(
+            f"缺少 {var_name}（未设置或为空/纯空白）→ 在构造客户端前 fail-closed。"
+            "Pilot 不提供默认占位 key。")
+    try:
+        from pydantic import SecretStr
+        return SecretStr(str(raw))          # repr 为 '**********'，不会泄露
+    except Exception:
+        return str(raw)
+
+
 def build_anthropic(model_id, *, max_tokens, timeouts=None):
     """Pilot 专用 Anthropic 实例：max_retries=0 + 有限 timeout。"""
     from langchain_anthropic import ChatAnthropic
     t = timeouts or TIMEOUTS
     price_for(model_id)                       # 未核实价格 → 直接抛，不构造
-    return ChatAnthropic(model=model_id, max_retries=0, timeout=t["total"],
-                         max_tokens=max_tokens)
+    api_key = _secret_from_env(ENV_ANTHROPIC_KEY)
+    return ChatAnthropic(model=model_id, api_key=api_key, max_retries=0,
+                         timeout=t["total"], max_tokens=max_tokens)
 
 
 def build_deepseek(model_id, *, max_tokens, base_url="https://api.deepseek.com", timeouts=None):
@@ -57,7 +92,8 @@ def build_deepseek(model_id, *, max_tokens, base_url="https://api.deepseek.com",
     if model_id != PINNED_DEEPSEEK:
         raise GateConfigError(f"Pilot 只允许 DeepSeek 模型 {PINNED_DEEPSEEK!r}，收到 {model_id!r}")
     price_for(model_id)
-    return ChatOpenAI(model=model_id, base_url=base_url, max_retries=0,
+    api_key = _secret_from_env(ENV_DEEPSEEK_KEY)       # 缺失即抛，早于客户端构造
+    return ChatOpenAI(model=model_id, api_key=api_key, base_url=base_url, max_retries=0,
                       timeout=t["total"], max_tokens=max_tokens, temperature=0.3,
                       extra_body=dict(THINKING_DISABLED))      # 不依赖模型默认值
 
@@ -128,9 +164,18 @@ def resolve_anthropic_billing(obj, model_id):
 def inspect_transport(obj):
     """读出底层实例的 max_retries / timeout（穿过 GatedModel 包装）。"""
     inner = object.__getattribute__(obj, "_inner") if getattr(obj, _WRAPPED, False) else obj
+    # 各客户端的超时字段名不同：ChatOpenAI 用 request_timeout/timeout，
+    # ChatAnthropic 用 default_request_timeout（别名 timeout）。三个都读。
+    timeout = None
+    for attr in ("timeout", "request_timeout", "default_request_timeout"):
+        v = getattr(inner, attr, None)
+        if isinstance(v, (int, float)) and v > 0:
+            timeout = v
+            break
     return {"max_retries": getattr(inner, "max_retries", None),
-            "timeout": getattr(inner, "timeout", None),
+            "timeout": timeout,
             "request_timeout": getattr(inner, "request_timeout", None),
+            "default_request_timeout": getattr(inner, "default_request_timeout", None),
             "max_tokens": getattr(inner, "max_tokens", None)}
 
 
@@ -182,6 +227,104 @@ def build_pilot_roles(gate, *, anthropic_model, deepseek_model, timeouts=None):
                    "anthropic_billing": billing,
                    "price_config_version": __import__("pilot.prices", fromlist=["x"])
                    .PRICE_TABLE_VERSION}
+
+
+# ---------- §4：导入顺序防御 ----------
+GUARDED_MODULES = ("ssc_a1", "ssc_skill_agent")
+PAID_ATTRS = ("judge_llm", "deepseek_llm_pro", "deepseek_llm_con")
+
+
+def assert_import_order_clean():
+    """安装 GatedModel 之前必须调用：这些模块一旦已导入，就已经把**未包装**的
+    付费对象复制进了自己的命名空间，事后替换 ssc_pi_agent 属性无法覆盖它们。
+    不 reload、不遍历改写全局变量 —— 明确报错并终止。"""
+    import sys
+
+    already = [m for m in GUARDED_MODULES if m in sys.modules]
+    if already:
+        raise GateConfigError(
+            f"这些模块已在包装前被导入：{already}。它们持有未包装的付费模型绑定，"
+            "事后替换无法覆盖 → 拒绝启动（不 reload、不静默改写）。"
+            "正确顺序：验证配置 → 构造客户端 → 包装 → 替换入口 → 首次导入 ssc_a1/ssc_skill_agent。")
+    leaked = []
+    for name, mod in list(sys.modules.items()):
+        if name.startswith(("pilot", "ssc_pi_agent")) or mod is None:
+            continue
+        for attr in PAID_ATTRS:
+            obj = getattr(mod, attr, None)
+            if obj is not None and not getattr(obj, _WRAPPED, False):
+                leaked.append(f"{name}.{attr}")
+    if leaked:
+        raise GateConfigError(f"以下模块已复制未包装的付费模型对象：{leaked} → 拒绝启动")
+    return True
+
+
+UNUSED_ROLE = "unused_not_in_pilot"       # 故意不配调用上限 → 任何调用都 fail-closed
+
+
+def neutralize_unused_paid_clients(gate):
+    """Pilot 只用四个角色，但 ssc_pi_agent 里还有别的付费客户端（如 deepseek_llm_con）。
+    把它们也包起来并挂到一个**没有配额的角色**上：既不留原始客户端可达，
+    又保证一旦被调用就在网络请求前被拒。"""
+    import ssc_pi_agent as P
+
+    neutralized = []
+    for attr in PAID_ATTRS:
+        obj = getattr(P, attr, None)
+        if obj is None or getattr(obj, _WRAPPED, False):
+            continue
+        setattr(P, attr, GatedModel(obj, gate, role=UNUSED_ROLE,
+                                    model_id=PINNED_DEEPSEEK, max_tokens=1))
+        neutralized.append(f"ssc_pi_agent.{attr}")
+    return neutralized
+
+
+def assert_bindings_after_import(roles, gate):
+    """首次导入 ssc_a1 / ssc_skill_agent 之后逐项断言六个绑定的**身份**。
+    任一失败必须在任何网络请求之前终止。"""
+    import ssc_a1
+    import ssc_pi_agent as P
+    import ssc_skill_agent
+
+    expect_judge = roles["planner"]
+    expect_exec = roles["executor"]
+    checks = {
+        "ssc_pi_agent.judge_llm": (P.judge_llm, expect_judge),
+        "ssc_pi_agent.deepseek_llm_pro": (P.deepseek_llm_pro, expect_exec),
+        "ssc_a1.judge_llm": (getattr(ssc_a1, "judge_llm", None), expect_judge),
+        "ssc_a1.deepseek_llm_pro": (getattr(ssc_a1, "deepseek_llm_pro", None), expect_exec),
+        "ssc_skill_agent.judge_llm": (getattr(ssc_skill_agent, "judge_llm", None), expect_judge),
+        "ssc_skill_agent.deepseek_llm_pro":
+            (getattr(ssc_skill_agent, "deepseek_llm_pro", None), expect_exec),
+    }
+    bad = []
+    for name, (actual, expect) in checks.items():
+        if actual is not expect:
+            bad.append(f"{name}（身份不符：{'未包装' if not getattr(actual, _WRAPPED, False) else '包装但非本轮对象'}）")
+    if bad:
+        raise GateConfigError(f"绑定身份断言失败：{bad} → 在任何网络请求前终止")
+
+    # Shadow 的 claim extractor 是函数内 import，运行时取 —— 验证它拿到的就是包装对象
+    import shadow  # noqa: F401
+    if P.deepseek_llm_pro is not expect_exec:
+        raise GateConfigError("Shadow claim extractor 运行时取到的不是包装对象")
+
+    # 四个角色的 role 标签与账本必须一致
+    for r in ROLES:
+        m = roles[r]
+        if object.__getattribute__(m, "_role") != r:
+            raise GateConfigError(f"角色标签错误：{r}")
+        if object.__getattribute__(m, "_gate") is not gate:
+            raise GateConfigError(f"角色 {r} 未接到同一个 Stage 预算账本")
+
+    # 原始未包装客户端不得从 Pilot 执行路径直接访问
+    for mod in (P, ssc_a1, ssc_skill_agent):
+        for attr in PAID_ATTRS:
+            obj = getattr(mod, attr, None)
+            if obj is not None and not getattr(obj, _WRAPPED, False):
+                raise GateConfigError(
+                    f"{mod.__name__}.{attr} 仍是未包装的原始客户端 → 终止")
+    return list(checks)
 
 
 def classify_failure(exc):
