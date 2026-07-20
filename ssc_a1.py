@@ -129,14 +129,15 @@ def execute(state: AgentState, executor_model="deepseek"):
 VERIFY_TIMEOUT = 120  # 秒
 
 
-def _verifier_llm_call(prompt, judge_model="claude"):
-    llm = judge_llm if judge_model == "claude" else deepseek_llm_pro
+def _verifier_llm_call(prompt, judge_model="claude", verifier_model=None):
+    # verifier_model=None → 与修改前完全一致
+    llm = verifier_model or (judge_llm if judge_model == "claude" else deepseek_llm_pro)
     return llm.invoke(prompt).content
 
 
 def verify(state: AgentState, executor_output, judge_model="claude", *,
            verifier_call=None, timeout=VERIFY_TIMEOUT, tool_failed=False,
-           require_evidence=True, evidence_cards=None):
+           require_evidence=True, evidence_cards=None, verifier_model=None):
     """【Fail-closed 核查】任何核查异常/无法核实/证据不足，一律判【未通过】，绝不默认放行。
     返回 VerificationResult.to_dict()。verifier_call 可注入以便测试（签名 (prompt, judge_model)）。"""
     # 0) 工具执行失败 → 未通过（即使 LLM 生成了看似正常的答案）
@@ -162,7 +163,9 @@ def verify(state: AgentState, executor_output, judge_model="claude", *,
     call = verifier_call or _verifier_llm_call
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            resp = ex.submit(call, prompt, judge_model).result(timeout=timeout)
+            fut = (ex.submit(call, prompt, judge_model) if verifier_call
+                   else ex.submit(call, prompt, judge_model, verifier_model))
+            resp = fut.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
         return _fail("verifier_timeout", "Verifier 超时")
     except Exception as e:
@@ -215,7 +218,12 @@ def _extract_trace(messages):
 # ==========================================
 def run_agent(user_query, constraints="", max_iterations=2,
               executor_model="deepseek", judge_model="claude",
-              stamp=None, approved_tools=None, shadow=True, claim_extractor=None):
+              stamp=None, approved_tools=None, shadow=True, claim_extractor=None,
+              planner_model=None, verifier_model=None):
+    """planner_model / verifier_model：可选依赖注入，**默认 None = 沿用原全局 judge_llm**，
+    所有既有入口（Streamlit / CLI / 每日文献 / …）行为完全不变。
+    Pilot 显式传入两个独立包装对象，以便 Planner 与 Verifier 分别计量、额度互不借用。
+    注入只改"用哪个模型对象"，不改 Prompt、不改计划逻辑、不改核查规则、不改最终裁决权。"""
     state = AgentState(user_query=user_query, constraints=constraints,
                        max_iterations=max_iterations)
     run_id = stamp or _gen_run_id()          # 唯一 run_id，用于 run 目录与 shadow manifest
@@ -228,7 +236,8 @@ def run_agent(user_query, constraints="", max_iterations=2,
     state.allowed_tools = apply_approvals(selected, approved_tools, trace=state.tool_trace)
 
     from planner import make_plan, render_plan_text, PlanValidationError
-    plan_llm = judge_llm if judge_model == "claude" else deepseek_llm_pro
+    # 默认与修改前逐字一致；只有显式注入时才换对象
+    plan_llm = planner_model or (judge_llm if judge_model == "claude" else deepseek_llm_pro)
 
     failure_feedback = ""
     best_output = ""
@@ -263,7 +272,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
         last_msgs = msgs
         # Verify（fail-closed：工具失败时也判未通过）
         v = verify(state, output, judge_model=judge_model,
-                   tool_failed=bool(state.errors))
+                   tool_failed=bool(state.errors), verifier_model=verifier_model)
         state.verification_results.append(v)
         if v.get("passed") is True:          # 必须是布尔 True 才算通过
             state.final_answer = output

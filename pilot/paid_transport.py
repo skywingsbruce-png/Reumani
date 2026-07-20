@@ -202,12 +202,16 @@ def assert_role_hardened(role, obj, model_id):
 def build_pilot_roles(gate, *, anthropic_model, deepseek_model, timeouts=None):
     """构造四个角色的 Pilot 专用模型（已加固 + 已包装），并逐个通过启动前检查。"""
     roles = {}
+    # Planner 与 Verifier 各自一个**独立的** GatedModel（同一 Stage 账本、各自角色计数、
+    # 额度互不借用）。底层各构造一个客户端，配置完全相同。
     a = build_anthropic(anthropic_model, max_tokens=MAX_TOKENS["planner"], timeouts=timeouts)
     roles["planner"] = GatedModel(a, gate, role="planner", model_id=anthropic_model,
                                   max_tokens=MAX_TOKENS["planner"])
     v = build_anthropic(anthropic_model, max_tokens=MAX_TOKENS["verifier"], timeouts=timeouts)
     roles["verifier"] = GatedModel(v, gate, role="verifier", model_id=anthropic_model,
                                    max_tokens=MAX_TOKENS["verifier"])
+    if roles["planner"] is roles["verifier"]:
+        raise GateConfigError("Planner 与 Verifier 必须是两个独立 wrapper")
     e = build_deepseek(deepseek_model, max_tokens=MAX_TOKENS["executor"], timeouts=timeouts)
     roles["executor"] = GatedModel(e, gate, role="executor", model_id=deepseek_model,
                                    max_tokens=MAX_TOKENS["executor"])
@@ -260,23 +264,77 @@ def assert_import_order_clean():
 
 
 UNUSED_ROLE = "unused_not_in_pilot"       # 故意不配调用上限 → 任何调用都 fail-closed
+SCAN_MODULES = ("ssc_pi_agent", "ssc_a1", "ssc_skill_agent", "shadow",
+                "pilot.round2_runner")
 
 
-def neutralize_unused_paid_clients(gate):
-    """Pilot 只用四个角色，但 ssc_pi_agent 里还有别的付费客户端（如 deepseek_llm_con）。
-    把它们也包起来并挂到一个**没有配额的角色**上：既不留原始客户端可达，
-    又保证一旦被调用就在网络请求前被拒。"""
-    import ssc_pi_agent as P
+def _is_paid_client(obj):
+    """按**类型**识别付费模型客户端，不依赖属性名。"""
+    if obj is None or isinstance(obj, (str, int, float, bool, dict, list, tuple, set)):
+        return False
+    if getattr(obj, _WRAPPED, False):
+        return True                        # 已包装的也算"付费客户端"，供归属判断
+    try:
+        from langchain_core.language_models.chat_models import BaseChatModel
+        if isinstance(obj, BaseChatModel):
+            return True
+    except Exception:
+        pass
+    name = type(obj).__name__
+    return name in ("ChatAnthropic", "ChatOpenAI", "GatedModel") or name.startswith("Chat")
 
-    neutralized = []
-    for attr in PAID_ATTRS:
-        obj = getattr(P, attr, None)
-        if obj is None or getattr(obj, _WRAPPED, False):
+
+def discover_paid_clients():
+    """动态扫描 Pilot 执行路径上的所有付费客户端（按类型，不按固定属性名）。
+    返回 [(module_name, attr_name, obj, wrapped, role)]。"""
+    import sys
+
+    found = []
+    for mname in SCAN_MODULES:
+        mod = sys.modules.get(mname)
+        if mod is None:
             continue
-        setattr(P, attr, GatedModel(obj, gate, role=UNUSED_ROLE,
-                                    model_id=PINNED_DEEPSEEK, max_tokens=1))
-        neutralized.append(f"ssc_pi_agent.{attr}")
+        for attr in dir(mod):
+            if attr.startswith("__"):
+                continue
+            try:
+                obj = getattr(mod, attr)
+            except Exception:
+                continue
+            if not _is_paid_client(obj):
+                continue
+            wrapped = bool(getattr(obj, _WRAPPED, False))
+            role = object.__getattribute__(obj, "_role") if wrapped else None
+            found.append((mname, attr, obj, wrapped, role))
+    return found
+
+
+def neutralize_unused_paid_clients(gate, approved=None):
+    """把**动态发现的**、不属于四个批准角色的原始付费客户端包到一个没有配额的角色上：
+    既不留原始客户端可达，一旦被调用也在网络请求前被拒。
+    发现未知付费客户端时默认 fail-closed（不猜它属于哪个角色）。"""
+    import sys
+
+    approved_ids = {id(o) for o in (approved or {}).values()}
+    neutralized = []
+    for mname, attr, obj, wrapped, role in discover_paid_clients():
+        if wrapped or id(obj) in approved_ids:
+            continue
+        mod = sys.modules[mname]
+        setattr(mod, attr, GatedModel(obj, gate, role=UNUSED_ROLE,
+                                      model_id=PINNED_DEEPSEEK, max_tokens=1))
+        neutralized.append(f"{mname}.{attr}")
     return neutralized
+
+
+def assert_no_raw_paid_client_reachable(approved=None):
+    """动态证明：Pilot 执行路径上不存在任何**可直接调用的原始付费客户端**。"""
+    approved_ids = {id(o) for o in (approved or {}).values()}
+    raw = [f"{m}.{a}" for m, a, o, w, _ in discover_paid_clients()
+           if not w and id(o) not in approved_ids]
+    if raw:
+        raise GateConfigError(f"发现未包装的原始付费客户端（fail-closed）：{raw}")
+    return True
 
 
 def assert_bindings_after_import(roles, gate):

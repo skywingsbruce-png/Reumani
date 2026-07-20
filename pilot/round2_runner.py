@@ -42,13 +42,14 @@ def _wrap_paid_entrypoints(gate):
     roles, runconf = PT.build_pilot_roles(gate, anthropic_model=ANTHROPIC_MODEL,
                                           deepseek_model=DEEPSEEK_MODEL)
     import ssc_pi_agent as P
-    P.judge_llm = roles["planner"]            # Planner 与 Verifier 共用 judge 入口
+    P.judge_llm = roles["planner"]            # 兜底入口；Verifier 通过显式注入拿自己的 wrapper
     P.deepseek_llm_pro = roles["executor"]
-    runconf["neutralized"] = PT.neutralize_unused_paid_clients(gate)
+    runconf["neutralized"] = PT.neutralize_unused_paid_clients(gate, approved=roles)
     assert_all_paid_entrypoints_wrapped([(P, "judge_llm"), (P, "deepseek_llm_pro")])
     runconf["bindings_verified"] = PT.assert_bindings_after_import(roles, gate)
+    PT.assert_no_raw_paid_client_reachable(approved=roles)
     print(f"运行配置：{runconf}")
-    return P, runconf
+    return P, runconf, roles
 
 
 def _metrics(state, task, seconds):
@@ -127,7 +128,7 @@ def run_stage(stage, task_ids):
     OUT.mkdir(parents=True, exist_ok=True)
     gate = HardBudgetGate(stage=stage, ledger_path=OUT / f"{stage}_ledger.jsonl", **LIMITS)
     gate.check_switches()          # 两个显式开关缺一不可，且 CI 中一律拒绝
-    _, runconf = _wrap_paid_entrypoints(gate)   # 包不住就抛 GateConfigError，Pilot 不启动
+    _, runconf, roles = _wrap_paid_entrypoints(gate)   # 包不住即抛，Pilot 不启动
     from ssc_a1 import run_agent
 
     results, halted = [], None
@@ -138,7 +139,9 @@ def run_stage(stage, task_ids):
         t0 = time.monotonic()
         try:
             state = run_agent(task["question"], constraints=task.get("constraints", ""),
-                              max_iterations=2, shadow=True)
+                              max_iterations=2, shadow=True,
+                              planner_model=roles["planner"],      # 显式注入：分别计量
+                              verifier_model=roles["verifier"])
             m = _metrics(state, task, time.monotonic() - t0)
             m["error"] = None
         except (BudgetExceeded, GateConfigError) as e:

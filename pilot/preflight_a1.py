@@ -26,6 +26,15 @@ V2_SHA = "c76f589485e4ebfd728c27b653d2735f3ebd1c6930087c244e4efbdba9d66696"
 # 写死会让 preflight 在每次提交后自我失效；缺省时**不自动通过**，只记录实际值待人工确认。
 ENV_EXPECT_DEV = "REUMANI_EXPECT_DEV_HEAD"
 ENV_EXPECT_PUBLIC = "REUMANI_EXPECT_PUBLIC_HEAD"
+ENV_CI_EVIDENCE = "REUMANI_CI_EVIDENCE"          # CI run number / URL
+ENV_PYTEST_EVIDENCE = "REUMANI_PYTEST_EVIDENCE"  # pytest 报告或人工确认
+
+
+VERIFIED_AUTO = "verified_automatic"        # 脚本实际验证
+VERIFIED_EXT = "verified_external"          # 外部证据确认（必须给出证据来源）
+UNVERIFIED_EXT = "unverified_external"      # 需要外部证据但没给 → 不得显示为 PASS
+FAILED = "failed"
+SKIPPED = "skipped"
 
 
 class Preflight:
@@ -34,18 +43,32 @@ class Preflight:
         self.rows = []
         self.side_effects_blocked = False
 
-    def check(self, cid, name, ok, detail="", side_effecting=False):
-        rec = {"check_id": cid, "name": name, "passed": bool(ok), "detail": str(detail)[:300]}
+    def _add(self, cid, name, status, detail, evidence=None):
+        rec = {"check_id": cid, "name": name, "status": status,
+               "passed": status in (VERIFIED_AUTO, VERIFIED_EXT),
+               "detail": str(detail)[:300], "evidence_source": evidence}
         self.rows.append(rec)
-        print(f"[{'PASS' if ok else 'FAIL'}] {cid:>2}. {name} — {rec['detail']}"[:190])
-        if not ok:
+        tag = {VERIFIED_AUTO: "PASS", VERIFIED_EXT: "PASS*", UNVERIFIED_EXT: "UNVERIF",
+               FAILED: "FAIL", SKIPPED: "SKIP"}[status]
+        ev = f"  [{evidence}]" if evidence else ""
+        print(f"[{tag:>7}] {cid:>2}. {name} — {rec['detail']}{ev}"[:200])
+        if not rec["passed"]:
             self.side_effects_blocked = True
-        return bool(ok)
+        return rec["passed"]
+
+    def check(self, cid, name, ok, detail=""):
+        """脚本自己验证的项。"""
+        return self._add(cid, name, VERIFIED_AUTO if ok else FAILED, detail)
+
+    def external(self, cid, name, evidence, detail=""):
+        """需要外部证据的项。缺证据 → unverified_external，**不得伪装成 PASS**。"""
+        if evidence and str(evidence).strip():
+            return self._add(cid, name, VERIFIED_EXT, detail, str(evidence).strip())
+        return self._add(cid, name, UNVERIFIED_EXT,
+                         f"{detail}（缺外部证据 → Pilot 拒绝启动）")
 
     def skip(self, cid, name, why):
-        self.rows.append({"check_id": cid, "name": name, "passed": False,
-                          "detail": f"SKIPPED: {why}"})
-        print(f"[SKIP] {cid:>2}. {name} — {why}")
+        return self._add(cid, name, SKIPPED, why)
 
     @property
     def failed(self):
@@ -83,18 +106,27 @@ def run(dry_run=True):
     from pilot.round2_tasks import PROTOCOL_SHA256, TASKS
 
     # ---- 1-7：纯静态 ----
-    exp_pub = os.environ.get(ENV_EXPECT_PUBLIC, "").strip()
-    pf.check(1, "public HEAD 与被批准的 commit 一致", bool(exp_pub),
-             f"expect={exp_pub or f'未提供（设 {ENV_EXPECT_PUBLIC}）'}；外部校验")
+    # 1 —— 远端 public HEAD：脚本不查远端，必须由外部提供证据
+    exp_pub = os.environ.get(ENV_EXPECT_PUBLIC, "")
+    pf.external(1, "public HEAD 与被批准的 commit 一致",
+                exp_pub and f"externally supplied commit={exp_pub.strip()}",
+                "脚本不访问远端，也不读取任何 GitHub token")
+    # 2 —— dev HEAD：本地可自动验证，但期望值仍来自外部
     dev = _git(["rev-parse", "--short", "HEAD"])
     exp_dev = os.environ.get(ENV_EXPECT_DEV, "").strip()
-    pf.check(2, "dev HEAD 与被批准的 commit 一致",
-             bool(exp_dev) and dev.startswith(exp_dev),
-             f"actual={dev} expect={exp_dev or f'未提供（设 {ENV_EXPECT_DEV}）→ 不自动通过'}")
+    if not exp_dev:
+        pf.external(2, "dev HEAD 与被批准的 commit 一致", None,
+                    f"actual={dev}，未提供 {ENV_EXPECT_DEV}")
+    else:
+        pf.check(2, "dev HEAD 与被批准的 commit 一致", dev.startswith(exp_dev),
+                 f"actual={dev} expect={exp_dev}")
     dirty = [l for l in _git(["status", "--porcelain"]).splitlines() if l.strip()]
     pf.check(3, "工作区干净", not dirty, f"{len(dirty)} 项未提交" if dirty else "clean")
-    pf.check(4, "CI Run #27 = success 9/9", True, "外部已确认")
-    pf.check(5, "全量测试 320 passed / 2 deselected", True, "外部已确认")
+    # 4/5 —— CI 状态与完整 pytest 统计：脚本无法自证，必须外部证据
+    pf.external(4, "CI 全绿", os.environ.get(ENV_CI_EVIDENCE, ""),
+                f"需提供 CI run number 或 URL（设 {ENV_CI_EVIDENCE}）")
+    pf.external(5, "全量 pytest 通过", os.environ.get(ENV_PYTEST_EVIDENCE, ""),
+                f"需提供 pytest 报告或人工确认（设 {ENV_PYTEST_EVIDENCE}）")
     v1, v2 = _sha_lf(BASE / "SHADOW_PILOT_ROUND2_PROTOCOL.md"), \
         _sha_lf(BASE / "SHADOW_PILOT_ROUND2_PROTOCOL_V2.md")
     pf.check(6, "v1/v2 协议 hash 未变", v1 == V1_SHA and v2 == V2_SHA,
@@ -155,15 +187,20 @@ def run(dry_run=True):
 
     # 11：替换入口 → 首次导入 → 逐项身份断言
     import ssc_pi_agent as P
-    P.judge_llm = roles["planner"]
+    P.judge_llm = roles["planner"]         # 兜底入口；Verifier 走显式注入，不复用此对象
     P.deepseek_llm_pro = roles["executor"]
-    neutralized = PT.neutralize_unused_paid_clients(gate)
+    neutralized = PT.neutralize_unused_paid_clients(gate, approved=roles)
     try:
         names = PT.assert_bindings_after_import(roles, gate)
-        pf.check(11, "六个绑定身份全部为本轮包装对象", True,
-                 f"{len(names)} 个绑定；另中和 {len(neutralized)} 个未用付费客户端")
+        PT.assert_no_raw_paid_client_reachable(approved=roles)
+        assert roles["planner"] is not roles["verifier"]
+        assert object.__getattribute__(roles["planner"], "_role") == "planner"
+        assert object.__getattribute__(roles["verifier"], "_role") == "verifier"
+        pf.check(11, "六绑定身份 + Planner/Verifier 独立 wrapper", True,
+                 f"{len(names)} 绑定；中和 {len(neutralized)} 个；"
+                 f"planner/verifier 为不同对象")
     except Exception as e:
-        pf.check(11, "六个绑定身份全部为本轮包装对象", False, e)
+        pf.check(11, "六绑定身份 + Planner/Verifier 独立 wrapper", False, e)
 
     ok12 = ok13 = True
     tmax = {}
