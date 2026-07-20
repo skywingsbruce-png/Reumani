@@ -20,11 +20,20 @@ import time
 from pathlib import Path
 
 # ---- 单价（美元 / 每百万 token）。未列出的模型一律拒绝，不回退猜测。----
-PRICES = {
-    "claude-opus-4-8": {"input": 5.00, "output": 25.00, "source": "anthropic_official"},
-    "deepseek-chat": {"input": 0.27, "output": 1.10, "source": "ESTIMATE_UNVERIFIED"},
-    "fake-model": {"input": 0.0, "output": 0.0, "source": "test_only"},
-}
+PRICES = {"fake-model": {"input": 0.0, "output": 0.0, "source": "test_only"}}
+
+# 单一价格权威：从版本化、经官方核实的价格表同步（v2 §2）。
+# 只同步 status=="verified" 的条目；未核实模型（如已弃用的 deepseek-chat）**不进表** → 调用时拒绝。
+def _sync_verified_prices():
+    from pilot.prices import PRICES as _V
+    for mid, e in _V.items():
+        if e.get("status") == "verified" and e.get("usd_per_mtok"):
+            r = e["usd_per_mtok"]
+            PRICES[mid] = {"input": max(v for k, v in r.items() if k != "output"),
+                           "output": r["output"], "source": e["source"]}
+
+
+_sync_verified_prices()
 
 # 两个必须同时显式开启的运行开关
 ENV_PAID = "REUMANI_PILOT_PAID"          # 必须 == "1"
@@ -94,14 +103,18 @@ class HardBudgetGate:
 
     def __init__(self, *, stage, ledger_path, max_usd_global, max_usd_stage, max_usd_task,
                  max_calls_global, max_calls_task, max_calls_per_model, task_timeout_s,
-                 max_retries, default_max_tokens, allow_ci=False):
+                 max_retries, default_max_tokens, allow_ci=False,
+                 max_calls_per_role=None, cancelled=False):
         self.stage = stage
         self.ledger = Ledger(ledger_path)
         self.lim = dict(max_usd_global=float(max_usd_global), max_usd_stage=float(max_usd_stage),
                         max_usd_task=float(max_usd_task),
                         max_calls_global=int(max_calls_global), max_calls_task=int(max_calls_task),
                         max_calls_per_model=dict(max_calls_per_model),
+                        max_calls_per_role=dict(max_calls_per_role or {}),
                         task_timeout_s=float(task_timeout_s), max_retries=int(max_retries))
+        self.calls_by_role = {}
+        self.cancelled = bool(cancelled)
         self.default_max_tokens = int(default_max_tokens)
         self.allow_ci = allow_ci
         self._lock = threading.RLock()
@@ -144,10 +157,18 @@ class HardBudgetGate:
             self.task_id, self.calls_task, self.usd_task = task_id, 0, 0.0
             self._t0 = time.monotonic()
             self.task_stopped = None
+            self.calls_by_role = {}          # 角色上限按题重置，且不跨角色借用
 
     def stop_task(self, reason):
         with self._lock:
             self.task_stopped = reason
+
+    def cancel(self, reason="user_cancelled"):
+        """用户取消：此后所有角色的调用一律在网络请求前拒绝。"""
+        with self._lock:
+            self.cancelled = True
+            self.ledger.append({"event": "cancelled", "stage": self.stage,
+                                "reason": reason, "ts": time.time()})
 
     def end_task(self):
         with self._lock:
@@ -165,8 +186,18 @@ class HardBudgetGate:
     def before_call(self, *, model_id, role, payload, max_tokens=None, is_retry=False):
         with self._lock:                                  # 原子：并发调用不能共同越界
             self.check_switches()                          # 1 两个显式开关
+            if self.cancelled:                             # 用户取消 → 后续一律拒绝
+                self._reject("user_cancelled")
             if self.task_stopped:                          # 2 任务是否已停止
                 self._reject(f"task_stopped: {self.task_stopped}")
+            # 分角色上限：任何角色不得借用其它角色的剩余额度
+            rcaps = self.lim["max_calls_per_role"]
+            if rcaps:
+                if role not in rcaps:
+                    self._reject(f"未为角色 {role!r} 配置调用上限，拒绝（fail-closed）")
+                rused = self.calls_by_role.get(role, 0)
+                if rused + 1 > rcaps[role]:
+                    self._reject(f"max_calls_per_role[{role}]: {rused + 1} > {rcaps[role]}")
             if self.calls_task + 1 > self.lim["max_calls_task"]:   # 3 单任务调用次数
                 self._reject(f"max_calls_task[{self.task_id}]: "
                              f"{self.calls_task + 1} > {self.lim['max_calls_task']}")
@@ -208,6 +239,7 @@ class HardBudgetGate:
             self.calls_global += 1
             self.calls_task += 1
             self.calls_by_model[_norm(model_id)] = used + 1
+            self.calls_by_role[role] = self.calls_by_role.get(role, 0) + 1
             self.reserved_usd += worst
             self.usd_task += worst
             self.usd_stage += worst
@@ -273,6 +305,7 @@ class HardBudgetGate:
                 "reserved_open_usd": round(self.reserved_usd, 6),
                 "committed_usd": round(self.committed_usd, 6),
                 "calls_global": self.calls_global, "calls_by_model": dict(self.calls_by_model),
+                "calls_by_role": dict(self.calls_by_role), "cancelled": self.cancelled,
                 "rejected_before_invoke": self.rejected_before_invoke,
                 "retries": self.retries, "limits": self.lim,
                 "ledger": str(self.ledger.path)}
