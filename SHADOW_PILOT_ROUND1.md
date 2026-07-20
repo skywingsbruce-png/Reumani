@@ -63,3 +63,5 @@
 
 ---
 本轮 hash 算法：`tool_envelope.content_hash` 与 `manifest_safety.artifact_ref` 均为 **SHA-1**（记为技术债，建议后续统一 SHA-256）。
+
+> Historical note: SHA-1 accurately described the Round 1 implementation at that time. Commit A.6 later migrated new records to SHA-256; historical manifests were not rewritten.
