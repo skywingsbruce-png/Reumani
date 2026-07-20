@@ -135,8 +135,19 @@ def triage_hypothesis(signature_a: str, signature_b: str, geo_datasets: str) -> 
     from hypothesis_triage import resolve_signature
     valid = [x for x in rep.get("per_dataset", []) if "error" not in x]
     sig_dirs = {x["direction"] for x in valid if x.get("fdr", 1) < 0.05}
+    # 检验族(test family)：本工具每个数据集做 1 次预定义的 signature 对比较
+    n_tests = len(valid)
     has_fdr = any(x.get("fdr") is not None for x in valid)
-    multiplicity = "adjusted" if has_fdr else ("not_applicable" if len(valid) <= 1 else "not_adjusted")
+    if n_tests <= 1:
+        # 单数据集单比较 → 无多重性可校正；BH 对单个 p 是恒等(q=p)，不得冒称已校正
+        multiplicity, adjustment_method, adjusted_q = "not_applicable", None, None
+    elif has_fdr:
+        multiplicity, adjustment_method = "adjusted", "benjamini-hochberg"
+        adjusted_q = [x.get("fdr") for x in valid]
+    else:
+        multiplicity, adjustment_method, adjusted_q = "not_adjusted", None, None
+    test_family = (f"{n_tests} 个数据集 × 1 个预定义 signature 对比较"
+                   + ("（单一检验，无需多重校正）" if n_tests <= 1 else ""))
     try:
         ga, gb = resolve_signature(_parse(signature_a)), resolve_signature(_parse(signature_b))
         gene_counts = {"A": len(set(ga)), "B": len(set(gb))}
@@ -152,7 +163,10 @@ def triage_hypothesis(signature_a: str, signature_b: str, geo_datasets: str) -> 
                  "statistic": f"{rep.get('n_significant_fdr')}/{rep.get('n_usable')} datasets FDR-significant",
                  "direction": (sig_dirs.pop() if len(sig_dirs) == 1 else "mixed"),
                  "multiplicity_status": multiplicity,
-                 "adjusted_q": [x.get("fdr") for x in valid]})
+                 "adjustment_method": adjustment_method,
+                 "test_family": test_family,
+                 "test_count": n_tests,
+                 "adjusted_q": adjusted_q})
     art = make_toolresult("triage_hypothesis", True, data, content_level="computational_analysis",
                           source="local GEO (offline)", source_ids=rep.get("datasets", []),
                           parameters={"signature_a": str(signature_a), "signature_b": str(signature_b)},
@@ -191,11 +205,51 @@ def _query_data_lake_str(kind, query):
     return _dlq.data_lake_summary()
 
 
+_EMPTY_MARKERS = ["未检索到", "未找到", "没有找到", "命中 0", "0 篇", "为空", "无结果", "找不到"]
+_GSE = re.compile(r"^\s*GSE\d{3,7}\s*$", re.I)
+
+
+def _exact_id(query):
+    """查询是否为精确 ID（PMID/DOI/GSE）；是则返回规范化 ID，否则 None。"""
+    from ids import valid_pmid, valid_doi
+    q = (query or "").strip()
+    if valid_pmid(q) or valid_doi(q) or _GSE.match(q):
+        return q
+    return None
+
+
+def _retrieval_state(kind, query, result):
+    """区分【精确检索】与【排序检索】的状态语义。
+    精确ID：命中=exact_hit / 未命中=zero_hits（不把排序候选算作命中）。
+    排序检索(corpus 混合检索)：只会给出【相关性未核验的候选】或无候选，
+    不设未经评测校准的相关性阈值，也不自称 relevant_hits。"""
+    text = result or ""
+    empty = (not text.strip()) or any(mk in text for mk in _EMPTY_MARKERS)
+    if kind == "corpus":
+        ident = _exact_id(query)
+        if ident:
+            hit = (not empty) and (ident.lower() in text.lower())
+            return "exact_id", ("exact_hit" if hit else "zero_hits"), (1 if hit else 0)
+        n = None
+        m = re.search(r"命中\s*(\d+)\s*篇", text)
+        if m:
+            n = int(m.group(1))
+        elif empty:
+            n = 0
+        if n == 0 or (n is None and empty):
+            return "ranked_relevance", "zero_candidates", 0
+        return "ranked_relevance", "candidates_returned_relevance_unverified", n
+    # 其余 kind 为确定性查表（非相关性排序）
+    return "deterministic_lookup", ("zero_hits" if empty else "exact_hit"), (0 if empty else None)
+
+
 @tool(response_format="content_and_artifact")
 def query_data_lake(kind: str, query: str = "") -> tuple:
     """查询本地数据湖（离线、可复现）。返回可读结果 + 结构化 artifact(content_level=local_dataset)。
     kind：corpus/trend/targets/gwas/geneset/getset/scrna/ppi/ppi_common/tf_targets/regulators/summary。
-    ⚠️ 区分【数据湖不可用】(ok=False, data_unavailable)与【查询无命中】(ok=True, n_records=0)，不把二者混同。"""
+    ⚠️ 三者严格区分：【数据湖不可用】(ok=False, data_unavailable)、【精确ID未命中】(zero_hits)、
+    【排序检索返回相关性未核验的候选】(candidates_returned_relevance_unverified)。
+    候选 ≠ 支持性证据；zero_candidates ≠ 该领域没有研究。"""
     from tool_envelope import make_toolresult
     kind = (kind or "").lower()
     lake = BASE / "data_lake"
@@ -203,33 +257,46 @@ def query_data_lake(kind: str, query: str = "") -> tuple:
         art = make_toolresult("query_data_lake", False, None, content_level="local_dataset",
                               error_type="data_unavailable",
                               error_message="本地数据湖不存在（≠查询无命中，请勿判为'未发现证据'）",
-                              parameters={"kind": kind, "query": query})
+                              parameters={"kind": kind, "query": query},
+                              warnings=["retrieval_status=unavailable"])
         return "【数据湖不可用】未构建 data_lake/，无法判断有无证据。", art
     try:
         result = _query_data_lake_str(kind, query)
     except Exception as e:
         art = make_toolresult("query_data_lake", False, None, content_level="local_dataset",
                               error_type="query_error", error_message=str(e)[:200],
-                              parameters={"kind": kind, "query": query})
+                              parameters={"kind": kind, "query": query},
+                              warnings=["retrieval_status=execution_error"])
         return f"查询失败：{e}", art
     snap = _dlq.corpus_stats() if hasattr(_dlq, "corpus_stats") else None
-    _empty = ["未检索到", "未找到", "没有找到", "命中 0", "0 篇", "为空", "无结果", "找不到"]
-    is_zero = (not result.strip()) or any(mk in result for mk in _empty)
-    availability = "zero_hits" if is_zero else ("version_missing" if snap is None else "success")
+    mode, status, n_cand = _retrieval_state(kind, query, result)
     warnings = []
-    if availability == "zero_hits":
-        warnings.append("零命中：仅表示本地库无匹配，≠该领域没有研究")
-    if availability == "version_missing":
+    if status == "zero_hits":
+        warnings.append("零命中：仅表示本地库无该条精确记录，≠该领域没有研究")
+    if status == "zero_candidates":
+        warnings.append("排序检索无候选：≠该领域没有研究，也≠已证否")
+    if status == "candidates_returned_relevance_unverified":
+        warnings.append("这些是相关性【未经核验】的排序候选，不得直接当作支持性证据；"
+                        "须经人工/全文核验后才可称为相关命中")
+    if snap is None:
         warnings.append("数据湖版本/快照缺失，可复现性受限")
-    data = {"namespace": kind, "query": query, "availability": availability,
+    data = {"namespace": kind, "query": query,
+            "retrieval_mode": mode, "retrieval_status": status,
+            "candidate_count": n_cand, "candidate_scores": "unknown",
+            "relevance_verified": False,
             "data_lake_version": str(snap)[:200] if snap else "unknown",
             "source_file": "data_lake", "source_file_hash": None,
-            "result_text": result[:4000], "n_records": (0 if is_zero else None),
+            "result_text": result[:4000],
+            "n_records": (n_cand if mode != "ranked_relevance" else None),
             "search_parameters": {"kind": kind, "query": query}, "warnings": warnings,
             "content_level": "local_dataset"}
     art = make_toolresult("query_data_lake", True, data, content_level="local_dataset",
                           source="local data_lake", dataset_version=data["data_lake_version"],
                           parameters={"kind": kind, "query": query}, warnings=warnings)
+    if status == "candidates_returned_relevance_unverified":
+        result = "【排序候选·相关性未核验】以下为检索候选，未经相关性核验，不得直接作为支持性证据：\n" + result
+    elif status == "zero_candidates":
+        result = "【无候选】本地库未返回候选；这不等于该领域没有研究，也不构成否定证据。\n" + result
     return result, art
 
 

@@ -69,7 +69,7 @@ def sanitize_manifest(manifest, base=None):
 
 
 def _shrink(m):
-    import hashlib
+    from tool_envelope import compute_hash, HASH_ALGORITHM
 
     def sh(obj):
         if isinstance(obj, dict):
@@ -77,20 +77,24 @@ def _shrink(m):
         if isinstance(obj, list):
             return [sh(x) for x in obj]
         if isinstance(obj, str) and len(obj) > 500:
-            return {"_hash": hashlib.sha1(obj.encode()).hexdigest()[:16], "_len": len(obj),
-                    "_preview": obj[:200]}
+            return {"hash_value": compute_hash(obj), "hash_algorithm": HASH_ALGORITHM,
+                    "_len": len(obj), "_preview": obj[:200]}
         return obj
     return sh(m)
 
 
 def artifact_ref(path, content=None):
-    """大型 artifact 只存 路径 + hash（不内联二进制/大矩阵）。"""
-    import hashlib
+    """大型 artifact 只存 路径 + hash + size（不内联二进制/大矩阵）。新记录一律 SHA-256。"""
+    from tool_envelope import hash_bytes, compute_hash, HASH_ALGORITHM
     p = Path(path)
-    h = None
+    h, size = None, None
     try:
-        h = hashlib.sha1(p.read_bytes()).hexdigest()[:16] if p.exists() else (
-            hashlib.sha1(str(content).encode()).hexdigest()[:16] if content is not None else None)
+        if p.exists():
+            b = p.read_bytes()
+            h, size = hash_bytes(b), len(b)
+        elif content is not None:
+            h = compute_hash(content)
     except Exception:
         pass
-    return {"path": str(p), "sha1": h, "inline": False}
+    return {"path": str(p), "hash_value": h, "hash_algorithm": (HASH_ALGORITHM if h else None),
+            "size": size, "inline": False}

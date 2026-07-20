@@ -34,6 +34,7 @@ class Provenance(_Strict):
     source_ids: list[str] = Field(default_factory=list)   # PMID/DOI/GSE 等
     content_level: ContentLevel = "metadata_only"          # 证据可达的最高层级
     content_hash: Optional[str] = None
+    hash_algorithm: Optional[str] = None                   # "sha256"(新) / "sha1"(旧) / None=未标注
 
 
 class Artifact(_Strict):

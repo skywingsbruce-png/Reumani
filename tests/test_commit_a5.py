@@ -120,11 +120,13 @@ def test_data_lake_unavailable(monkeypatch, tmp_path):
 
 @pytest.mark.unit
 def test_data_lake_zero_hits(monkeypatch):
+    # A.6 语义：corpus 的非 ID 查询走排序检索 → 无候选是 zero_candidates（不是 zero_hits）
     monkeypatch.setattr(SK, "_query_data_lake_str", lambda k, q: "未检索到相关文献。")
     tm = SK.query_data_lake.invoke({"type": "tool_call", "name": "query_data_lake",
                                     "args": {"kind": "corpus", "query": "zzz"}, "id": "1"})
-    assert tm.artifact["ok"] is True and tm.artifact["data"]["availability"] == "zero_hits"
-    assert tm.artifact["data"]["n_records"] == 0             # 零命中≠该领域无研究
+    d = tm.artifact["data"]
+    assert tm.artifact["ok"] is True and d["retrieval_status"] == "zero_candidates"
+    assert d["candidate_count"] == 0                          # 无候选≠该领域无研究
 
 
 @pytest.mark.unit
@@ -232,7 +234,9 @@ def test_artifact_ref_path_and_hash(tmp_path):
     f = tmp_path / "big.png"
     f.write_bytes(b"x" * 100)
     ref = MS.artifact_ref(str(f))
-    assert ref["inline"] is False and ref["sha1"] and ref["path"]
+    # A.6：hash 字段由 sha1 → hash_value + hash_algorithm(sha256)
+    assert ref["inline"] is False and ref["hash_value"] and ref["path"]
+    assert ref["hash_algorithm"] == "sha256"
 
 
 # ---- 并发 / 唯一来源 ----
