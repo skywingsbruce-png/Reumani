@@ -1,0 +1,7 @@
+c76f589485e4ebfd728c27b653d2735f3ebd1c6930087c244e4efbdba9d66696  SHADOW_PILOT_ROUND2_PROTOCOL_V2.md
+algorithm: sha256
+version: v2
+frozen_at: 2026-07-20
+code_baseline: dev f0a8d5f / public 32a2e04 (Commit A.6.2)
+v1_sha256_unchanged: 5d166bce159de665c4df677aef6765803575a48827afdc5d061cb49ff54f0f22
+price_table_version: 2026-07-20.1
