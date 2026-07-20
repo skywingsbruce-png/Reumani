@@ -297,13 +297,28 @@ def test_user_cancel_blocks_every_role(tmp_path):
         assert p.calls == 0
 
 
+def frozen_sha256(path):
+    """冻结 hash 定义为**对 LF 规范化字节**求 SHA-256。
+    否则 Git 在 Windows 检出时把 LF 转成 CRLF，同一份文件在两个平台上 hash 不同
+    （CI #25 windows-latest 就是这样红的）。`.gitattributes` 已用 -text 兜底，
+    这里再做一次规范化，保证 hash 与平台无关。"""
+    raw = Path(path).read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(raw).hexdigest()
+
+
 # 23 —— v1 文件与 hash 保持不变
 @pytest.mark.unit
 def test_v1_protocol_and_hash_unchanged():
-    v1 = ROOT / "SHADOW_PILOT_ROUND2_PROTOCOL.md"
-    assert hashlib.sha256(v1.read_bytes()).hexdigest() == V1_SHA
+    assert frozen_sha256(ROOT / "SHADOW_PILOT_ROUND2_PROTOCOL.md") == V1_SHA
     rec = (ROOT / "SHADOW_PILOT_ROUND2_PROTOCOL.sha256").read_text(encoding="utf-8")
     assert V1_SHA in rec
+
+
+@pytest.mark.unit
+def test_v2_hash_is_recorded_and_platform_stable():
+    v2 = frozen_sha256(ROOT / "SHADOW_PILOT_ROUND2_PROTOCOL_V2.md")
+    rec = (ROOT / "SHADOW_PILOT_ROUND2_PROTOCOL_V2.sha256").read_text(encoding="utf-8")
+    assert v2 in rec, "v2 正文与记录的 hash 不一致"
 
 
 # 24 —— 12 道题与评分规则与 v1 逐字一致

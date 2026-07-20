@@ -5,3 +5,4 @@ frozen_at: 2026-07-20
 code_baseline: dev f0a8d5f / public 32a2e04 (Commit A.6.2)
 v1_sha256_unchanged: 5d166bce159de665c4df677aef6765803575a48827afdc5d061cb49ff54f0f22
 price_table_version: 2026-07-20.1
+note: hash is over LF-normalized bytes (see .gitattributes)

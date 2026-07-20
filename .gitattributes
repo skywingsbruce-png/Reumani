@@ -1,0 +1,10 @@
+# 冻结产物必须字节稳定：禁止 Git 在检出时做 CRLF 转换，
+# 否则同一份协议在 Windows 与 Linux 上会算出不同的 SHA-256。
+SHADOW_PILOT_ROUND2_PROTOCOL.md        -text
+SHADOW_PILOT_ROUND2_PROTOCOL.sha256    -text
+SHADOW_PILOT_ROUND2_PROTOCOL_V2.md     -text
+SHADOW_PILOT_ROUND2_PROTOCOL_V2.sha256 -text
+SHADOW_PILOT_ROUND1.md                 -text
+SHADOW_PILOT_ROUND2_REPORT.md          -text
+SHADOW_PILOT_ROUND2_CALL_TRACE.md      -text
+pilot/round2_results/*.json            -text
