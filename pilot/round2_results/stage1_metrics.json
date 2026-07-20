@@ -1,0 +1,35 @@
+{
+  "stage": "stage1",
+  "limits": {
+    "max_usd": 25.0,
+    "max_calls_global": 200,
+    "max_calls_per_task": 12,
+    "task_timeout_s": 600
+  },
+  "budget": {
+    "usd_estimated": 0.2633,
+    "calls": 14,
+    "input_tokens": 35742,
+    "output_tokens": 3384,
+    "per_task": {
+      "A1": {
+        "calls": 14,
+        "in": 35742,
+        "out": 3384,
+        "usd": 0.26331,
+        "seconds": 50.62,
+        "timed_out": false
+      }
+    },
+    "stopped_reason": "max_calls_per_task[A1]: 14 > 12",
+    "limits": {
+      "max_usd": 25.0,
+      "max_calls_global": 200,
+      "max_calls_per_task": 12,
+      "task_timeout_s": 600.0
+    },
+    "price_note": "deepseek 单价为未核实估计值；opus 为官方定价"
+  },
+  "halted": "A1: BudgetExceeded: max_calls_per_task[A1]: 14 > 12",
+  "results": []
+}
