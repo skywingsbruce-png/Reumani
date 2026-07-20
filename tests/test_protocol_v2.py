@@ -120,7 +120,7 @@ def test_unverified_price_is_fail_closed():
     assert PR.PRICES["deepseek-chat"]["status"] == "unverified"
     with pytest.raises(PriceUnverified, match="未经官方核实"):
         PR.price_for("deepseek-chat")
-    assert "deepseek-chat" not in HG.PRICES, "未核实模型不得进入运行价格表"
+    assert PR.PRICES["deepseek-chat"]["usd_per_mtok"] is None, "未核实模型不得有可用单价"
 
 
 @pytest.mark.unit
@@ -210,7 +210,7 @@ def test_max_tokens_is_bounded_per_role(tmp_path):
     (dict(max_usd_global=1e-9, max_usd_task=1e6, max_usd_stage=1e6), "max_usd_global"),
 ])
 def test_budget_ceilings_reject_before_provider(tmp_path, kw, pat):
-    HG.PRICES["priced-v2"] = {"input": 10.0, "output": 10.0, "source": "test"}
+    PR.PRICES["priced-v2"] = {"provider": "test", "status": "verified", "verified_on": "2026-07-20", "source": "test_only", "usd_per_mtok": {"input_cache_miss": 10.0, "output": 10.0}, "usage_fields": ["prompt_tokens", "completion_tokens"]}
     g = mkgate(tmp_path, max_calls_per_model={"priced-v2": 99}, **kw)
     p = FakeProvider()
     m = GatedModel(p, g, role="planner", model_id="priced-v2", max_tokens=2000)
@@ -218,7 +218,7 @@ def test_budget_ceilings_reject_before_provider(tmp_path, kw, pat):
     with pytest.raises(BudgetExceeded, match=pat):
         m.invoke("x" * 200000)
     assert p.calls == 0
-    HG.PRICES.pop("priced-v2")
+    PR.PRICES.pop("priced-v2")
 
 
 # 17 —— 请求超时保留 reservation，且不得判为未计费
@@ -239,7 +239,7 @@ def test_request_timeout_holds_reservation_and_may_be_billed(tmp_path):
 # 18 —— usage 未知保留最坏费用
 @pytest.mark.unit
 def test_unknown_usage_holds_worst_case(tmp_path):
-    HG.PRICES["nou-v2"] = {"input": 10.0, "output": 10.0, "source": "test"}
+    PR.PRICES["nou-v2"] = {"provider": "test", "status": "verified", "verified_on": "2026-07-20", "source": "test_only", "usd_per_mtok": {"input_cache_miss": 10.0, "output": 10.0}, "usage_fields": ["prompt_tokens", "completion_tokens"]}
     g = mkgate(tmp_path, max_calls_per_model={"nou-v2": 9})
     p = FakeProvider(usage=False)
     m = GatedModel(p, g, role="planner", model_id="nou-v2", max_tokens=2000)
@@ -247,7 +247,7 @@ def test_unknown_usage_holds_worst_case(tmp_path):
     m.invoke("x")
     ev = [e for e in g.ledger.events() if e["event"] == "usage_unknown"]
     assert ev and ev[0]["held_usd"] > 0
-    HG.PRICES.pop("nou-v2")
+    PR.PRICES.pop("nou-v2")
 
 
 # 19 / 22 —— 网络错误不自动重试；provider 调用计数证明没有 SDK 重试
@@ -410,7 +410,7 @@ def test_fake_full_chain_typical_worst_and_22nd_rejected(tmp_path):
 @pytest.mark.unit
 def test_price_table_is_versioned_dated_and_sourced():
     meta = PR.table_meta()
-    assert meta["price_table_version"] == "2026-07-20.1"
+    assert meta["price_config_version"] == "2026-07-20.1"
     assert meta["effective_date"] == "2026-07-20" and meta["queried_on"] == "2026-07-20"
     opus = PR.price_for("claude-opus-4-8")
     assert opus["usd_per_mtok"]["input_base"] == 5.00

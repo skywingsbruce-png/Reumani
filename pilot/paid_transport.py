@@ -8,9 +8,27 @@
 """
 
 from pilot.hard_gate import GateConfigError, GatedModel, _WRAPPED
-from pilot.prices import PriceUnverified, price_for
+from pilot.prices import PriceUnverified, assert_billing_mode, price_for
 
 ROLES = ("planner", "executor", "verifier", "claim_extractor")
+
+# ---- A.6.3.1 §1：Pilot 的两个 DeepSeek 角色钉死到 flash ----
+# 理由（写入运行配置说明，不是根据评测结果换更强模型）：
+#   1. 官方声明 `deepseek-chat` 对应 `deepseek-v4-flash` 的**非思考模式**，这是兼容迁移；
+#   2. Flash 足以承担工具编排与结构化抽取；
+#   3. 价格低于 Pro（具体单价见 pilot/prices.py —— 本文件不复制任何价格数字）；
+#   4. 明确**不用** v4-pro，也不再用即将弃用的 deepseek-chat。
+PINNED_DEEPSEEK = "deepseek-v4-flash"
+FORBIDDEN_DEEPSEEK = ("deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro")
+DEEPSEEK_ROLES = ("executor", "claim_extractor")
+
+# §2：DeepSeek V4 默认 thinking enabled → Pilot 必须显式关闭，不依赖默认值。
+THINKING_DISABLED = {"thinking": {"type": "disabled"}}
+
+# ---- §4：Anthropic 计费模式（仅允许第一方 API + 标准速度 + global）----
+ANTHROPIC_PLATFORM = "anthropic_first_party"
+RESOLVED_SPEED = "standard"
+RESOLVED_GEO = "global"
 
 # v2 §5 分角色输出 token 上限
 MAX_TOKENS = {"planner": 2000, "executor": 3000, "verifier": 2000, "claim_extractor": 2000}
@@ -33,12 +51,78 @@ def build_anthropic(model_id, *, max_tokens, timeouts=None):
 
 
 def build_deepseek(model_id, *, max_tokens, base_url="https://api.deepseek.com", timeouts=None):
-    """Pilot 专用 DeepSeek(OpenAI 兼容) 实例：max_retries=0 + 有限 timeout。"""
+    """Pilot 专用 DeepSeek 实例：钉死 flash + max_retries=0 + 有限 timeout + **显式关闭 thinking**。"""
     from langchain_openai import ChatOpenAI
     t = timeouts or TIMEOUTS
+    if model_id != PINNED_DEEPSEEK:
+        raise GateConfigError(f"Pilot 只允许 DeepSeek 模型 {PINNED_DEEPSEEK!r}，收到 {model_id!r}")
     price_for(model_id)
     return ChatOpenAI(model=model_id, base_url=base_url, max_retries=0,
-                      timeout=t["total"], max_tokens=max_tokens, temperature=0.3)
+                      timeout=t["total"], max_tokens=max_tokens, temperature=0.3,
+                      extra_body=dict(THINKING_DISABLED))      # 不依赖模型默认值
+
+
+def read_extra_body(obj):
+    """穿过 GatedModel 读底层客户端实际会发出的 extra_body。"""
+    inner = object.__getattribute__(obj, "_inner") if getattr(obj, _WRAPPED, False) else obj
+    for attr in ("extra_body", "model_kwargs"):
+        v = getattr(inner, attr, None)
+        if isinstance(v, dict):
+            if "thinking" in v:
+                return v
+            if isinstance(v.get("extra_body"), dict):
+                return v["extra_body"]
+    return getattr(inner, "extra_body", None)
+
+
+def assert_deepseek_nonthinking(role, obj, model_id):
+    """§2 启动前动态检查：模型必须精确等于 flash，thinking 必须明确 disabled。"""
+    if model_id != PINNED_DEEPSEEK:
+        raise GateConfigError(
+            f"角色 {role}：DeepSeek 模型必须精确等于 {PINNED_DEEPSEEK!r}，收到 {model_id!r}"
+            + ("（deepseek-chat 即将弃用）" if model_id in FORBIDDEN_DEEPSEEK else ""))
+    eb = read_extra_body(obj)
+    if not isinstance(eb, dict) or "thinking" not in eb:
+        raise GateConfigError(f"角色 {role}：未声明 thinking → 拒绝启动"
+                              "（DeepSeek V4 默认 thinking enabled，不得依赖默认值）")
+    th = eb["thinking"]
+    if not (isinstance(th, dict) and th.get("type") == "disabled"):
+        raise GateConfigError(f"角色 {role}：thinking 必须为 disabled，实际 {th!r} → 拒绝启动")
+    for banned in ("reasoning_effort", "reasoning"):
+        if banned in eb:
+            raise GateConfigError(f"角色 {role}：非思考模式下不得设置 {banned!r}")
+    return True
+
+
+def resolve_anthropic_billing(obj, model_id):
+    """§4：解析并锁定 Anthropic 计费模式；不合规直接拒绝。
+    客户端没有显式 speed / inference_geo 字段时，接受"参数不存在 = 官方默认"，
+    但必须验证确实没有 fast 或 US-only 参数，并把解析结果记录下来。"""
+    inner = object.__getattribute__(obj, "_inner") if getattr(obj, _WRAPPED, False) else obj
+    bag = {}
+    for attr in ("extra_body", "model_kwargs", "default_request_timeout"):
+        v = getattr(inner, attr, None)
+        if isinstance(v, dict):
+            bag.update(v)
+    speed = bag.get("speed", getattr(inner, "speed", None))
+    geo = bag.get("inference_geo", getattr(inner, "inference_geo", None))
+    if speed is not None and speed != RESOLVED_SPEED:
+        raise GateConfigError(f"Anthropic speed={speed!r} 不被允许（Fast Mode 单价 $10/$50）")
+    if geo is not None and geo != RESOLVED_GEO:
+        raise GateConfigError(f"Anthropic inference_geo={geo!r} 不被允许"
+                              "（US-only 有 1.1x 乘数，预算表未应用）")
+    if bag.get("betas") or bag.get("batch"):
+        raise GateConfigError("Pilot 不允许 Batch API / beta 计费路径")
+    base = str(getattr(inner, "anthropic_api_url", "")
+               or getattr(inner, "base_url", "") or "")
+    if base and "api.anthropic.com" not in base:
+        raise GateConfigError(f"无法识别的 Anthropic 端点/平台 {base!r}："
+                              "只允许第一方 API（Bedrock/Vertex/Foundry 计价不同）")
+    assert_billing_mode(model_id, platform=ANTHROPIC_PLATFORM,
+                        speed=RESOLVED_SPEED, inference_geo=RESOLVED_GEO, batch=False)
+    return {"platform": ANTHROPIC_PLATFORM, "resolved_speed": RESOLVED_SPEED,
+            "resolved_inference_geo": RESOLVED_GEO, "batch": False,
+            "speed_param_present": speed is not None, "geo_param_present": geo is not None}
 
 
 def inspect_transport(obj):
@@ -90,7 +174,14 @@ def build_pilot_roles(gate, *, anthropic_model, deepseek_model, timeouts=None):
            "executor": deepseek_model, "claim_extractor": deepseek_model}
     for r in ROLES:
         assert_role_hardened(r, roles[r], ids[r])
-    return roles
+    for r in DEEPSEEK_ROLES:                       # §2 两个角色分别检查
+        assert_deepseek_nonthinking(r, roles[r], ids[r])
+    billing = {r: resolve_anthropic_billing(roles[r], ids[r])
+               for r in ("planner", "verifier")}   # §4
+    return roles, {"deepseek_model": deepseek_model, "thinking": "disabled",
+                   "anthropic_billing": billing,
+                   "price_config_version": __import__("pilot.prices", fromlist=["x"])
+                   .PRICE_TABLE_VERSION}
 
 
 def classify_failure(exc):

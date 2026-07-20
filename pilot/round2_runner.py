@@ -18,30 +18,34 @@ sys.path.insert(0, str(BASE))
 
 from pilot.hard_gate import (BudgetExceeded, GateConfigError, HardBudgetGate,  # noqa: E402
                              assert_all_paid_entrypoints_wrapped, wrap_all)
+from pilot import paid_transport as PT                        # noqa: E402
 from pilot.round2_tasks import TASKS                          # noqa: E402
 
 OUT = BASE / "pilot" / "round2_results"
 
-# §3.2 冻结硬上限（**本次 A.6.2 不修改上限**：每题仍为 12，改动须走协议 v2）
-LIMITS = dict(max_usd_global=25.00, max_usd_stage=25.00, max_usd_task=5.00,
-              max_calls_global=200, max_calls_task=12,
-              max_calls_per_model={"claude-opus-4-8": 6, "deepseek-chat": 12},
-              task_timeout_s=600, max_retries=2, default_max_tokens=4096)
+# 协议 v2 冻结上限（分角色，不是单一总数；模型钉死到 flash）
+ANTHROPIC_MODEL = "claude-opus-4-8"
+DEEPSEEK_MODEL = PT.PINNED_DEEPSEEK          # deepseek-v4-flash，非思考模式
+LIMITS = dict(max_usd_global=25.00, max_usd_stage=3.00, max_usd_task=1.50,
+              max_calls_global=200, max_calls_task=21,
+              max_calls_per_model={ANTHROPIC_MODEL: 4, DEEPSEEK_MODEL: 17},
+              max_calls_per_role={"planner": 2, "verifier": 2,
+                                  "claim_extractor": 1, "executor": 16},
+              task_timeout_s=600, max_retries=0, default_max_tokens=2000)
+STAGE1_TOTAL_TIMEOUT_S = 1500
 
 
 def _wrap_paid_entrypoints(gate):
-    """把所有付费入口就地换成 GatedModel；任何一个包不住 → 拒绝启动，不降级为软闸门。"""
+    """构造 Pilot 专用加固模型（钉死模型 + 非思考 + max_retries=0 + 有限 timeout），
+    再就地替换生产模块的付费入口。任何一项不过 → 拒绝启动，不降级为软闸门。"""
     import ssc_pi_agent as P
-    specs = [
-        (P, "judge_llm", "planner_verifier", "claude-opus-4-8", 4096),
-        (P, "deepseek_llm_pro", "executor_claim", "deepseek-chat", 4096),
-    ]
-    if getattr(P, "deepseek_llm_con", None) is not None:
-        specs.append((P, "deepseek_llm_con", "executor_con", "deepseek-chat", 4096))
-    wrapped = wrap_all(gate, specs)
-    assert_all_paid_entrypoints_wrapped([(P, a) for _, a, _, _, _ in specs])
-    print(f"已包装付费入口：{wrapped}")
-    return P
+    roles, runconf = PT.build_pilot_roles(gate, anthropic_model=ANTHROPIC_MODEL,
+                                          deepseek_model=DEEPSEEK_MODEL)
+    P.judge_llm = roles["planner"]            # Planner 与 Verifier 共用 judge 入口
+    P.deepseek_llm_pro = roles["executor"]
+    assert_all_paid_entrypoints_wrapped([(P, "judge_llm"), (P, "deepseek_llm_pro")])
+    print(f"运行配置：{runconf}")
+    return P, runconf
 
 
 def _metrics(state, task, seconds):
@@ -120,7 +124,7 @@ def run_stage(stage, task_ids):
     OUT.mkdir(parents=True, exist_ok=True)
     gate = HardBudgetGate(stage=stage, ledger_path=OUT / f"{stage}_ledger.jsonl", **LIMITS)
     gate.check_switches()          # 两个显式开关缺一不可，且 CI 中一律拒绝
-    _wrap_paid_entrypoints(gate)   # 包不住就抛 GateConfigError，Pilot 不启动
+    _, runconf = _wrap_paid_entrypoints(gate)   # 包不住就抛 GateConfigError，Pilot 不启动
     from ssc_a1 import run_agent
 
     results, halted = [], None
@@ -149,8 +153,8 @@ def run_stage(stage, task_ids):
         results.append(m)
         print(f"  ✓ 已承诺 ${gate.committed_usd:.4f} / {gate.calls_global} calls")
 
-    out = {"stage": stage, "limits": LIMITS, "budget": gate.summary(),
-           "halted": halted, "results": results}
+    out = {"stage": stage, "limits": LIMITS, "run_config": runconf,
+           "budget": gate.summary(), "halted": halted, "results": results}
     p = OUT / f"{stage}_metrics.json"          # 注意：不覆盖 Stage 1 历史失败记录
     if p.exists():
         p = OUT / f"{stage}_metrics_{int(time.time())}.json"

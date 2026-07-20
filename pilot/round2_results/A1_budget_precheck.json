@@ -1,0 +1,92 @@
+{
+  "task_id": "A1",
+  "dry_run": true,
+  "real_api_calls": 0,
+  "price_config_version": "2026-07-20.1",
+  "models": {
+    "anthropic": "claude-opus-4-8",
+    "deepseek": "deepseek-v4-flash"
+  },
+  "n_tools_in_schema": 14,
+  "explicit_bounds_for_unknown_lengths": {
+    "tool_result_tokens_per_call": 4000,
+    "history_growth_per_step": 1200,
+    "resource_bundle_tokens": 3000
+  },
+  "rows": [
+    {
+      "role": "planner",
+      "model": "claude-opus-4-8",
+      "call": "each",
+      "est_input_tokens": 4283,
+      "max_tokens": 2000,
+      "worst_usd_per_call": 0.09283,
+      "n_calls": 2,
+      "worst_usd_total": 0.18566
+    },
+    {
+      "role": "executor",
+      "model": "deepseek-v4-flash",
+      "call": "first",
+      "est_input_tokens": 6479,
+      "max_tokens": 3000,
+      "worst_usd_per_call": 0.001747,
+      "n_calls": 1,
+      "worst_usd_total": 0.001747
+    },
+    {
+      "role": "executor",
+      "model": "deepseek-v4-flash",
+      "call": "typical_middle",
+      "est_input_tokens": 42879,
+      "max_tokens": 3000,
+      "worst_usd_per_call": 0.006843,
+      "n_calls": 14,
+      "worst_usd_total": 0.095803
+    },
+    {
+      "role": "executor",
+      "model": "deepseek-v4-flash",
+      "call": "last_allowed",
+      "est_input_tokens": 84479,
+      "max_tokens": 3000,
+      "worst_usd_per_call": 0.012667,
+      "n_calls": 1,
+      "worst_usd_total": 0.012667
+    },
+    {
+      "role": "verifier",
+      "model": "claude-opus-4-8",
+      "call": "each",
+      "est_input_tokens": 5432,
+      "max_tokens": 2000,
+      "worst_usd_per_call": 0.10432,
+      "n_calls": 2,
+      "worst_usd_total": 0.20864
+    },
+    {
+      "role": "claim_extractor",
+      "model": "deepseek-v4-flash",
+      "call": "each",
+      "est_input_tokens": 7552,
+      "max_tokens": 2000,
+      "worst_usd_per_call": 0.001617,
+      "n_calls": 1,
+      "worst_usd_total": 0.001617
+    }
+  ],
+  "per_role_worst_usd": {
+    "planner": 0.18566,
+    "executor": 0.110217,
+    "verifier": 0.20864,
+    "claim_extractor": 0.001617
+  },
+  "task_worst_usd": 0.506134,
+  "task_cap_usd": 1.5,
+  "headroom_vs_task_cap_usd": 0.993866,
+  "stage1_worst_usd": 1.012268,
+  "stage1_cap_usd": 3.0,
+  "headroom_vs_stage1_cap_usd": 1.987732,
+  "within_task_cap": true,
+  "within_stage1_cap": true
+}

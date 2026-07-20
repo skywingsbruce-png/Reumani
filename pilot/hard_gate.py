@@ -20,20 +20,10 @@ import time
 from pathlib import Path
 
 # ---- 单价（美元 / 每百万 token）。未列出的模型一律拒绝，不回退猜测。----
-PRICES = {"fake-model": {"input": 0.0, "output": 0.0, "source": "test_only"}}
-
-# 单一价格权威：从版本化、经官方核实的价格表同步（v2 §2）。
-# 只同步 status=="verified" 的条目；未核实模型（如已弃用的 deepseek-chat）**不进表** → 调用时拒绝。
-def _sync_verified_prices():
-    from pilot.prices import PRICES as _V
-    for mid, e in _V.items():
-        if e.get("status") == "verified" and e.get("usd_per_mtok"):
-            r = e["usd_per_mtok"]
-            PRICES[mid] = {"input": max(v for k, v in r.items() if k != "output"),
-                           "output": r["output"], "source": e["source"]}
-
-
-_sync_verified_prices()
+# 价格的唯一权威是 pilot/prices.py —— 本文件**不得**保留任何单价常量。
+# 只通过公开接口查询：price_for / worst_case_usd / actual_usd / table_meta。
+from pilot import prices as _prices                               # noqa: E402
+from pilot.prices import PriceUnverified                          # noqa: E402  (re-export)
 
 # 两个必须同时显式开启的运行开关
 ENV_PAID = "REUMANI_PILOT_PAID"          # 必须 == "1"
@@ -49,10 +39,8 @@ class GateConfigError(RuntimeError):
 
 
 def price_for(model_id):
-    for k, v in PRICES.items():
-        if k and k in (model_id or ""):
-            return v
-    raise GateConfigError(f"未知模型或未知价格，拒绝调用：{model_id!r}")
+    """薄转发：价格只从 pilot.prices 取，本模块不持有任何单价。"""
+    return _prices.price_for(model_id)
 
 
 def estimate_input_tokens(payload):
@@ -211,10 +199,10 @@ class HardBudgetGate:
                 self._reject(f"max_calls_global: {self.calls_global + 1} > "
                              f"{self.lim['max_calls_global']}")
 
-            p = price_for(model_id)                        # 未知模型/价格 → GateConfigError
             in_tok = estimate_input_tokens(payload)        # 9 估算输入 token
             out_tok = int(max_tokens or self.default_max_tokens)   # 10 按 max_tokens 算最坏
-            worst = in_tok / 1e6 * p["input"] + out_tok / 1e6 * p["output"]
+            # 未知 provider/model/价格 → PriceUnverified（唯一权威 pilot.prices）
+            worst = _prices.worst_case_usd(model_id, in_tok, out_tok)
 
             if self.usd_task + worst > self.lim["max_usd_task"]:      # 6 任务预算
                 self._reject(f"max_usd_task[{self.task_id}]: "
@@ -247,6 +235,7 @@ class HardBudgetGate:
                                 "task_id": self.task_id, "role": role, "model": model_id,
                                 "est_input_tokens": in_tok, "max_tokens": out_tok,
                                 "worst_case_usd": round(worst, 6), "is_retry": bool(is_retry),
+                                "price_config_version": _prices.PRICE_TABLE_VERSION,
                                 "ts": time.time()})
             return uid, worst
 
@@ -257,11 +246,11 @@ class HardBudgetGate:
         raise BudgetExceeded(reason)
 
     # ---- 结算 ----
-    def reconcile(self, uid, model_id, in_tok, out_tok, worst):
+    def reconcile(self, uid, model_id, in_tok, out_tok, worst, usage=None):
         """调用成功且拿到真实 usage：把预留换成实际，释放未用额度。"""
         with self._lock:
-            p = price_for(model_id)
-            actual = in_tok / 1e6 * p["input"] + out_tok / 1e6 * p["output"]
+            actual = _prices.actual_usd(model_id, usage or {"input_tokens": in_tok,
+                                                            "output_tokens": out_tok})
             self.reserved_usd -= worst
             self.actual_usd += actual
             self.usd_task += actual - worst
@@ -269,7 +258,9 @@ class HardBudgetGate:
             self.ledger.append({"event": "reconciled", "call_uid": uid, "model": model_id,
                                 "input_tokens": in_tok, "output_tokens": out_tok,
                                 "actual_usd": round(actual, 6),
-                                "released_usd": round(worst - actual, 6), "ts": time.time()})
+                                "released_usd": round(worst - actual, 6),
+                                "price_config_version": _prices.PRICE_TABLE_VERSION,
+                                "ts": time.time()})
             return actual
 
     def usage_unknown(self, uid, model_id, worst):
@@ -312,9 +303,7 @@ class HardBudgetGate:
 
 
 def _norm(model_id):
-    for k in PRICES:
-        if k in (model_id or ""):
-            return k
+    """价格表已改为精确匹配，模型名不再做子串归一化。"""
     return model_id or "unknown"
 
 
@@ -391,23 +380,24 @@ class GatedModel:
 
 
 def _settle(gate, uid, model_id, worst, res):
-    i, o = _usage_from_result(res)
+    i, o, usage = _usage_from_result(res)
     if i is None and o is None:
         gate.usage_unknown(uid, model_id, worst)      # fail-closed
     else:
-        gate.reconcile(uid, model_id, int(i or 0), int(o or 0), worst)
+        gate.reconcile(uid, model_id, int(i or 0), int(o or 0), worst, usage=usage)
 
 
 def _usage_from_result(res):
+    """返回 (input, output, 完整 usage dict)。完整 dict 供缓存分档结算使用。"""
     um = getattr(res, "usage_metadata", None)
     if isinstance(um, dict) and (um.get("input_tokens") or um.get("output_tokens")):
-        return um.get("input_tokens"), um.get("output_tokens")
+        return um.get("input_tokens"), um.get("output_tokens"), dict(um)
     rm = getattr(res, "response_metadata", None) or {}
     tu = (rm.get("token_usage") or rm.get("usage") or {}) if isinstance(rm, dict) else {}
     if tu:
         return (tu.get("prompt_tokens") or tu.get("input_tokens"),
-                tu.get("completion_tokens") or tu.get("output_tokens"))
-    return None, None
+                tu.get("completion_tokens") or tu.get("output_tokens"), dict(tu))
+    return None, None, {}
 
 
 def wrap_all(gate, specs):

@@ -113,8 +113,60 @@ def assert_usage_fields_known(model_id, usage_keys):
     return True
 
 
+def actual_usd(model_id, usage):
+    """按真实 usage 结算。缓存字段存在时分档计价；不存在时用**最贵输入档**（保守）。
+
+    绝不因为拿不到缓存明细就按最便宜档计费。
+    """
+    r = price_for(model_id)["usd_per_mtok"]
+    u = dict(usage or {})
+    out = u.get("output_tokens") or u.get("completion_tokens") or 0
+    cost = out / 1e6 * r["output"]
+
+    hit = u.get("prompt_cache_hit_tokens")
+    miss = u.get("prompt_cache_miss_tokens")
+    if hit is not None or miss is not None:                     # DeepSeek 口径
+        cost += (hit or 0) / 1e6 * r.get("input_cache_hit", worst_input_rate(model_id))
+        cost += (miss or 0) / 1e6 * r.get("input_cache_miss", worst_input_rate(model_id))
+        return cost
+
+    cw = u.get("cache_creation_input_tokens")
+    cr = u.get("cache_read_input_tokens")
+    base = u.get("input_tokens") or u.get("prompt_tokens") or 0
+    if cw is not None or cr is not None:                        # Anthropic 口径
+        cost += (base or 0) / 1e6 * r.get("input_base", worst_input_rate(model_id))
+        cost += (cw or 0) / 1e6 * r.get("cache_write_1h", worst_input_rate(model_id))
+        cost += (cr or 0) / 1e6 * r.get("cache_read", 0.0)
+        return cost
+
+    cost += base / 1e6 * worst_input_rate(model_id)             # 无缓存明细 → 最贵档
+    return cost
+
+
+# ---- 不支持的计费模式：直接拒绝，不静默按标准价计 ----
+ALLOWED_PLATFORM = "anthropic_first_party"
+ALLOWED_SPEED = "standard"
+ALLOWED_GEO = "global"
+
+
+def assert_billing_mode(model_id, *, platform, speed, inference_geo, batch=False):
+    e = price_for(model_id)
+    if e["provider"] == "anthropic":
+        if platform != ALLOWED_PLATFORM:
+            raise PriceUnverified(f"不支持的计费平台 {platform!r}：价格表只覆盖 "
+                                  f"{ALLOWED_PLATFORM}（Bedrock/Vertex/Foundry 计价不同）")
+        if speed != ALLOWED_SPEED:
+            raise PriceUnverified(f"speed={speed!r} 不被允许（Fast Mode 单价不同：$10/$50）")
+        if inference_geo != ALLOWED_GEO:
+            raise PriceUnverified(f"inference_geo={inference_geo!r} 不被允许"
+                                  "（US-only 有 1.1x 乘数，价格表未应用）")
+        if batch:
+            raise PriceUnverified("Batch API 有 50% 折扣，价格表未覆盖 → 拒绝")
+    return True
+
+
 def table_meta():
-    return {"price_table_version": PRICE_TABLE_VERSION, "effective_date": EFFECTIVE_DATE,
+    return {"price_config_version": PRICE_TABLE_VERSION, "effective_date": EFFECTIVE_DATE,
             "queried_on": QUERIED_ON,
             "models": {k: {"status": v["status"], "source": v["source"]}
                        for k, v in PRICES.items()}}
