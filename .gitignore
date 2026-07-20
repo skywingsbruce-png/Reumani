@@ -19,3 +19,6 @@ eval_results/
 __pycache__/
 *.pyc
 streamlit_debug.log
+
+# 本地 CI 复现虚拟环境
+.ci_venv/
