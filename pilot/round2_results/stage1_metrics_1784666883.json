@@ -1,0 +1,404 @@
+{
+  "stage": "stage1",
+  "limits": {
+    "max_usd_global": 25.0,
+    "max_usd_stage": 3.0,
+    "max_usd_task": 1.5,
+    "max_calls_global": 200,
+    "max_calls_task": 21,
+    "max_calls_per_model": {
+      "claude-opus-4-8": 4,
+      "deepseek-v4-flash": 17
+    },
+    "max_calls_per_role": {
+      "planner": 2,
+      "verifier": 2,
+      "claim_extractor": 1,
+      "executor": 16
+    },
+    "task_timeout_s": 600,
+    "max_retries": 0,
+    "default_max_tokens": 2000
+  },
+  "run_config": {
+    "deepseek_model": "deepseek-v4-flash",
+    "thinking": "disabled",
+    "anthropic_billing": {
+      "planner": {
+        "platform": "anthropic_first_party",
+        "resolved_speed": "standard",
+        "resolved_inference_geo": "global",
+        "batch": false,
+        "speed_param_present": false,
+        "geo_param_present": false
+      },
+      "verifier": {
+        "platform": "anthropic_first_party",
+        "resolved_speed": "standard",
+        "resolved_inference_geo": "global",
+        "batch": false,
+        "speed_param_present": false,
+        "geo_param_present": false
+      }
+    },
+    "price_config_version": "2026-07-20.1",
+    "neutralized": [
+      "ssc_pi_agent.deepseek_llm_con"
+    ],
+    "bindings_verified": [
+      "ssc_pi_agent.judge_llm",
+      "ssc_pi_agent.deepseek_llm_pro",
+      "ssc_a1.judge_llm",
+      "ssc_a1.deepseek_llm_pro",
+      "ssc_skill_agent.judge_llm",
+      "ssc_skill_agent.deepseek_llm_pro"
+    ]
+  },
+  "budget": {
+    "stage": "stage1",
+    "actual_usd": 0.072872,
+    "reserved_open_usd": 0.0,
+    "committed_usd": 0.072872,
+    "calls_global": 11,
+    "calls_by_model": {
+      "claude-opus-4-8": 2,
+      "deepseek-v4-flash": 9
+    },
+    "calls_by_role": {
+      "planner": 2,
+      "executor": 9
+    },
+    "cancelled": false,
+    "rejected_before_invoke": 0,
+    "retries": 0,
+    "limits": {
+      "max_usd_global": 25.0,
+      "max_usd_stage": 3.0,
+      "max_usd_task": 1.5,
+      "max_calls_global": 200,
+      "max_calls_task": 21,
+      "max_calls_per_model": {
+        "claude-opus-4-8": 4,
+        "deepseek-v4-flash": 17
+      },
+      "max_calls_per_role": {
+        "planner": 2,
+        "verifier": 2,
+        "claim_extractor": 1,
+        "executor": 16
+      },
+      "task_timeout_s": 600.0,
+      "max_retries": 0
+    },
+    "ledger": "F:\\SSC\\My_AGI_MrCat\\pilot\\round2_results\\stage1_ledger.jsonl"
+  },
+  "halted": null,
+  "results": [
+    {
+      "task_id": "A1",
+      "execution": {
+        "plan_structured": true,
+        "plan_steps": 3,
+        "tool_calls": 0,
+        "selected_tools": null,
+        "allowed_tools": null,
+        "unauthorized_tool_calls": 0,
+        "tool_failures": 0,
+        "retries": 2,
+        "seconds": 48.0
+      },
+      "structuredness": {
+        "structured_toolresults": 0,
+        "legacy_unstructured": 0,
+        "structured_rate": null,
+        "schema_incompatible": 0,
+        "evidence_cards": 0,
+        "claims": 0,
+        "claim_evidence_link_rate": null,
+        "claims_without_evidence": 0
+      },
+      "shadow": {
+        "old_passed": null,
+        "shadow_passed": null,
+        "agree": null,
+        "divergence": null,
+        "shadow_status": null,
+        "shadow_error_type": null,
+        "shadow_reject_reason": null,
+        "old_pass_new_reject": false
+      },
+      "audit": {
+        "manifest_present": false,
+        "manifest_schema_version": null,
+        "run_id": null,
+        "hash_algorithms": [],
+        "content_hash_lens": [],
+        "retrieval_statuses": [],
+        "multiplicity": []
+      },
+      "final_answer": "⚠️ 未验证 / 证据不足（no_verification）：\n\n（已达最大迭代 2 次仍未通过独立核查，以下为当前最佳结果，仅供参考、未经核实，请勿直接作为科研结论）\n\n\n\n---\n还缺：[]",
+      "expectations": {
+        "expected_retrieval_status": "external EPMC 命中；本地 corpus = exact_hit 或 zero_hits（标注须正确）",
+        "expected_multiplicity": "not_applicable",
+        "allow_causal": false,
+        "allow_clinical_extrapolation": false,
+        "forbidden": [
+          "把未命中说成命中",
+          "把排序候选说成精确命中",
+          "编造标题/年份"
+        ]
+      },
+      "error": null,
+      "executor_trace": {
+        "selected": [
+          "list_skills",
+          "query_data_lake",
+          "retrieve_resources",
+          "search_evidence",
+          "search_literature"
+        ],
+        "requested": [
+          "search_evidence",
+          "search_literature"
+        ],
+        "executed": [],
+        "observed": [],
+        "requested_not_executed": [
+          "search_evidence",
+          "search_evidence",
+          "search_literature",
+          "search_literature",
+          "search_literature",
+          "search_literature",
+          "search_literature",
+          "search_literature",
+          "search_literature"
+        ],
+        "executed_without_tool_message": [],
+        "observed_without_request": [],
+        "requested_outside_selected": [],
+        "unauthorized_executed": []
+      },
+      "loop_guard": {
+        "tool_rounds": 8,
+        "max_tool_rounds": 8,
+        "distinct_signatures": 8,
+        "rounds_without_progress": 0,
+        "progress_signal_count": 9,
+        "events": [
+          {
+            "event": "progress",
+            "round": 0,
+            "ts": 1784666851.2595267,
+            "new_signals": [
+              "search_literature::b75a91fe27288712"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 1,
+            "ts": 1784666853.2166266,
+            "tool_name": "search_literature",
+            "signature": "search_literature::b75a91fe27288712"
+          },
+          {
+            "event": "progress",
+            "round": 1,
+            "ts": 1784666854.8865314,
+            "new_signals": [
+              "search_literature::ed9f1a910105c9e0"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 2,
+            "ts": 1784666855.289972,
+            "tool_name": "search_literature",
+            "signature": "search_literature::ed9f1a910105c9e0"
+          },
+          {
+            "event": "progress",
+            "round": 2,
+            "ts": 1784666856.6668367,
+            "new_signals": [
+              "search_literature::ca335ca8ef7ee4d0"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 3,
+            "ts": 1784666857.115363,
+            "tool_name": "search_literature",
+            "signature": "search_literature::ca335ca8ef7ee4d0"
+          },
+          {
+            "event": "progress",
+            "round": 3,
+            "ts": 1784666858.81933,
+            "new_signals": [
+              "search_evidence::3875530037024369"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 4,
+            "ts": 1784666859.2588298,
+            "tool_name": "search_evidence",
+            "signature": "search_evidence::3875530037024369"
+          },
+          {
+            "event": "progress",
+            "round": 4,
+            "ts": 1784666860.5739572,
+            "new_signals": [
+              "search_evidence::0bfdd95d55ce1e6a"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 5,
+            "ts": 1784666861.009009,
+            "tool_name": "search_evidence",
+            "signature": "search_evidence::0bfdd95d55ce1e6a"
+          },
+          {
+            "event": "progress",
+            "round": 5,
+            "ts": 1784666862.2821598,
+            "new_signals": [
+              "search_literature::8a0325d73e228bd2"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 6,
+            "ts": 1784666862.72821,
+            "tool_name": "search_literature",
+            "signature": "search_literature::8a0325d73e228bd2"
+          },
+          {
+            "event": "progress",
+            "round": 6,
+            "ts": 1784666863.9881248,
+            "new_signals": [
+              "search_literature::20ee02fd0f38eb64"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 7,
+            "ts": 1784666864.46565,
+            "tool_name": "search_literature",
+            "signature": "search_literature::20ee02fd0f38eb64"
+          },
+          {
+            "event": "progress",
+            "round": 7,
+            "ts": 1784666865.7666183,
+            "new_signals": [
+              "search_literature::011b07bb2db3c03b"
+            ]
+          },
+          {
+            "event": "tool_round",
+            "round": 8,
+            "ts": 1784666866.144178,
+            "tool_name": "search_literature",
+            "signature": "search_literature::011b07bb2db3c03b"
+          },
+          {
+            "event": "progress",
+            "round": 8,
+            "ts": 1784666867.5643964,
+            "new_signals": [
+              "search_literature::874a9f24073ec9a6"
+            ]
+          },
+          {
+            "event": "loop_guard_triggered",
+            "round": 8,
+            "ts": 1784666868.0196981,
+            "reason": "max_tool_rounds",
+            "limit": 8
+          },
+          {
+            "event": "loop_guard_triggered",
+            "round": 8,
+            "ts": 1784666883.4174569,
+            "reason": "max_tool_rounds",
+            "limit": 8
+          }
+        ]
+      },
+      "failure_manifest": {
+        "run_id": "stage1_A1_131063",
+        "shadow_status": "not_run_due_to_upstream_failure",
+        "manifest_kind": "failure_diagnostic",
+        "status": "failed",
+        "failure_stage": "executor",
+        "failure_reason": "执行出错：max_tool_rounds; 执行出错：max_tool_rounds",
+        "selected_tools": [
+          "list_skills",
+          "query_data_lake",
+          "retrieve_resources",
+          "search_evidence",
+          "search_literature"
+        ],
+        "tool_events": [
+          {
+            "requested": [
+              "search_evidence",
+              "search_literature"
+            ],
+            "executed": [],
+            "observed": []
+          }
+        ],
+        "unauthorized_tool_calls": [],
+        "evidence_cards": [],
+        "claims": [],
+        "note": "{\"consistency\": {\"selected\": [\"list_skills\", \"query_data_lake\", \"retrieve_resources\", \"search_evidence\", \"search_literature\"], \"requested\": [\"search_evidence\", \"search_literature\"], \"executed\": [], \"observed\": [], \"requested_not_executed\": [\"search_evidence\", \"search_evidence\", \"search_literature\", \"search_literature\", \"search_literature\", \"search_literature\", \"search_literature\", \"search_literature\", \"search_literature\"], \"executed_without_tool_message\": [], \"observed_without_request\": [], \"requested_outside_selected\": [], \"unauthorized_executed\": []}, \"budget\": {\"stage\": \"stage1\", \"actual_usd\": 0.072872, \"reserved_open_usd\": 0.0, \"committed_usd\": 0.072872, \"calls_global\": 11, \"calls_by_model\": {\"claude-opus-4-8\": 2, \"deepseek-v4-flash\": 9}, \"calls_by_role\": {\"planner\": 2, \"executor\": 9}, \"cancelled\": false, \"rejected_before_invoke\": 0, \"retries\": 0, \"limits\": {\"max_usd_global\": 25.0, \"max_usd_stage\": 3.0, \"max_usd_task\": 1.5, \"max_calls_global\": 200, \"max_calls_task\": 21, \"max_calls_per_model\": {\"claude-opus-4-8\": 4, \"deepseek-v4-flash\": 17}, \"max_calls_per_role\": {\"planner\": 2, \"verifier\": 2, \"claim_extractor\": 1, \"executor\": 16}, \"task_timeout_s\": 600.0, \"max_retries\": 0}, \"ledger\": \"F:\\\\SSC\\\\My_AGI_MrCat\\\\pilot\\\\round2_results\\\\stage1_ledger.jsonl\"}, \"loop_guard\": {\"tool_rounds\": 8, \"max_tool_rounds\": 8, \"distinct_signatures\": 8, \"rounds_without_progress\": 0, \"progress_signal_count\": 9, \"events\": [{\"event\": \"progress\", \"round\": 0, \"ts\": 1784666851.2595267, \"new_signals\": [\"search_literature::b75a91fe27288712\"]}, {\"event\": \"tool_round\", \"round\": 1, \"ts\": 1784666853.2166266, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::b75a91fe27288712\"}, {\"event\": \"progress\", \"round\": 1, \"ts\": 1784666854.8865314, \"new_signals\": [\"search_literature::ed9f1a910105c9e0\"]}, {\"event\": \"tool_round\", \"round\": 2, \"ts\": 1784666855.289972, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::ed9f1a910105c9e0\"}, {\"event\": \"progress\", \"round\": 2, \"ts\": 1784666856.6668367, \"new_signals\": [\"search_literature::ca335ca8ef7ee4d0\"]}, {\"event\": \"tool_round\", \"round\": 3, \"ts\": 1784666857.115363, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::ca335ca8ef7ee4d0\"}, {\"event\": \"progress\", \"round\": 3, \"ts\": 1784666858.81933, \"new_signals\": [\"search_evidence::3875530037024369\"]}, {\"event\": \"tool_round\", \"round\": 4, \"ts\": 1784666859.2588298, \"tool_name\": \"search_evidence\", \"signature\": \"search_evidence::3875530037024369\"}, {\"event\": \"progress\", \"round\": 4, \"ts\": 1784666860.5739572, \"new_signals\": [\"search_evidence::0bfdd95d55ce1e6a\"]}, {\"event\": \"tool_round\", \"round\": 5, \"ts\": 1784666861.009009, \"tool_name\": \"search_evidence\", \"signature\": \"search_evidence::0bfdd95d55ce1e6a\"}, {\"event\": \"progress\", \"round\": 5, \"ts\": 1784666862.2821598, \"new_signals\": [\"search_literature::8a0325d73e228bd2\"]}, {\"event\": \"tool_round\", \"round\": 6, \"ts\": 1784666862.72821, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::8a0325d73e228bd2\"}, {\"event\": \"progress\", \"round\": 6, \"ts\": 1784666863.9881248, \"new_signals\": [\"search_literature::20ee02fd0f38eb64\"]}, {\"event\": \"tool_round\", \"round\": 7, \"ts\": 1784666864.46565, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::20ee02fd0f38eb64\"}, {\"event\": \"progress\", \"round\": 7, \"ts\": 1784666865.7666183, \"new_signals\": [\"search_literature::011b07bb2db3c03b\"]}, {\"event\": \"tool_round\", \"round\": 8, \"ts\": 1784666866.144178, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::011b07bb2db3c03b\"}, {\"event\": \"progress\", \"round\": 8, \"ts\": 1784666867.5643964, \"new_signals\": [\"search_literature::874a9f24073ec9a6\"]}, {\"event\": \"loop_guard_triggered\", \"round\": 8, \"ts\": 1784666868.0196981, \"reason\": \"max_tool_rounds\", \"limit\": 8}, {\"event\": \"loop_guard_triggered\", \"round\": 8, \"ts\": 1784666883.4174569, \"reason\": \"max_tool_rounds\", \"limit\": 8}]}}",
+        "manifest_schema_version": "runmanifest-v1",
+        "phi_warning": "本 manifest 可能含科研文本；不得保存患者可识别信息(PHI)/密钥/授权头，已递归脱敏。"
+      },
+      "cost": {
+        "stage": "stage1",
+        "actual_usd": 0.072872,
+        "reserved_open_usd": 0.0,
+        "committed_usd": 0.072872,
+        "calls_global": 11,
+        "calls_by_model": {
+          "claude-opus-4-8": 2,
+          "deepseek-v4-flash": 9
+        },
+        "calls_by_role": {
+          "planner": 2,
+          "executor": 9
+        },
+        "cancelled": false,
+        "rejected_before_invoke": 0,
+        "retries": 0,
+        "limits": {
+          "max_usd_global": 25.0,
+          "max_usd_stage": 3.0,
+          "max_usd_task": 1.5,
+          "max_calls_global": 200,
+          "max_calls_task": 21,
+          "max_calls_per_model": {
+            "claude-opus-4-8": 4,
+            "deepseek-v4-flash": 17
+          },
+          "max_calls_per_role": {
+            "planner": 2,
+            "verifier": 2,
+            "claim_extractor": 1,
+            "executor": 16
+          },
+          "task_timeout_s": 600.0,
+          "max_retries": 0
+        },
+        "ledger": "F:\\SSC\\My_AGI_MrCat\\pilot\\round2_results\\stage1_ledger.jsonl"
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "ledger_lines_before": 38,
+  "run_dirs_before": [
+    "20260721_105710_77ea9469",
+    "acceptance_run"
+  ],
+  "started_at": 1784666825.5843544,
+  "ledger_lines_after": 60,
+  "new_run_dirs": [
+    "20260721_224715_12339e0e"
+  ],
+  "finished_at": 1784666883.916641
+}
