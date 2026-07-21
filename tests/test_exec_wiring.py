@@ -218,15 +218,18 @@ def test_classify_executor_failure():
 
 
 @pytest.mark.unit
-def test_tool_callbacks_attached_to_real_skill_tools(tmp_path):
-    """工具回调确实挂到了真实技能工具对象上（只记录、不阻断）。"""
-    trace, guard, hooks, attached = EW.install(
-        run_id="r", trace_path=tmp_path / "t.jsonl")
-    assert len(attached) >= 10, f"只挂上了 {len(attached)} 个工具"
+def test_skill_tools_are_wrapped_in_lifecycle_proxy(tmp_path):
+    """【A.6.6】技能工具被换成 ToolLifecycleProxy —— 观察点在底层函数边界上，
+    不再依赖已被证明不可靠的"事后赋 callbacks"。"""
     import ssc_skill_agent as SK
-    t = SK.SKILL_AGENT_TOOLS[0]
-    assert t.callbacks and isinstance(t.callbacks[0], EW.ToolTraceCallback)
-    # 回调不得阻断：未知回调一律 no-op
-    cb = t.callbacks[0]
-    cb.on_llm_start({}, [])
-    cb.on_chain_error(RuntimeError("x"))
+    from pilot.tool_proxy import ToolLifecycleProxy, assert_contract_equivalent
+
+    originals = {t.name: t for t in SK.SKILL_AGENT_TOOLS}
+    trace, guard, hooks, wrapped = EW.install(
+        run_id="r", trace_path=tmp_path / "t.jsonl")
+    assert len(wrapped) >= 10, f"只包了 {len(wrapped)} 个工具"
+    for t in SK.SKILL_AGENT_TOOLS:
+        assert isinstance(t, ToolLifecycleProxy), f"{t.name} 未被代理"
+        orig = originals.get(t.name)
+        if orig is not None and not isinstance(orig, ToolLifecycleProxy):
+            assert assert_contract_equivalent(t, orig) is True

@@ -47,14 +47,28 @@ class ExecutorHooks:
             next_graph_node=("tools" if tool_calls else "END"),
             termination_reason=(None if tool_calls else "no_tool_calls"))
         self.pending_tool_calls = [tc for tc in tool_calls if isinstance(tc, dict)]
-        # 进展信号：本轮请求的工具调用签名（确定性，不问 LLM）
-        from pilot.loop_guard import call_signature
-        self.guard.record_progress([call_signature(tc.get("name"), tc.get("args"))
-                                    for tc in self.pending_tool_calls])
+        # 【A.6.6 §5】**请求本身不算进展**。新 tool_call_id / 新 arguments_hash /
+        # 新工具名 / 新请求参数 / 新模型正文 / 新 finish_reason 都不能重置 no-progress。
+        # 进展只由**执行/观察侧**的确定性新结果产生 —— 由 ToolLifecycleProxy 在
+        # 工具真实返回后调用 guard.record_progress(...)。
+        #
+        # 因此这里只在"本轮模型没有请求任何工具"时记一次无进展轮：
+        # 那意味着这一轮既不会有工具执行，也就不可能产生新的观察结果。
+        if not self.pending_tool_calls:
+            self.guard.record_progress([])
 
 
 class ToolTraceCallback:
-    """LangChain 工具回调：**只记录，不阻断**（强制在 pre_invoke 那一层做）。"""
+    """【已弃用，A.6.6】事后给 `BaseTool.callbacks` 赋值的接线方式。
+
+    离线真实 Agent 探针（`tests/test_tool_lifecycle_probe.py`）证明：在
+    `langchain.agents.create_agent` 的 ToolNode 路径下，**工具确实执行、
+    ToolMessage 确实生成，但本回调一条都不会触发** —— 这正是 A1-rerun 中
+    `executed=[]` / `observed=[]` 的成因（可观测性失败，而非工具未执行）。
+
+    `install()` 已改用 `pilot.tool_proxy.ToolLifecycleProxy`。
+    此类仅保留给那份反例测试作证据，**不要用于新接线**。
+    """
 
     raise_error = False
     ignore_llm = True
@@ -119,19 +133,24 @@ def install(*, run_id, trace_path, selected_tools=None, max_tool_rounds=None,
     guard = ExecutorLoopGuard(**kw)
     hooks = ExecutorHooks(trace, guard)
 
-    cb = ToolTraceCallback(trace)
-    attached = []
+    # 【A.6.6 §3】不再依赖"事后给 BaseTool 赋 callbacks" —— 离线真实 Agent 探针证明
+    # 那条路在 create_agent 的 ToolNode 下**不可靠**（工具执行了但回调不触发）。
+    # 改为把技能工具整体换成 ToolLifecycleProxy，观察点落在底层函数调用边界上。
+    from pilot.tool_proxy import assert_contract_equivalent, wrap_tools
+
+    wrapped = []
     try:
         import ssc_skill_agent as SK
-        for t in getattr(SK, "SKILL_AGENT_TOOLS", []) or []:
-            try:
-                t.callbacks = [cb]          # 运行时挂载，不改源码
-                attached.append(t.name)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return trace, guard, hooks, attached
+        originals = list(getattr(SK, "SKILL_AGENT_TOOLS", []) or [])
+        proxies = wrap_tools(originals, trace=trace, guard=guard,
+                             allowed=selected_tools)
+        for p, o in zip(proxies, originals):
+            assert_contract_equivalent(p, o)      # 契约不等价即拒绝启动
+            wrapped.append(p.name)
+        SK.SKILL_AGENT_TOOLS = proxies            # 运行时替换，不改源码
+    except Exception as e:
+        raise RuntimeError(f"工具生命周期代理安装失败，拒绝启动：{e}")
+    return trace, guard, hooks, wrapped
 
 
 def classify_executor_failure(exc):
