@@ -294,8 +294,16 @@ def test_a1_scene_files_unmodified():
         f = ROOT / rel
         if not f.exists():
             continue                      # 非本机环境（如 CI 干净检出）：跳过该文件
-        # 用 **LF 规范化** 后的 hash 比对：被跟踪的文本文件在 Windows 检出时会变成 CRLF，
-        # 原始字节 hash 会假报"被改动"（与 CI #25 同一类问题）。
+        # 【A.6.6 §6】共享 append-only 账本用**前缀语义**校验：
+        # 多次 run 共用同一账本，合法追加会改变整文件 hash，但历史前缀必须逐字节不变。
+        if rel.endswith("_ledger.jsonl"):
+            from pilot.ledger_integrity import verify_append_only
+            r = verify_append_only(f, original_length=meta["size"],
+                                   original_prefix_sha256=meta["sha256"])
+            assert r["violations"] == [], f"账本历史前缀被破坏：{rel} -> {r}"
+            checked += 1
+            continue
+        # 其余冻结产物：LF 规范化后整文件 hash 必须相等
         raw = f.read_bytes()
         assert hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest() == meta["sha256_lf"], \
             f"现场文件被改动：{rel}"

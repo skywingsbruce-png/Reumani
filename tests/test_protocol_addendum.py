@@ -121,6 +121,14 @@ def test_a1_scene_untouched_by_addendum():
         f = ROOT / rel
         if not f.exists():
             continue
+        # 共享 append-only 账本用前缀语义（A.6.6 §6）：合法追加不算篡改
+        if rel.endswith("_ledger.jsonl"):
+            from pilot.ledger_integrity import verify_append_only
+            r = verify_append_only(f, original_length=meta["size"],
+                                   original_prefix_sha256=meta["sha256"])
+            assert r["violations"] == [], f"账本历史前缀被破坏：{rel} -> {r}"
+            checked += 1
+            continue
         assert lf_sha256(f) == meta["sha256_lf"], f"A1 现场被改动：{rel}"
         checked += 1
     if checked == 0:
