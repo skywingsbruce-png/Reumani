@@ -73,13 +73,31 @@ def resolve(names):
     return [TOOL_POLICIES[n] for n in names]
 
 
+# 精确 ID 路由：问题里出现可提取的 PMID / DOI 时必须进入的工具
+EXACT_ID_TOOLS = ("search_evidence",)
+
+
+def routing_mode(query):
+    """确定性路由判定：能提取到 PMID 或 DOI → exact_id，否则 semantic。
+    只看能否**提取**，不看该标识符是否真实存在——不存在也要走精确查询并如实返回 zero_hits。"""
+    from ids import extract_dois, extract_pmids
+    q = query or ""
+    pmids, dois = extract_pmids(q), extract_dois(q)
+    return ("exact_id" if (pmids or dois) else "semantic"), pmids, dois
+
+
 def select_tool_names(query):
-    """确定性选出本任务相关工具：安全核心 + 关键词命中。不交给 LLM 决定。"""
+    """确定性选出本任务相关工具：安全核心 + 关键词命中 + 精确 ID 路由。不交给 LLM 决定。"""
     q = (query or "").lower()
     sel = {n for n, p in TOOL_POLICIES.items() if p.core}
     for n, p in TOOL_POLICIES.items():
         if any(k.lower() in q for k in p.keywords):
             sel.add(n)
+    # 问题含可提取的 PMID/DOI → 精确核验工具必须在集合内，
+    # 且不因为标识符可能不存在就退回语义检索（search_literature 只做辅助）。
+    mode, _pmids, _dois = routing_mode(query)
+    if mode == "exact_id":
+        sel.update(n for n in EXACT_ID_TOOLS if n in TOOL_POLICIES)
     return sorted(sel)
 
 

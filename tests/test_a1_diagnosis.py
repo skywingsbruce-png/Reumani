@@ -98,20 +98,21 @@ def test_tool_schema_actually_reaches_the_model(tmp_path):
 
 
 @pytest.mark.unit
-def test_runnable_config_methods_escape_the_gate(tmp_path):
-    """**已知缺陷取证**：__getattr__ 把 with_config / with_retry 透传给底层，
-    返回的是**未包装**对象 → 存在绕过闸门的路径。当前 LangGraph 路径未使用它们，
-    但这是真实的逃逸口。本测试锁定现状，不做修复。"""
+def test_runnable_config_escapes_are_now_closed(tmp_path):
+    """A.6.4 在此处取证到的缺陷：`__getattr__` 把 `with_config` / `with_retry`
+    透传给底层，返回**未包装**对象 → 可绕过闸门。
+
+    **A.6.5 已封堵**：`with_config` 等派生方法重新包回同一 gate；
+    `with_retry` / `with_fallbacks` 直接拒绝。本测试改为断言封堵后的行为。"""
+    from pilot.hard_gate import GateConfigError
     g = mkgate(tmp_path)
     inner = RecordingChat()
     gm = GatedModel(inner, g, role="executor", model_id="fake-model", max_tokens=3000)
-    escapes = []
-    for meth in ("with_config", "with_retry"):
-        obj = getattr(gm, meth)()
-        if not getattr(obj, WRAPPED, False):
-            escapes.append(meth)
-    assert escapes == ["with_config", "with_retry"], \
-        f"逃逸口集合发生变化，需要重新评估：{escapes}"
+    rewrapped = gm.with_config()
+    assert getattr(rewrapped, WRAPPED, False) is True
+    assert object.__getattribute__(rewrapped, "_gate") is g
+    with pytest.raises(GateConfigError, match="禁止任何自动重试"):
+        gm.with_retry()
 
 
 # ---------- §4：ReAct 终止逻辑 ----------
@@ -229,34 +230,36 @@ def test_invalid_tool_calls_are_visible_not_swallowed(tmp_path):
 
 # ---------- §5：工具路由 ----------
 @pytest.mark.unit
-def test_id_extraction_asymmetry_pmid_yes_bare_doi_no():
-    """**根因取证**：A1 的 PMID 能被提取，**裸 DOI 不能**。
+def test_id_extraction_now_covers_bare_doi():
+    """A.6.4 在此处取证到的缺陷：`extract_dois()` 只匹配 doi.org URL，
+    裸 DOI 提取不到，而 `valid_doi()` 却认为同一个裸 DOI 合法（两套口径）。
 
-    `ids.extract_dois()` 只匹配 `_DOI_URL`（doi.org/… 形式），
-    文本里的 `DOI 10.1080/…` 提取不到；而 `ids.valid_doi()` 对同一个裸 DOI 返回 True
-    —— 提取器与校验器口径不一致。这是精确 ID 路由失效的直接前置原因。
-    （刻画现状，本轮不修复。）"""
+    **A.6.5 已修复**：提取器与校验器统一到 `valid_doi` 这一个权威。
+    本测试改为断言修复后的行为；A.6.4 的原始诊断报告保持不变。"""
     import ids
     from pilot.round2_tasks import TASKS
     q = TASKS["A1"]["question"]
     bare_doi = "10.1080/03009742.2024.2302553"
-    assert ids.extract_pmids(q) == ["41657283"]          # PMID 可提取
-    assert ids.extract_dois(q) == []                      # 裸 DOI 提取不到
-    assert ids.valid_doi(bare_doi) is True                # 但校验器认为它合法
-    assert ids.extract_dois(f"https://doi.org/{bare_doi}") == [bare_doi]  # URL 形式才行
+    assert ids.extract_pmids(q) == ["41657283"]
+    assert ids.extract_dois(q) == [bare_doi]              # 修复前是 []
+    assert ids.valid_doi(bare_doi) is True
+    assert ids.extract_dois(f"https://doi.org/{bare_doi}") == [bare_doi]
 
 
 @pytest.mark.unit
-def test_a1_tool_selection_snapshot():
-    """取证：确定性选择器对 A1 实际选出哪些工具（记录现状，不修改路由）。"""
+def test_a1_tool_selection_after_routing_fix():
+    """A1 真实运行时选中的是 list_skills / query_data_lake / retrieve_resources /
+    search_literature —— **不含** search_evidence，这是 A.6.4 取证到的路由缺陷。
+
+    **A.6.5 已修复**：含可提取 PMID/DOI 的问题走 exact_id 路由，
+    search_evidence 必进工具集。本测试改为断言修复后的行为。"""
     from pilot.round2_tasks import TASKS
-    from tool_registry import select_tool_names
-    sel = select_tool_names(TASKS["A1"]["question"])
-    assert isinstance(sel, list) and sel
-    # A1 运行时实际选中的四个工具（现场记录）
-    assert "search_evidence" not in sel, \
-        f"选择器行为已改变，需重新评估根因：{sel}"
-    assert "search_literature" in sel
+    from tool_registry import routing_mode, select_tool_names
+    q = TASKS["A1"]["question"]
+    assert routing_mode(q)[0] == "exact_id"
+    sel = select_tool_names(q)
+    assert "search_evidence" in sel          # 修复前不在集合里
+    assert "search_literature" in sel        # 辅助工具仍保留
 
 
 @pytest.mark.unit
