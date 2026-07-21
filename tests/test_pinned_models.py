@@ -182,12 +182,17 @@ def test_price_numbers_live_in_exactly_one_production_file():
 
 @pytest.mark.unit
 def test_no_second_price_table_structure_anywhere():
-    """结构性检查：除 prices.py 外，任何生产文件都不得出现单价表结构。"""
+    """结构性检查：除 prices.py 外，任何生产文件都不得出现单价表结构。
+
+    注意匹配必须是**价格形状**（"input"/"output" 映射到数值），
+    不能是任意含 "input" 键的字典 —— 否则会把工具回调之类的正常代码误报为价格表。
+    """
     offenders = {}
     for f in PROD_PILOT_FILES:
         s = f.read_text(encoding="utf-8")
-        bad = [k for k in ("usd_per_mtok", "PRICES_PER_MTOK", '"input": ', "per_mtok")
-               if k in s]
+        bad = [k for k in ("usd_per_mtok", "PRICES_PER_MTOK", "per_mtok") if k in s]
+        if re.search(r'"(input|output)"\s*:\s*[0-9]+\.?[0-9]*\s*[,}]', s):
+            bad.append("price-shaped dict")
         if bad:
             offenders[f.name] = bad
     assert not offenders, f"发现第二份价格表结构：{offenders}"

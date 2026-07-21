@@ -18,8 +18,17 @@ sys.path.insert(0, str(BASE))
 
 from pilot.hard_gate import (BudgetExceeded, GateConfigError, HardBudgetGate,  # noqa: E402
                              assert_all_paid_entrypoints_wrapped, wrap_all)
+from pilot import exec_wiring as PT_WIRE                      # noqa: E402
 from pilot import paid_transport as PT                        # noqa: E402
+from pilot.executor_trace import build_failure_manifest        # noqa: E402
 from pilot.round2_tasks import TASKS                          # noqa: E402
+
+
+def _failure_manifest(trace, guard, gate, *, run_id, reason):
+    """Executor 失败也要有可审计的诊断 Manifest（不是科研结论 Manifest）。"""
+    return build_failure_manifest(
+        run_id=run_id, failure_stage="executor", failure_reason=reason,
+        trace=trace, budget_summary=gate.summary(), guard_summary=guard.summary())
 
 OUT = BASE / "pilot" / "round2_results"
 
@@ -137,6 +146,14 @@ def run_stage(stage, task_ids):
         print(f"\n=== [{stage}] {tid} ===\n{task['question'][:90]}…")
         gate.start_task(tid)
         t0 = time.monotonic()
+        # 接线：事件轨迹 + 循环护栏挂进真实执行路径（模型侧硬中止，工具侧只记录）
+        import tool_registry as _TR
+        trace, guard, hooks, attached = PT_WIRE.install(
+            run_id=f"{stage}_{tid}_{int(t0)}",
+            trace_path=OUT / f"{stage}_{tid}_executor_trace.jsonl",
+            selected_tools=_TR.select_tool_names(task["question"]))
+        object.__setattr__(roles["executor"], "_hooks", hooks)
+        print(f"  轨迹已接线（工具回调 {len(attached)} 个）")
         try:
             state = run_agent(task["question"], constraints=task.get("constraints", ""),
                               max_iterations=2, shadow=True,
@@ -144,6 +161,12 @@ def run_stage(stage, task_ids):
                               verifier_model=roles["verifier"])
             m = _metrics(state, task, time.monotonic() - t0)
             m["error"] = None
+            m["executor_trace"] = trace.consistency()
+            m["loop_guard"] = guard.summary()
+            if state.errors:                       # Executor 失败但外层已 fail-closed
+                m["failure_manifest"] = _failure_manifest(
+                    trace, guard, gate, run_id=trace.run_id,
+                    reason="; ".join(str(e)[:120] for e in state.errors[:2]))
         except (BudgetExceeded, GateConfigError) as e:
             halted = f"{tid}: {type(e).__name__}: {e}"
             print(f"  !! 硬闸门触发（网络请求前拒绝），立即停止：{e}")
@@ -151,7 +174,12 @@ def run_stage(stage, task_ids):
         except Exception as e:
             m = {"task_id": tid, "error": f"{type(e).__name__}: {e}",
                  "traceback": traceback.format_exc()[-1500:],
-                 "seconds": round(time.monotonic() - t0, 2)}
+                 "seconds": round(time.monotonic() - t0, 2),
+                 "executor_trace": trace.consistency(),
+                 "loop_guard": guard.summary(),
+                 "failure_manifest": _failure_manifest(
+                     trace, guard, gate, run_id=trace.run_id,
+                     reason=PT_WIRE.classify_executor_failure(e))}
             print(f"  !! 运行异常（记录不修代码）：{type(e).__name__}: {e}")
         finally:
             gate.end_task()

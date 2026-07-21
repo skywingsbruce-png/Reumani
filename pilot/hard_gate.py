@@ -325,12 +325,13 @@ _FORBIDDEN_DERIVATIONS = {
 class GatedModel:
     """包住 LangChain chat model。任何 _METHODS 在进入底层实现之前先过 gate.before_call()。"""
 
-    def __init__(self, inner, gate, *, role, model_id, max_tokens=None):
+    def __init__(self, inner, gate, *, role, model_id, max_tokens=None, hooks=None):
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_gate", gate)
         object.__setattr__(self, "_role", role)
         object.__setattr__(self, "_model_id", model_id)
         object.__setattr__(self, "_max_tokens", max_tokens)
+        object.__setattr__(self, "_hooks", hooks)
         object.__setattr__(self, _WRAPPED, True)
 
     def __getattr__(self, name):
@@ -364,7 +365,8 @@ class GatedModel:
         return GatedModel(obj, object.__getattribute__(self, "_gate"),
                           role=object.__getattribute__(self, "_role"),
                           model_id=object.__getattribute__(self, "_model_id"),
-                          max_tokens=object.__getattribute__(self, "_max_tokens"))
+                          max_tokens=object.__getattribute__(self, "_max_tokens"),
+                          hooks=object.__getattribute__(self, "_hooks"))
 
     def _gated(self, name):
         inner = object.__getattribute__(self, "_inner")
@@ -374,7 +376,12 @@ class GatedModel:
         mt = object.__getattribute__(self, "_max_tokens")
         target = getattr(inner, name)
 
+        hooks = object.__getattribute__(self, "_hooks")
+
         def sync_call(*a, **k):
+            # pre_invoke 在**网络请求之前**执行；循环护栏在此硬中止，与预算闸门同级。
+            if hooks is not None and hasattr(hooks, "pre_invoke"):
+                hooks.pre_invoke(role=role, model_id=model_id)
             uid, worst = gate.before_call(model_id=model_id, role=role,
                                           payload=a[0] if a else k, max_tokens=mt)
             try:
@@ -383,6 +390,8 @@ class GatedModel:
                 gate.failed_call(uid, model_id, worst, request_sent=True, error=e)
                 raise
             _settle(gate, uid, model_id, worst, res)
+            if hooks is not None and hasattr(hooks, "post_response"):
+                hooks.post_response(role=role, model_id=model_id, response=res)
             return res
 
         async def async_call(*a, **k):
@@ -405,7 +414,8 @@ class GatedModel:
         return GatedModel(inner.bind_tools(*a, **k), gate,
                           role=object.__getattribute__(self, "_role"),
                           model_id=object.__getattribute__(self, "_model_id"),
-                          max_tokens=object.__getattribute__(self, "_max_tokens"))
+                          max_tokens=object.__getattribute__(self, "_max_tokens"),
+                          hooks=object.__getattribute__(self, "_hooks"))
 
     def bind(self, *a, **k):
         inner = object.__getattribute__(self, "_inner")
@@ -413,7 +423,8 @@ class GatedModel:
         return GatedModel(inner.bind(*a, **k), gate,
                           role=object.__getattribute__(self, "_role"),
                           model_id=object.__getattribute__(self, "_model_id"),
-                          max_tokens=object.__getattribute__(self, "_max_tokens"))
+                          max_tokens=object.__getattribute__(self, "_max_tokens"),
+                          hooks=object.__getattribute__(self, "_hooks"))
 
 
 def _settle(gate, uid, model_id, worst, res):
