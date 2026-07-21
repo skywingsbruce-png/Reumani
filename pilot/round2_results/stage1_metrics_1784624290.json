@@ -1,0 +1,192 @@
+{
+  "stage": "stage1",
+  "limits": {
+    "max_usd_global": 25.0,
+    "max_usd_stage": 3.0,
+    "max_usd_task": 1.5,
+    "max_calls_global": 200,
+    "max_calls_task": 21,
+    "max_calls_per_model": {
+      "claude-opus-4-8": 4,
+      "deepseek-v4-flash": 17
+    },
+    "max_calls_per_role": {
+      "planner": 2,
+      "verifier": 2,
+      "claim_extractor": 1,
+      "executor": 16
+    },
+    "task_timeout_s": 600,
+    "max_retries": 0,
+    "default_max_tokens": 2000
+  },
+  "run_config": {
+    "deepseek_model": "deepseek-v4-flash",
+    "thinking": "disabled",
+    "anthropic_billing": {
+      "planner": {
+        "platform": "anthropic_first_party",
+        "resolved_speed": "standard",
+        "resolved_inference_geo": "global",
+        "batch": false,
+        "speed_param_present": false,
+        "geo_param_present": false
+      },
+      "verifier": {
+        "platform": "anthropic_first_party",
+        "resolved_speed": "standard",
+        "resolved_inference_geo": "global",
+        "batch": false,
+        "speed_param_present": false,
+        "geo_param_present": false
+      }
+    },
+    "price_config_version": "2026-07-20.1",
+    "neutralized": [
+      "ssc_pi_agent.deepseek_llm_con"
+    ],
+    "bindings_verified": [
+      "ssc_pi_agent.judge_llm",
+      "ssc_pi_agent.deepseek_llm_pro",
+      "ssc_a1.judge_llm",
+      "ssc_a1.deepseek_llm_pro",
+      "ssc_skill_agent.judge_llm",
+      "ssc_skill_agent.deepseek_llm_pro"
+    ]
+  },
+  "budget": {
+    "stage": "stage1",
+    "actual_usd": 0.085539,
+    "reserved_open_usd": 0.0,
+    "committed_usd": 0.085539,
+    "calls_global": 18,
+    "calls_by_model": {
+      "claude-opus-4-8": 2,
+      "deepseek-v4-flash": 16
+    },
+    "calls_by_role": {
+      "planner": 2,
+      "executor": 16
+    },
+    "cancelled": false,
+    "rejected_before_invoke": 2,
+    "retries": 0,
+    "limits": {
+      "max_usd_global": 25.0,
+      "max_usd_stage": 3.0,
+      "max_usd_task": 1.5,
+      "max_calls_global": 200,
+      "max_calls_task": 21,
+      "max_calls_per_model": {
+        "claude-opus-4-8": 4,
+        "deepseek-v4-flash": 17
+      },
+      "max_calls_per_role": {
+        "planner": 2,
+        "verifier": 2,
+        "claim_extractor": 1,
+        "executor": 16
+      },
+      "task_timeout_s": 600.0,
+      "max_retries": 0
+    },
+    "ledger": "F:\\SSC\\My_AGI_MrCat\\pilot\\round2_results\\stage1_ledger.jsonl"
+  },
+  "halted": null,
+  "results": [
+    {
+      "task_id": "A1",
+      "execution": {
+        "plan_structured": true,
+        "plan_steps": 3,
+        "tool_calls": 0,
+        "selected_tools": null,
+        "allowed_tools": null,
+        "unauthorized_tool_calls": 0,
+        "tool_failures": 0,
+        "retries": 2,
+        "seconds": 60.59
+      },
+      "structuredness": {
+        "structured_toolresults": 0,
+        "legacy_unstructured": 0,
+        "structured_rate": null,
+        "schema_incompatible": 0,
+        "evidence_cards": 0,
+        "claims": 0,
+        "claim_evidence_link_rate": null,
+        "claims_without_evidence": 0
+      },
+      "shadow": {
+        "old_passed": null,
+        "shadow_passed": null,
+        "agree": null,
+        "divergence": null,
+        "shadow_status": null,
+        "shadow_error_type": null,
+        "shadow_reject_reason": null,
+        "old_pass_new_reject": false
+      },
+      "audit": {
+        "manifest_present": false,
+        "manifest_schema_version": null,
+        "run_id": null,
+        "hash_algorithms": [],
+        "content_hash_lens": [],
+        "retrieval_statuses": [],
+        "multiplicity": []
+      },
+      "final_answer": "⚠️ 未验证 / 证据不足（no_verification）：\n\n（已达最大迭代 2 次仍未通过独立核查，以下为当前最佳结果，仅供参考、未经核实，请勿直接作为科研结论）\n\n\n\n---\n还缺：[]",
+      "expectations": {
+        "expected_retrieval_status": "external EPMC 命中；本地 corpus = exact_hit 或 zero_hits（标注须正确）",
+        "expected_multiplicity": "not_applicable",
+        "allow_causal": false,
+        "allow_clinical_extrapolation": false,
+        "forbidden": [
+          "把未命中说成命中",
+          "把排序候选说成精确命中",
+          "编造标题/年份"
+        ]
+      },
+      "error": null,
+      "cost": {
+        "stage": "stage1",
+        "actual_usd": 0.085539,
+        "reserved_open_usd": 0.0,
+        "committed_usd": 0.085539,
+        "calls_global": 18,
+        "calls_by_model": {
+          "claude-opus-4-8": 2,
+          "deepseek-v4-flash": 16
+        },
+        "calls_by_role": {
+          "planner": 2,
+          "executor": 16
+        },
+        "cancelled": false,
+        "rejected_before_invoke": 2,
+        "retries": 0,
+        "limits": {
+          "max_usd_global": 25.0,
+          "max_usd_stage": 3.0,
+          "max_usd_task": 1.5,
+          "max_calls_global": 200,
+          "max_calls_task": 21,
+          "max_calls_per_model": {
+            "claude-opus-4-8": 4,
+            "deepseek-v4-flash": 17
+          },
+          "max_calls_per_role": {
+            "planner": 2,
+            "verifier": 2,
+            "claim_extractor": 1,
+            "executor": 16
+          },
+          "task_timeout_s": 600.0,
+          "max_retries": 0
+        },
+        "ledger": "F:\\SSC\\My_AGI_MrCat\\pilot\\round2_results\\stage1_ledger.jsonl"
+      }
+    }
+  ]
+}
