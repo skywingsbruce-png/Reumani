@@ -50,6 +50,8 @@ WHITELIST = {
     "evidence_cards", "claims", "claim_extraction_error", "any_tool_failed",
     "old_verifier_result", "shadow_verifier_result", "comparison", "note",
     "manifest_schema_version", "phi_warning", "_size_note",
+    # 失败诊断 Manifest 的审计字段（A.6.5 §8）：全部是枚举/短字符串，无敏感内容
+    "manifest_kind", "status", "failure_stage", "failure_reason",
 }
 
 

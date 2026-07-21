@@ -311,6 +311,16 @@ def _norm(model_id):
 _WRAPPED = "_reumani_hard_gate_wrapped"
 _METHODS = ("invoke", "ainvoke", "stream", "astream", "batch", "abatch")
 
+# 会返回**新 Runnable/模型对象**的派生方法：返回值必须重新包回同一 gate。
+_REWRAP_DERIVATIONS = ("with_config", "with_types", "with_listeners",
+                       "with_alisteners", "configurable_fields",
+                       "configurable_alternatives", "assign", "pick")
+# 直接拒绝的派生方法：Pilot 语义上不允许。
+_FORBIDDEN_DERIVATIONS = {
+    "with_retry": "Pilot 强制 max_retries=0，禁止任何自动重试",
+    "with_fallbacks": "fallback 模型未经审计（模型ID/价格/thinking 均不可控）",
+}
+
 
 class GatedModel:
     """包住 LangChain chat model。任何 _METHODS 在进入底层实现之前先过 gate.before_call()。"""
@@ -327,7 +337,34 @@ class GatedModel:
         inner = object.__getattribute__(self, "_inner")
         if name in _METHODS:
             return object.__getattribute__(self, "_gated")(name)
-        return getattr(inner, name)
+        if name in _FORBIDDEN_DERIVATIONS:
+            def _refuse(*a, **k):
+                raise GateConfigError(
+                    f"Pilot 禁止 {name}()：{_FORBIDDEN_DERIVATIONS[name]}")
+            return _refuse
+        attr = getattr(inner, name)
+        if name in _REWRAP_DERIVATIONS and callable(attr):
+            # 任何会返回新 Runnable/模型对象的派生方法，返回值必须重新包回
+            # 同一 gate / role / 账本，否则就是一条可直接联网的裸客户端路径。
+            def _rewrapped(*a, **k):
+                return object.__getattribute__(self, "_wrap_like")(attr(*a, **k))
+            return _rewrapped
+        if callable(attr) and name.startswith("with_"):
+            # 未知的 with_* 派生方法 → fail-closed，不放行未审计的逃逸口
+            def _unknown(*a, **k):
+                raise GateConfigError(
+                    f"未审计的 Runnable 派生方法 {name}()：可能返回裸付费客户端 → 拒绝")
+            return _unknown
+        return attr
+
+    def _wrap_like(self, obj):
+        """把派生出的对象重新包成同 gate / role / 账本 / max_tokens 的 GatedModel。"""
+        if obj is None or getattr(obj, _WRAPPED, False):
+            return obj
+        return GatedModel(obj, object.__getattribute__(self, "_gate"),
+                          role=object.__getattribute__(self, "_role"),
+                          model_id=object.__getattribute__(self, "_model_id"),
+                          max_tokens=object.__getattribute__(self, "_max_tokens"))
 
     def _gated(self, name):
         inner = object.__getattribute__(self, "_inner")
