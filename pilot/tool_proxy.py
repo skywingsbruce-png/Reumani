@@ -30,8 +30,10 @@ class ToolLifecycleProxy(BaseTool):
     trace: object = None
     guard: object = None
     allowed: object = None
+    reconciler: object = None
 
-    def __init__(self, inner, trace=None, guard=None, allowed=None, **kw):
+    def __init__(self, inner, trace=None, guard=None, allowed=None,
+                 reconciler=None, **kw):
         super().__init__(
             name=inner.name,
             description=inner.description,
@@ -45,6 +47,7 @@ class ToolLifecycleProxy(BaseTool):
         object.__setattr__(self, "trace", trace)
         object.__setattr__(self, "guard", guard)
         object.__setattr__(self, "allowed", set(allowed) if allowed else None)
+        object.__setattr__(self, "reconciler", reconciler)
 
     # ---- 记录helpers：自身异常绝不影响工具语义 ----
     def _safe(self, fn, *a, **k):
@@ -64,32 +67,59 @@ class ToolLifecycleProxy(BaseTool):
         # 重复/循环/轮数护栏：同样在底层函数之前
         if self.guard is not None:
             self.guard.before_tool_round(self.name, kwargs)
+        # 【§3】start 事件写入失败 → **不允许底层工具执行**，fail-closed
         if self.trace is not None:
-            self._safe(self.trace.record_tool_start, tool_call_id=call_id,
-                       tool_name=self.name, arguments=kwargs)
+            try:
+                self.trace.record_tool_start(tool_call_id=call_id,
+                                             tool_name=self.name, arguments=kwargs)
+            except Exception as e:
+                from pilot.lifecycle import TRACE_START_FAILED, LifecycleError
+                raise LifecycleError(TRACE_START_FAILED,
+                                     {"tool": self.name, "error": type(e).__name__,
+                                      "message": str(e)[:200]}) from e
+        rec = object.__getattribute__(self, "reconciler")
+        if rec is not None:
+            rec.mark_executed(call_id, self.name)       # executed：底层函数开始之前
         return time.time()
 
     def _after_ok(self, result, call_id, started):
+        """底层函数正常返回 → 只记 `tool_returned`。
+        **绝不**在此推测 observed —— observed 必须等真实 ToolMessage 进入消息状态。"""
         content, artifact = self._split(result)
+        text = content if isinstance(content, str) else str(content)
+        rhash = compute_hash(text)
+        rec = object.__getattribute__(self, "reconciler")
+        if rec is not None:
+            r = rec.mark_returned(call_id, self.name, result_hash=rhash)
+            r["progress_extra"] = self._progress_signals(content, artifact)
         if self.trace is not None:
-            self._safe(self.trace.record_tool_end, tool_call_id=call_id,
-                       tool_name=self.name, status="ok", result=content,
-                       structured=artifact is not None,
-                       returned_tool_message=True, started_at=started)
-        # 进展信号来自**执行侧的真实结果**，不是请求参数
-        if self.guard is not None:
-            self._safe(self.guard.record_progress,
-                       self._progress_signals(content, artifact))
+            try:
+                self.trace.record_tool_returned(
+                    tool_call_id=call_id, tool_name=self.name, result=text,
+                    structured=artifact is not None, started_at=started,
+                    result_hash=rhash)
+            except Exception:
+                # 【§3】工具**已执行**后 end 写入失败：不得声称未执行
+                if rec is not None:
+                    rec.trace_incomplete = True
+                    rec._flag("trace_incomplete", None, self.name)
         return result
 
     def _after_fail(self, exc, call_id, started):
+        rec = object.__getattribute__(self, "reconciler")
+        if rec is not None:
+            rec.mark_failed(call_id, self.name, error_type=type(exc).__name__)
         if self.trace is not None:
-            self._safe(self.trace.record_tool_end, tool_call_id=call_id,
-                       tool_name=self.name, status="error",
-                       error_type=type(exc).__name__,
-                       returned_tool_message=False, started_at=started)
-        if self.guard is not None:
-            self._safe(self.guard.record_progress, [])   # 失败 = 无进展
+            try:
+                self.trace.record_tool_end(tool_call_id=call_id, tool_name=self.name,
+                                           status="error",
+                                           error_type=type(exc).__name__,
+                                           returned_tool_message=False,
+                                           started_at=started)
+            except Exception:
+                if rec is not None:
+                    rec.trace_incomplete = True
+        # 失败不产生任何进展信号（进展只在 observed 时由对账器给出）
 
     @staticmethod
     def _split(result):
@@ -171,12 +201,13 @@ class ToolLifecycleProxy(BaseTool):
         return self._after_ok(res, call_id, started)
 
 
-def wrap_tools(tools, *, trace=None, guard=None, allowed=None):
+def wrap_tools(tools, *, trace=None, guard=None, allowed=None, reconciler=None):
     """把一组 BaseTool 换成代理。已是代理的原样返回。"""
     out = []
     for t in tools:
         out.append(t if isinstance(t, ToolLifecycleProxy)
-                   else ToolLifecycleProxy(t, trace=trace, guard=guard, allowed=allowed))
+                   else ToolLifecycleProxy(t, trace=trace, guard=guard,
+                                           allowed=allowed, reconciler=reconciler))
     return out
 
 

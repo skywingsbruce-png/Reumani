@@ -105,21 +105,23 @@ def real_agent(tmp_path, tool_obj, n_rounds=1, guard=None, allowed=None):
     trace = ExecutorTrace(tmp_path / "t.jsonl", "proxy-test")
     trace.record_selected([tool_obj.name])
     guard = guard or ExecutorLoopGuard()
-    proxied = wrap_tools([tool_obj], trace=trace, guard=guard,
+    from pilot.lifecycle import LifecycleReconciler
+    rec = LifecycleReconciler(trace=trace, guard=guard)
+    proxied = wrap_tools([tool_obj], trace=trace, guard=guard, reconciler=rec,
                          allowed=allowed if allowed is not None else [tool_obj.name])
     inner = FakeChat(tool_obj.name, n_rounds)
-    hooks = EW.ExecutorHooks(trace, guard)      # requested 来自模型侧
+    hooks = EW.ExecutorHooks(trace, guard, reconciler=rec)   # requested 来自模型侧
     gm = GatedModel(inner, g, role="executor", model_id="fake-model", max_tokens=3000,
                     hooks=hooks)
     g.start_task("T")
-    return create_agent(gm, proxied), g, trace, guard, inner, proxied[0]
+    return create_agent(gm, proxied), g, trace, guard, inner, proxied[0], rec
 
 
 # ---------- §4-1/3：普通工具成功 ----------
 @pytest.mark.unit
 def test_plain_tool_real_execution_and_full_lifecycle(tmp_path):
     t_plain, _, _, _ = tools()
-    agent, g, trace, guard, inner, proxy = real_agent(tmp_path, t_plain)
+    agent, g, trace, guard, inner, proxy, rec = real_agent(tmp_path, t_plain)
     out = agent.invoke({"messages": [("user", "go")]})
     tm = [m for m in out["messages"] if type(m).__name__ == "ToolMessage"]
 
@@ -127,6 +129,7 @@ def test_plain_tool_real_execution_and_full_lifecycle(tmp_path):
     assert SE["args"] == ["Q1"]                  # 参数正确
     assert len(tm) == 1 and tm[0].tool_call_id == "call_1"
     assert "plain::Q1" in tm[0].content          # 返回值一致
+    rec.reconcile_messages(out)      # observed 只能来自真实 ToolMessage
     c = trace.consistency()
     assert c["requested"] == ["t_plain"]
     assert c["executed"] == ["t_plain"]          # ← 旧接线这里是空
@@ -138,7 +141,7 @@ def test_plain_tool_real_execution_and_full_lifecycle(tmp_path):
 @pytest.mark.unit
 def test_structured_tool_artifact_preserved_through_proxy(tmp_path):
     _, t_struct, _, _ = tools()
-    agent, g, trace, guard, inner, proxy = real_agent(tmp_path, t_struct)
+    agent, g, trace, guard, inner, proxy, rec = real_agent(tmp_path, t_struct)
     out = agent.invoke({"messages": [("user", "go")]})
     tm = [m for m in out["messages"] if type(m).__name__ == "ToolMessage"][0]
     assert SE["struct"] == 1
@@ -146,6 +149,7 @@ def test_structured_tool_artifact_preserved_through_proxy(tmp_path):
     assert art is not None and art["schema_version"] == "toolresult-v1"
     assert art["data"]["q"] == "Q1"
     assert "struct::Q1" in tm.content
+    rec.reconcile_messages(out)
     assert trace.consistency()["observed"] == ["t_struct"]
 
 
@@ -153,7 +157,7 @@ def test_structured_tool_artifact_preserved_through_proxy(tmp_path):
 @pytest.mark.unit
 def test_tool_exception_recorded_as_failed_not_success(tmp_path):
     _, _, t_boom, _ = tools()
-    agent, g, trace, guard, inner, proxy = real_agent(tmp_path, t_boom)
+    agent, g, trace, guard, inner, proxy, rec = real_agent(tmp_path, t_boom)
     try:
         agent.invoke({"messages": [("user", "go")]})
     except Exception:
@@ -172,10 +176,11 @@ def test_tool_exception_recorded_as_failed_not_success(tmp_path):
 @pytest.mark.unit
 def test_async_tool_lifecycle(tmp_path):
     _, _, _, t_aio = tools()
-    agent, g, trace, guard, inner, proxy = real_agent(tmp_path, t_aio)
+    agent, g, trace, guard, inner, proxy, rec = real_agent(tmp_path, t_aio)
     out = asyncio.run(agent.ainvoke({"messages": [("user", "go")]}))
     tm = [m for m in out["messages"] if type(m).__name__ == "ToolMessage"]
     assert SE["aio"] == 1 and len(tm) == 1
+    rec.reconcile_messages(out)
     c = trace.consistency()
     assert c["executed"] == ["t_aio"] and c["observed"] == ["t_aio"]
 
@@ -184,7 +189,7 @@ def test_async_tool_lifecycle(tmp_path):
 @pytest.mark.unit
 def test_unauthorized_tool_blocked_before_underlying_function(tmp_path):
     t_plain, _, _, _ = tools()
-    agent, g, trace, guard, inner, proxy = real_agent(tmp_path, t_plain,
+    agent, g, trace, guard, inner, proxy, rec = real_agent(tmp_path, t_plain,
                                                       allowed=["some_other_tool"])
     try:
         agent.invoke({"messages": [("user", "go")]})
@@ -254,7 +259,12 @@ def test_proxy_recording_failure_does_not_change_tool_semantics(tmp_path):
         def record_tool_end(self, **kw):
             raise RuntimeError("trace 写入失败")
 
+    from pilot.lifecycle import TRACE_START_FAILED, LifecycleError
+
     p = ToolLifecycleProxy(t_plain, trace=BrokenTrace(), guard=None,
                            allowed=["t_plain"])
-    out = p.invoke({"query": "X"})
-    assert SE["plain"] == 1 and out == "plain::X"
+    # 【A.6.6.1 §3】start 事件写入失败 → **不允许底层工具执行**，fail-closed
+    with pytest.raises(LifecycleError) as ei:
+        p.invoke({"query": "X"})
+    assert ei.value.reason == TRACE_START_FAILED
+    assert SE["plain"] == 0, "trace start 失败后底层工具仍被执行了"

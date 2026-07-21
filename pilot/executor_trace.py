@@ -131,6 +131,31 @@ class ExecutorTrace:
             "returned_tool_message": bool(returned_tool_message),
         })
 
+    def record_tool_returned(self, *, tool_call_id, tool_name, result=None,
+                             structured=None, started_at=None, result_hash=None):
+        """底层工具函数**正常返回**（≠ observed）。"""
+        text = "" if result is None else str(result)
+        return self._append({
+            "event": "tool_returned",
+            "tool_call_id_hash": compute_hash(tool_call_id)[:16],
+            "tool_name": tool_name, "completed_at": time.time(),
+            "elapsed_s": (round(time.time() - started_at, 3) if started_at else None),
+            "structured": ("structured" if structured else "legacy"),
+            "result_length": len(text),
+            "result_hash": result_hash or (compute_hash(text) if text else None),
+            "hash_algorithm": HASH_ALGORITHM,
+        })
+
+    def record_observed(self, *, tool_call_id, tool_name, result_hash=None):
+        """**真实 ToolMessage 已进入 Agent 消息状态**，且 tool_call_id 匹配成功。"""
+        self.observed.append(tool_name)
+        return self._append({
+            "event": OBSERVED,
+            "tool_call_id_hash": compute_hash(tool_call_id)[:16],
+            "tool_name": tool_name, "result_hash": result_hash,
+            "hash_algorithm": HASH_ALGORITHM,
+        })
+
     def record_guard(self, reason, detail=None):
         return self._append({"event": "loop_guard_triggered", "reason": reason,
                              "detail": detail or {}})

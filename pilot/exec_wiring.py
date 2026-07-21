@@ -15,20 +15,23 @@ from pilot.loop_guard import ExecutorLoopGuard, LoopGuardTriggered
 class ExecutorHooks:
     """挂到 executor 角色的 GatedModel 上：调用前查护栏，响应后记轨迹。"""
 
-    def __init__(self, trace, guard, *, outer_iteration=1):
+    def __init__(self, trace, guard, *, outer_iteration=1, reconciler=None):
         self.trace = trace
         self.guard = guard
+        self.reconciler = reconciler
         self.outer_iteration = outer_iteration
         self.executor_call_index = 0
         self.pending_tool_calls = []
 
     # ---- 网络请求之前 ----
-    def pre_invoke(self, *, role, model_id):
+    def pre_invoke(self, *, role, model_id, payload=None):
         if role != "executor":
             return
-        # 上一次响应要求的每个工具调用，在**下一次模型调用之前**过一遍护栏。
-        for tc in self.pending_tool_calls:
-            self.guard.before_tool_round(tc.get("name"), tc.get("args"))
+        # 【§2】进入下一次模型调用之前：先用**真实消息状态**对账 observed，
+        # 再检查生命周期是否一致。不一致 → fail-closed，不再调模型。
+        if self.reconciler is not None:
+            self.reconciler.reconcile_messages(payload)
+            self.reconciler.assert_consistent_before_next_model_call()
         self.pending_tool_calls = []
 
     # ---- 响应之后 ----
@@ -47,6 +50,9 @@ class ExecutorHooks:
             next_graph_node=("tools" if tool_calls else "END"),
             termination_reason=(None if tool_calls else "no_tool_calls"))
         self.pending_tool_calls = [tc for tc in tool_calls if isinstance(tc, dict)]
+        if self.reconciler is not None:
+            for tc in self.pending_tool_calls:
+                self.reconciler.mark_requested(tc.get("id"), tc.get("name"))
         # 【A.6.6 §5】**请求本身不算进展**。新 tool_call_id / 新 arguments_hash /
         # 新工具名 / 新请求参数 / 新模型正文 / 新 finish_reason 都不能重置 no-progress。
         # 进展只由**执行/观察侧**的确定性新结果产生 —— 由 ToolLifecycleProxy 在
@@ -131,7 +137,9 @@ def install(*, run_id, trace_path, selected_tools=None, max_tool_rounds=None,
     if no_progress_rounds is not None:
         kw["no_progress_rounds"] = no_progress_rounds
     guard = ExecutorLoopGuard(**kw)
-    hooks = ExecutorHooks(trace, guard)
+    from pilot.lifecycle import LifecycleReconciler
+    reconciler = LifecycleReconciler(trace=trace, guard=guard)
+    hooks = ExecutorHooks(trace, guard, reconciler=reconciler)
 
     # 【A.6.6 §3】不再依赖"事后给 BaseTool 赋 callbacks" —— 离线真实 Agent 探针证明
     # 那条路在 create_agent 的 ToolNode 下**不可靠**（工具执行了但回调不触发）。
@@ -141,16 +149,21 @@ def install(*, run_id, trace_path, selected_tools=None, max_tool_rounds=None,
     wrapped = []
     try:
         import ssc_skill_agent as SK
-        originals = list(getattr(SK, "SKILL_AGENT_TOOLS", []) or [])
+        # 【幂等 + 可还原】首次安装时把原始工具存下来；之后每次都从**原始工具**重新包装，
+        # 否则上一次 install 的陈旧代理（可能持有已删除的轨迹路径）会泄漏到后续运行。
+        if not hasattr(SK, "_REUMANI_ORIGINAL_TOOLS"):
+            SK._REUMANI_ORIGINAL_TOOLS = list(getattr(SK, "SKILL_AGENT_TOOLS", []) or [])
+        originals = list(SK._REUMANI_ORIGINAL_TOOLS)
         proxies = wrap_tools(originals, trace=trace, guard=guard,
-                             allowed=selected_tools)
+                             allowed=selected_tools, reconciler=reconciler)
         for p, o in zip(proxies, originals):
             assert_contract_equivalent(p, o)      # 契约不等价即拒绝启动
             wrapped.append(p.name)
         SK.SKILL_AGENT_TOOLS = proxies            # 运行时替换，不改源码
     except Exception as e:
         raise RuntimeError(f"工具生命周期代理安装失败，拒绝启动：{e}")
-    return trace, guard, hooks, wrapped
+    hooks.reconciler = reconciler
+    return trace, guard, hooks, wrapped, reconciler
 
 
 def classify_executor_failure(exc):

@@ -148,7 +148,7 @@ def run_stage(stage, task_ids):
         t0 = time.monotonic()
         # 接线：事件轨迹 + 循环护栏挂进真实执行路径（模型侧硬中止，工具侧只记录）
         import tool_registry as _TR
-        trace, guard, hooks, attached = PT_WIRE.install(
+        trace, guard, hooks, attached, reconciler = PT_WIRE.install(
             run_id=f"{stage}_{tid}_{int(t0)}",
             trace_path=OUT / f"{stage}_{tid}_executor_trace.jsonl",
             selected_tools=_TR.select_tool_names(task["question"]))
@@ -163,6 +163,7 @@ def run_stage(stage, task_ids):
             m["error"] = None
             m["executor_trace"] = trace.consistency()
             m["loop_guard"] = guard.summary()
+            m["lifecycle"] = reconciler.summary()
             if state.errors:                       # Executor 失败但外层已 fail-closed
                 m["failure_manifest"] = _failure_manifest(
                     trace, guard, gate, run_id=trace.run_id,

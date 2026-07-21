@@ -381,7 +381,9 @@ class GatedModel:
         def sync_call(*a, **k):
             # pre_invoke 在**网络请求之前**执行；循环护栏在此硬中止，与预算闸门同级。
             if hooks is not None and hasattr(hooks, "pre_invoke"):
-                hooks.pre_invoke(role=role, model_id=model_id)
+                # payload 就是即将发给模型的消息状态 —— 生命周期对账要用它
+                hooks.pre_invoke(role=role, model_id=model_id,
+                                 payload=(a[0] if a else k))
             uid, worst = gate.before_call(model_id=model_id, role=role,
                                           payload=a[0] if a else k, max_tokens=mt)
             try:
@@ -395,6 +397,10 @@ class GatedModel:
             return res
 
         async def async_call(*a, **k):
+            # 异步路径必须与同步路径**同等接线**，否则生命周期对账在 ainvoke 下失效
+            if hooks is not None and hasattr(hooks, "pre_invoke"):
+                hooks.pre_invoke(role=role, model_id=model_id,
+                                 payload=(a[0] if a else k))
             uid, worst = gate.before_call(model_id=model_id, role=role,
                                           payload=a[0] if a else k, max_tokens=mt)
             try:
@@ -403,6 +409,8 @@ class GatedModel:
                 gate.failed_call(uid, model_id, worst, request_sent=True, error=e)
                 raise
             _settle(gate, uid, model_id, worst, res)
+            if hooks is not None and hasattr(hooks, "post_response"):
+                hooks.post_response(role=role, model_id=model_id, response=res)
             return res
 
         return async_call if name.startswith("a") else sync_call
