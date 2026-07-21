@@ -169,20 +169,54 @@ def _run_preflight(env=None):
                           encoding="utf-8", errors="replace", env=e, timeout=600)
 
 
+def _snapshot():
+    """(round2_results 文件集, runs 目录集, 已有账本的 name->sha256)。"""
+    import hashlib
+    rr = ROOT / "pilot" / "round2_results"
+    runs = ROOT / "runs"
+    ledgers = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+               for p in rr.glob("*_ledger*")}
+    return (set(rr.glob("*")), set(runs.glob("*")) if runs.exists() else set(), ledgers)
+
+
 @pytest.mark.unit
-def test_preflight_failure_zero_calls_no_artifacts_nonzero_exit():
-    before = set((ROOT / "pilot" / "round2_results").glob("*"))
+def test_preflight_failure_zero_calls_no_new_artifacts_nonzero_exit():
+    """**delta 断言**（A.6.4 修正）：失败的 preflight 不得**新增**账本或 run 目录。
+
+    原断言写成"目录里永远不存在任何账本"，会被**历史合法产物**（如 A1 真实运行留下的
+    stage1_ledger.jsonl）误判为失败。这里改为对比运行前后的差集，
+    既不放宽安全要求，也不要求删除真实运行现场。
+    """
+    before_files, before_runs, before_ledgers = _snapshot()
     r = _run_preflight({"DEEPSEEK_API_KEY": "", "ANTHROPIC_API_KEY": ""})
     out = (r.stdout or "") + (r.stderr or "")
-    assert r.returncode != 0                                              # 9
-    assert not list((ROOT / "pilot" / "round2_results").glob("*_ledger.jsonl"))   # 8
-    runs = ROOT / "runs"
-    if runs.exists():
-        assert not list(runs.glob("A1_*"))                                # 8
+    after_files, after_runs, after_ledgers = _snapshot()
+
+    assert r.returncode != 0, "失败的 preflight 退出码必须非 0"            # 4
+    new_ledgers = set(after_ledgers) - set(before_ledgers)
+    assert not new_ledgers, f"失败的 preflight 新建了账本：{new_ledgers}"   # 1/2
+    for name, h in before_ledgers.items():                                 # 3
+        assert after_ledgers.get(name) == h, f"历史账本被改动：{name}"
+    assert not (after_runs - before_runs), "失败的 preflight 新建了 run 目录"
+    new = {p.name for p in after_files - before_files}
+    assert new <= {"A1_preflight.json"}, f"意外新增产物：{new}"
     for leak in ("sk-", "Bearer ", "Authorization", "Cookie"):
-        assert leak not in out, f"preflight 日志泄露 {leak}"               # 10
-    new = set((ROOT / "pilot" / "round2_results").glob("*")) - before
-    assert all(p.name == "A1_preflight.json" for p in new), f"意外产物：{new}"
+        assert leak not in out, f"preflight 日志泄露 {leak}"                # 5
+
+
+@pytest.mark.unit
+def test_preflight_failure_creates_no_ledger_in_empty_dir(tmp_path, monkeypatch):
+    """场景 1：目录本来为空时，失败的 preflight 同样不产生账本。"""
+    import hashlib
+    rr = ROOT / "pilot" / "round2_results"
+    before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in rr.glob("*_ledger*")}
+    r = _run_preflight({"DEEPSEEK_API_KEY": "", "ANTHROPIC_API_KEY": "",
+                        "REUMANI_EXPECT_DEV_HEAD": "", "REUMANI_CI_EVIDENCE": ""})
+    after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+             for p in rr.glob("*_ledger*")}
+    assert r.returncode != 0
+    assert set(after) == set(before) and after == before
 
 
 @pytest.mark.unit

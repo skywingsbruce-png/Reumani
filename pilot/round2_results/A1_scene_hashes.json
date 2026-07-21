@@ -1,0 +1,60 @@
+{
+  "note": "A1 现场文件 SHA-256（诊断前固定，用于证明分析未改动现场）",
+  "algorithm": "sha256",
+  "files": {
+    "runs/20260721_105710_77ea9469/run.json": {
+      "exists": true,
+      "sha256": "53a08ea1908fcb16037a43f4f66754c1fa5df4e682d50819fecf6187567bee0b",
+      "sha256_lf": "c5b85b755cad0d16e2b71a08c71ba9336f87bf0ccbdfa1c8ea474314c6e1c69a",
+      "size": 8281
+    },
+    "runs/20260721_105710_77ea9469/final_answer.md": {
+      "exists": true,
+      "sha256": "a5dd2425e075ffe371619e8374c899be6d5a6583bead4fe36ab6e11a1539338e",
+      "sha256_lf": "4e4ae41500eed444a4af88ab3f6306d01cfba07b718f0bf6cebf56c6af3d2ecb",
+      "size": 230
+    },
+    "pilot/round2_results/stage1_ledger.jsonl": {
+      "exists": true,
+      "sha256": "482f9b1e365be79f9ca82dc34cb8c593dfeea10cf61ba7ae5203314bd0ec8353",
+      "sha256_lf": "fd66c7ead2ded9a61c169017d84a572f59184ddd52e4001be7d1d21282a2dc0c",
+      "size": 9935
+    },
+    "pilot/round2_results/stage1_metrics_1784624290.json": {
+      "exists": true,
+      "sha256": "808d12ae923846df618cd2cd65ce4de86b2d7a351aeee365d45bafc2d3d2a653",
+      "sha256_lf": "2e434fd7d115d05b42c1f18787e66aa015b51db143849fee555756edf52ad761",
+      "size": 5566
+    },
+    "pilot/round2_results/A1_calls_audit.json": {
+      "exists": true,
+      "sha256": "1ff8c9859edad84e8bdadfa718447f8b6b6c92528757b6b25d18e5cc81fd25cb",
+      "sha256_lf": "a465626b9f2cb788ef67c6856ba3599aa46e8acbccd0bea3de8af10498a540cf",
+      "size": 10846
+    },
+    "SHADOW_PILOT_ROUND2_A1_RESULT.md": {
+      "exists": true,
+      "sha256": "4c2065f6d46b70ffba8de9e4af2679a490839b45d71ecffceeedb6faf35986cb",
+      "sha256_lf": "4c2065f6d46b70ffba8de9e4af2679a490839b45d71ecffceeedb6faf35986cb",
+      "size": 9368
+    },
+    "SHADOW_PILOT_ROUND2_PROTOCOL.md": {
+      "exists": true,
+      "sha256": "5d166bce159de665c4df677aef6765803575a48827afdc5d061cb49ff54f0f22",
+      "sha256_lf": "5d166bce159de665c4df677aef6765803575a48827afdc5d061cb49ff54f0f22",
+      "size": 19291
+    },
+    "SHADOW_PILOT_ROUND2_PROTOCOL_V2.md": {
+      "exists": true,
+      "sha256": "c76f589485e4ebfd728c27b653d2735f3ebd1c6930087c244e4efbdba9d66696",
+      "sha256_lf": "c76f589485e4ebfd728c27b653d2735f3ebd1c6930087c244e4efbdba9d66696",
+      "size": 8980
+    },
+    "pilot/round2_tasks.py": {
+      "exists": true,
+      "sha256": "33a5b4bbd9b3d9ed26bb96041dbe0542d8e154393592f53a5575ecc508b0de78",
+      "sha256_lf": "33a5b4bbd9b3d9ed26bb96041dbe0542d8e154393592f53a5575ecc508b0de78",
+      "size": 9962
+    }
+  }
+}
