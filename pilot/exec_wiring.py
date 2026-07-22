@@ -53,15 +53,10 @@ class ExecutorHooks:
         if self.reconciler is not None:
             for tc in self.pending_tool_calls:
                 self.reconciler.mark_requested(tc.get("id"), tc.get("name"))
-        # 【A.6.6 §5】**请求本身不算进展**。新 tool_call_id / 新 arguments_hash /
-        # 新工具名 / 新请求参数 / 新模型正文 / 新 finish_reason 都不能重置 no-progress。
-        # 进展只由**执行/观察侧**的确定性新结果产生 —— 由 ToolLifecycleProxy 在
-        # 工具真实返回后调用 guard.record_progress(...)。
-        #
-        # 因此这里只在"本轮模型没有请求任何工具"时记一次无进展轮：
-        # 那意味着这一轮既不会有工具执行，也就不可能产生新的观察结果。
-        if not self.pending_tool_calls:
-            self.guard.record_progress([])
+        # 【A.6.6.2 §5】**进展只由观察侧驱动**。这里绝不调用 record_progress：
+        # 请求本身、模型正文、finish_reason 都不算进展。no-progress 计数完全由
+        # LifecycleReconciler.reconcile_messages 在看到（或没看到）真实 ToolMessage
+        # 新结果时更新，避免请求侧与观察侧双重计数导致误触发。
 
 
 class ToolTraceCallback:
@@ -163,7 +158,42 @@ def install(*, run_id, trace_path, selected_tools=None, max_tool_rounds=None,
     except Exception as e:
         raise RuntimeError(f"工具生命周期代理安装失败，拒绝启动：{e}")
     hooks.reconciler = reconciler
-    return trace, guard, hooks, wrapped, reconciler
+    # §5：把恢复工具挂在返回对象上，runner 用 try/finally 保证一定还原
+    handle = InstallHandle(reconciler, trace, guard, hooks, wrapped)
+    return trace, guard, hooks, wrapped, reconciler, handle
+
+
+class InstallHandle:
+    """install() 的可靠 restore/uninstall（A.6.6.2 §5）。"""
+
+    def __init__(self, reconciler, trace, guard, hooks, wrapped):
+        self.reconciler = reconciler
+        self.trace = trace
+        self.guard = guard
+        self.hooks = hooks
+        self.wrapped = wrapped
+        self._restored = False
+
+    def restore(self):
+        """把技能工具还原为原始对象，避免代理（含旧 run 的 trace 路径）泄漏到下一次运行。
+        幂等：多次调用无副作用。"""
+        if self._restored:
+            return
+        try:
+            import ssc_skill_agent as SK
+            if hasattr(SK, "_REUMANI_ORIGINAL_TOOLS"):
+                SK.SKILL_AGENT_TOOLS = list(SK._REUMANI_ORIGINAL_TOOLS)
+        finally:
+            self._restored = True
+
+    uninstall = restore
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.restore()
+        return False
 
 
 def classify_executor_failure(exc):

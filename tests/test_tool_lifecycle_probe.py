@@ -91,7 +91,7 @@ def build_real_agent(tmp_path, tool_obj, attach_callbacks=True):
     from langchain.agents import create_agent
 
     g = mkgate(tmp_path)
-    trace, guard, hooks, attached, reconciler = EW.install(
+    trace, guard, hooks, attached, reconciler, _handle = EW.install(
         run_id="probe", trace_path=tmp_path / "t.jsonl",
         selected_tools=[tool_obj.name])
     if attach_callbacks:

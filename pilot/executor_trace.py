@@ -177,29 +177,76 @@ class ExecutorTrace:
         }
 
 
+def trace_file_sha256(trace):
+    """trace JSONL 文件的 SHA-256（供失败 Manifest 记录）。"""
+    if trace is None:
+        return None
+    try:
+        return hashlib.sha256(trace.path.read_bytes()).hexdigest()
+    except Exception:
+        return None
+
+
 def build_failure_manifest(*, run_id, failure_stage, failure_reason, trace,
                            budget_summary, guard_summary=None, evidence_cards=None,
-                           extra=None):
-    """失败诊断 Manifest（§8）。**不是**科研结论 Manifest，但必须可审计。"""
+                           reconciler=None, extra=None):
+    """完整失败诊断 Manifest（A.6.6.2 §1）。**不是**科研结论 Manifest，但必须可审计。
+
+    Manifest 自身若在脱敏阶段失败，调用方保留 primary_failure，另记 manifest_failure，
+    绝不让 manifest_failure 覆盖原始失败原因（见 build_failure_manifest_safe）。
+    """
     from manifest_safety import sanitize_manifest
     cons = trace.consistency() if trace else {}
+    life = reconciler.summary() if reconciler is not None else {}
+    counts = dict(life.get("counts") or {})
+    # 补上 tool_returned（consistency 里没有，从对账器取）
+    if reconciler is not None:
+        counts.setdefault("tool_returned",
+                          sum(r.get("tool_returned", 0)
+                              for r in reconciler.calls.values()))
     m = {
         "run_id": run_id,
-        "shadow_status": "not_run_due_to_upstream_failure",
+        "manifest_schema_version": "runmanifest-v1",   # 由 sanitize 覆盖为权威值
         "manifest_kind": "failure_diagnostic",
         "status": "failed",
+        "primary_failure": failure_reason,
         "failure_stage": failure_stage,
         "failure_reason": failure_reason,
+        "trace_incomplete": bool(life.get("trace_incomplete")),
+        "observation_trace_failed": bool(life.get("observation_trace_failed")),
+        "human_review": True,
+        "shadow_status": "not_run_due_to_upstream_failure",
+        "lifecycle_counts": {k: counts.get(k, 0) for k in
+                             ("requested", "executed", "tool_returned",
+                              "failed", "observed")},
         "selected_tools": cons.get("selected", []),
         "tool_events": [{"requested": cons.get("requested", []),
                          "executed": cons.get("executed", []),
                          "observed": cons.get("observed", [])}],
+        "lifecycle_inconsistencies": life.get("inconsistencies", []),
         "unauthorized_tool_calls": cons.get("unauthorized_executed", []),
+        "trace_file_sha256": trace_file_sha256(trace),
         "evidence_cards": evidence_cards or [],
         "claims": [],
-        "note": json.dumps({"consistency": cons,
-                            "budget": budget_summary,
+        "note": json.dumps({"consistency": cons, "budget": budget_summary,
                             "loop_guard": guard_summary or {},
                             **(extra or {})}, ensure_ascii=False, default=str)[:4000],
     }
     return sanitize_manifest(m)
+
+
+def build_failure_manifest_safe(**kw):
+    """包一层：Manifest 自身失败时不丢 primary_failure。
+    返回 (manifest_or_None, manifest_failure_or_None)。"""
+    try:
+        return build_failure_manifest(**kw), None
+    except Exception as e:
+        # 绝不覆盖原始失败：只返回一个极简的、保留 primary_failure 的降级记录
+        primary = kw.get("failure_reason")
+        return ({"status": "failed", "manifest_kind": "failure_diagnostic",
+                 "run_id": kw.get("run_id"), "primary_failure": primary,
+                 "failure_reason": primary, "human_review": True,
+                 "manifest_schema_version": "runmanifest-v1",
+                 "shadow_status": "not_run_due_to_upstream_failure",
+                 "manifest_failure": f"{type(e).__name__}: {str(e)[:200]}"},
+                f"{type(e).__name__}: {str(e)[:200]}")

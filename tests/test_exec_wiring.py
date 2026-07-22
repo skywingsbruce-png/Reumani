@@ -36,6 +36,13 @@ def _sw(monkeypatch):
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setenv("REUMANI_PILOT_PAID", "1")
     monkeypatch.setenv("REUMANI_PILOT_CONFIRM", "test")
+    yield
+    try:
+        import ssc_skill_agent as SK
+        if hasattr(SK, "_REUMANI_ORIGINAL_TOOLS"):
+            SK.SKILL_AGENT_TOOLS = list(SK._REUMANI_ORIGINAL_TOOLS)
+    except Exception:
+        pass
 
 
 def mkgate(tmp_path, **kw):
@@ -73,7 +80,7 @@ class Scripted:
 
 def wire(tmp_path, exec_replies, verify_replies=(VERIFY_PASS,), **guard_kw):
     g = mkgate(tmp_path)
-    trace, guard, hooks, attached, reconciler = EW.install(
+    trace, guard, hooks, attached, reconciler, _handle = EW.install(
         run_id="wire-test", trace_path=tmp_path / "trace.jsonl",
         selected_tools=["search_evidence"], **guard_kw)
     inner = {"planner": Scripted([{"content": PLAN_JSON}]),
@@ -200,7 +207,8 @@ def test_failure_manifest_built_from_real_chain_failure(monkeypatch, tmp_path):
 def test_hooks_survive_bind_tools_derivation(tmp_path):
     """派生对象必须带着同一个 hooks，否则接线会在 bind_tools 之后失效。"""
     g = mkgate(tmp_path)
-    trace, guard, hooks, _, reconciler = EW.install(run_id="r", trace_path=tmp_path / "t.jsonl")
+    trace, guard, hooks, _, reconciler, _handle = EW.install(
+        run_id="r", trace_path=tmp_path / "t.jsonl")
     m = GatedModel(Scripted([{"content": "x"}]), g, role="executor",
                    model_id="fake-model", max_tokens=3000, hooks=hooks)
     b = m.bind_tools([])
@@ -230,7 +238,7 @@ def test_skill_tools_are_wrapped_in_lifecycle_proxy(tmp_path):
     from pilot.tool_proxy import ToolLifecycleProxy, assert_contract_equivalent
 
     originals = {t.name: t for t in SK.SKILL_AGENT_TOOLS}
-    trace, guard, hooks, wrapped, reconciler = EW.install(
+    trace, guard, hooks, wrapped, reconciler, _handle = EW.install(
         run_id="r", trace_path=tmp_path / "t.jsonl")
     assert len(wrapped) >= 10, f"只包了 {len(wrapped)} 个工具"
     for t in SK.SKILL_AGENT_TOOLS:

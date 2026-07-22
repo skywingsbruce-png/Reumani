@@ -52,6 +52,10 @@ WHITELIST = {
     "manifest_schema_version", "phi_warning", "_size_note",
     # 失败诊断 Manifest 的审计字段（A.6.5 §8）：全部是枚举/短字符串，无敏感内容
     "manifest_kind", "status", "failure_stage", "failure_reason",
+    # A.6.6.2 §1 完整失败 Manifest 字段
+    "primary_failure", "trace_incomplete", "observation_trace_failed",
+    "human_review", "lifecycle_counts", "lifecycle_inconsistencies",
+    "trace_file_sha256", "manifest_failure",
 }
 
 

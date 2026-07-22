@@ -24,11 +24,14 @@ from pilot.executor_trace import build_failure_manifest        # noqa: E402
 from pilot.round2_tasks import TASKS                          # noqa: E402
 
 
-def _failure_manifest(trace, guard, gate, *, run_id, reason):
-    """Executor 失败也要有可审计的诊断 Manifest（不是科研结论 Manifest）。"""
-    return build_failure_manifest(
+def _failure_manifest(trace, guard, gate, reconciler, *, run_id, reason):
+    """Executor 失败的完整诊断 Manifest（不是科研结论 Manifest）。
+    返回 (manifest, manifest_failure_or_None) —— Manifest 自身失败不覆盖 primary_failure。"""
+    from pilot.executor_trace import build_failure_manifest_safe
+    return build_failure_manifest_safe(
         run_id=run_id, failure_stage="executor", failure_reason=reason,
-        trace=trace, budget_summary=gate.summary(), guard_summary=guard.summary())
+        trace=trace, budget_summary=gate.summary(), guard_summary=guard.summary(),
+        reconciler=reconciler)
 
 OUT = BASE / "pilot" / "round2_results"
 
@@ -148,7 +151,7 @@ def run_stage(stage, task_ids):
         t0 = time.monotonic()
         # 接线：事件轨迹 + 循环护栏挂进真实执行路径（模型侧硬中止，工具侧只记录）
         import tool_registry as _TR
-        trace, guard, hooks, attached, reconciler = PT_WIRE.install(
+        trace, guard, hooks, attached, reconciler, handle = PT_WIRE.install(
             run_id=f"{stage}_{tid}_{int(t0)}",
             trace_path=OUT / f"{stage}_{tid}_executor_trace.jsonl",
             selected_tools=_TR.select_tool_names(task["question"]))
@@ -165,9 +168,13 @@ def run_stage(stage, task_ids):
             m["loop_guard"] = guard.summary()
             m["lifecycle"] = reconciler.summary()
             if state.errors:                       # Executor 失败但外层已 fail-closed
-                m["failure_manifest"] = _failure_manifest(
-                    trace, guard, gate, run_id=trace.run_id,
-                    reason="; ".join(str(e)[:120] for e in state.errors[:2]))
+                fm, mf = _failure_manifest(trace, guard, gate, reconciler,
+                                           run_id=trace.run_id,
+                                           reason="; ".join(str(e)[:120]
+                                                            for e in state.errors[:2]))
+                m["failure_manifest"] = fm
+                if mf:
+                    m["manifest_failure"] = mf
         except (BudgetExceeded, GateConfigError) as e:
             halted = f"{tid}: {type(e).__name__}: {e}"
             print(f"  !! 硬闸门触发（网络请求前拒绝），立即停止：{e}")
@@ -178,12 +185,17 @@ def run_stage(stage, task_ids):
                  "seconds": round(time.monotonic() - t0, 2),
                  "executor_trace": trace.consistency(),
                  "loop_guard": guard.summary(),
-                 "failure_manifest": _failure_manifest(
-                     trace, guard, gate, run_id=trace.run_id,
-                     reason=PT_WIRE.classify_executor_failure(e))}
+                 "lifecycle": reconciler.summary()}
+            fm, mf = _failure_manifest(trace, guard, gate, reconciler,
+                                       run_id=trace.run_id,
+                                       reason=PT_WIRE.classify_executor_failure(e))
+            m["failure_manifest"] = fm
+            if mf:
+                m["manifest_failure"] = mf
             print(f"  !! 运行异常（记录不修代码）：{type(e).__name__}: {e}")
         finally:
             gate.end_task()
+            handle.restore()          # §5：无论成功/异常/护栏/Manifest 失败，一定还原
         m["cost"] = gate.summary()
         results.append(m)
         print(f"  ✓ 已承诺 ${gate.committed_usd:.4f} / {gate.calls_global} calls")

@@ -120,30 +120,48 @@ class LifecycleReconciler:
             if r[FAILED] and status != "error":
                 self._flag(LIFECYCLE_CONFLICT, cid, r["tool_name"])
             r[OBSERVED] += 1
+            # 进展的 result_hash **直接从真实 ToolMessage 算**（观察侧），
+            # 不依赖代理→观察的 ID 链接（tool_call_id 并不会传进底层 _run）。
+            obs_hash = self._observed_result_hash(m)
+            r["observed_result_hash"] = obs_hash
             newly.append(r)
             try:
                 if self.trace is not None:
                     self.trace.record_observed(tool_call_id=tcid,
                                                tool_name=r["tool_name"],
-                                               result_hash=r.get("result_hash"))
+                                               result_hash=obs_hash)
             except Exception:
                 self.observation_trace_failed = True
                 self._flag(OBSERVATION_TRACE_FAILED, cid, r["tool_name"])
         # §5：只有被真实 ToolMessage 观察到的**首次出现**结果才算进展
-        if self.guard is not None:
+        if self.guard is not None and newly:
             signals = []
             for r in newly:
                 if r[FAILED]:
                     continue                      # 异常不算进展
                 if self.trace_incomplete:
                     continue                      # trace 不完整不得假定有进展
-                if r.get("result_hash"):
-                    signals.append(f"observed_result:{r['result_hash']}")
+                if r.get("observed_result_hash"):
+                    signals.append(f"observed_result:{r['observed_result_hash']}")
                 for s in r.get("progress_extra") or []:
                     signals.append(s)
-            if newly:
-                self.guard.record_progress(signals)
+            self.guard.record_progress(signals)   # 空 signals → 记一轮无进展
         return newly
+
+    @staticmethod
+    def _observed_result_hash(msg):
+        """从真实 ToolMessage 计算结果 hash：优先 artifact.data，否则 content。"""
+        art = getattr(msg, "artifact", None)
+        if isinstance(art, dict) and isinstance(art.get("data"), dict):
+            data = art["data"]
+            for k in ("evidence_id", "dataset_id"):
+                if data.get(k):
+                    return f"{k}:{data[k]}"
+            if data.get("retrieval_status") == "zero_hits":
+                return None                       # zero_hits 不构成新结果
+            return compute_hash(data)
+        content = getattr(msg, "content", "") or ""
+        return compute_hash(content) if content else None
 
     def _flag(self, kind, cid, tool_name):
         self.inconsistencies.append({"kind": kind, "tool_call_id_hash": cid,
