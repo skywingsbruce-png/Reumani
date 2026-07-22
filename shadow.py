@@ -119,9 +119,16 @@ def build_evidence_cards(events):
             cl = (art.get("provenance") or {}).get("content_level")
             data = art.get("data") or {}
             if cl == "abstract" and isinstance(data, dict) and data.get("papers"):
-                for p in data["papers"]:
-                    cards.append(EB.abstract_card_from_paper(p, tool_name=e["tool_name"],
-                                                             query=data.get("query", "")))
+                # A.6.6.3 §3：摘要卡走**artifact 守卫**（schema 校验 / ID 只来自 artifact /
+                # zero_hits·error 不构卡）。这是 pilot.evidence_from_artifact 的真实运行调用方。
+                try:
+                    from pilot.evidence_from_artifact import cards_from_shadow_event
+                    guarded, _skipped = cards_from_shadow_event(e)
+                    cards.extend(guarded)
+                except Exception:
+                    for p in data["papers"]:            # 守卫不可用时退回原逻辑（仍只用 artifact）
+                        cards.append(EB.abstract_card_from_paper(
+                            p, tool_name=e["tool_name"], query=data.get("query", "")))
             elif cl == "computational_analysis" and isinstance(data, dict):
                 cards.append(EB.analysis_card(
                     evidence_id=f"analysis:{data.get('hypothesis','')[:30]}",

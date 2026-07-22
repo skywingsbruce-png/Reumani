@@ -163,6 +163,89 @@ def install(*, run_id, trace_path, selected_tools=None, max_tool_rounds=None,
     return trace, guard, hooks, wrapped, reconciler, handle
 
 
+def build_lifecycle_middleware(reconciler, trace, guard, allowed=None):
+    """构造逐 tool_call 关联的 middleware（供真实 create_agent 使用）。
+    当前 LangChain 不提供权威 tool_call_id 时 fail-closed。"""
+    from pilot.tool_middleware import LifecycleMiddleware, assert_middleware_available
+    assert_middleware_available()
+    return LifecycleMiddleware(reconciler, trace=trace, guard=guard, allowed=allowed)
+
+
+def install_middleware_mode(*, run_id, trace_path, selected_tools=None,
+                            max_tool_rounds=None, no_progress_rounds=None):
+    """真实 Runner 用的接线：**middleware 承担全部生命周期**（权威 tool_call_id）。
+
+    - 不用"事后赋 callbacks"，也不用 proxy 记生命周期（避免与 middleware 双计数）；
+    - 通过 monkeypatch `ssc_skill_agent.create_react_agent`（就是 create_agent）注入
+      middleware —— **不改生产源码**；
+    - reconcile_messages 在下一次模型调用前由 ExecutorHooks 运行；
+    - 返回 handle，其 restore() 撤销 monkeypatch（runner 的 try/finally 保证一定还原）。
+    """
+    from pilot.lifecycle import LifecycleReconciler
+    from pilot.loop_guard import ExecutorLoopGuard
+
+    trace = ExecutorTrace(trace_path, run_id)
+    if selected_tools:
+        trace.record_selected(selected_tools)
+    kw = {}
+    if max_tool_rounds is not None:
+        kw["max_tool_rounds"] = max_tool_rounds
+    if no_progress_rounds is not None:
+        kw["no_progress_rounds"] = no_progress_rounds
+    guard = ExecutorLoopGuard(**kw)
+    reconciler = LifecycleReconciler(trace=trace, guard=guard)
+    hooks = ExecutorHooks(trace, guard, reconciler=reconciler)
+    mw = build_lifecycle_middleware(reconciler, trace, guard, allowed=selected_tools)
+
+    import ssc_skill_agent as SK
+    original_create = SK.create_react_agent
+
+    def _patched_create(llm, tools, **kwargs):
+        mws = list(kwargs.pop("middleware", []) or []) + [mw]
+        return original_create(llm, tools, middleware=mws, **kwargs)
+
+    SK.create_react_agent = _patched_create
+    handle = MiddlewareInstallHandle(SK, original_create, reconciler, trace, guard, hooks)
+    return trace, guard, hooks, reconciler, mw, handle
+
+
+class MiddlewareInstallHandle:
+    """撤销 create_agent 的 monkeypatch（A.6.6.3 §6）。幂等。"""
+
+    def __init__(self, sk_module, original_create, reconciler, trace, guard, hooks):
+        self._sk = sk_module
+        self._orig = original_create
+        self.reconciler = reconciler
+        self.trace = trace
+        self.guard = guard
+        self.hooks = hooks
+        self._restored = False
+
+    def restore(self):
+        if self._restored:
+            return
+        try:
+            self._sk.create_react_agent = self._orig
+        finally:
+            self._restored = True
+
+    uninstall = restore
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.restore()
+        return False
+
+
+def cards_into_shadow(messages, *, strict=False):
+    """把真实 ToolMessage.artifact → EvidenceCard（供 Shadow 链）。
+    §3：schema 校验 / ID 仅来自 artifact / error·zero_hits 不构卡。"""
+    from pilot.evidence_from_artifact import cards_from_messages
+    return cards_from_messages(messages, strict=strict)
+
+
 class InstallHandle:
     """install() 的可靠 restore/uninstall（A.6.6.2 §5）。"""
 

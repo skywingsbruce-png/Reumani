@@ -151,12 +151,13 @@ def run_stage(stage, task_ids):
         t0 = time.monotonic()
         # 接线：事件轨迹 + 循环护栏挂进真实执行路径（模型侧硬中止，工具侧只记录）
         import tool_registry as _TR
-        trace, guard, hooks, attached, reconciler, handle = PT_WIRE.install(
+        # A.6.6.3：middleware 承担全部生命周期（权威 tool_call_id 逐调用关联）
+        trace, guard, hooks, reconciler, mw, handle = PT_WIRE.install_middleware_mode(
             run_id=f"{stage}_{tid}_{int(t0)}",
             trace_path=OUT / f"{stage}_{tid}_executor_trace.jsonl",
             selected_tools=_TR.select_tool_names(task["question"]))
         object.__setattr__(roles["executor"], "_hooks", hooks)
-        print(f"  轨迹已接线（工具回调 {len(attached)} 个）")
+        print("  生命周期 middleware 已注入 create_agent（权威 tool_call_id）")
         try:
             state = run_agent(task["question"], constraints=task.get("constraints", ""),
                               max_iterations=2, shadow=True,
