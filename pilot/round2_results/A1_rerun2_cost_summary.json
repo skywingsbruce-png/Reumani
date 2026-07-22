@@ -1,0 +1,38 @@
+{
+  "stage": "stage1",
+  "actual_usd": 0.086985,
+  "reserved_open_usd": 0.0,
+  "committed_usd": 0.086985,
+  "calls_global": 11,
+  "calls_by_model": {
+    "claude-opus-4-8": 2,
+    "deepseek-v4-flash": 9
+  },
+  "calls_by_role": {
+    "planner": 2,
+    "executor": 9
+  },
+  "cancelled": false,
+  "rejected_before_invoke": 0,
+  "retries": 0,
+  "limits": {
+    "max_usd_global": 25.0,
+    "max_usd_stage": 3.0,
+    "max_usd_task": 1.5,
+    "max_calls_global": 200,
+    "max_calls_task": 21,
+    "max_calls_per_model": {
+      "claude-opus-4-8": 4,
+      "deepseek-v4-flash": 17
+    },
+    "max_calls_per_role": {
+      "planner": 2,
+      "verifier": 2,
+      "claim_extractor": 1,
+      "executor": 16
+    },
+    "task_timeout_s": 600.0,
+    "max_retries": 0
+  },
+  "ledger": "<repo>\\pilot\\round2_results\\stage1_ledger.jsonl"
+}

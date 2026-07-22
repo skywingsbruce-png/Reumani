@@ -1,0 +1,10 @@
+{
+  "final_answer_verbatim": "⚠️ 未验证 / 证据不足（no_verification）：\n\n（已达最大迭代 2 次仍未通过独立核查，以下为当前最佳结果，仅供参考、未经核实，请勿直接作为科研结论）\n\n\n\n---\n还缺：[]",
+  "final_answer_kind": "no_verification（未验证/证据不足）",
+  "pmids_cited": [],
+  "dois_cited": [],
+  "titles_claimed": false,
+  "fabricated_citation_detected": false,
+  "evidence_cards_built": 0,
+  "note": "最终答案为 no_verification 兜底文案，未声明任何 PMID/DOI/标题；无编造引用。因执行器在 loop guard 前未收敛，PMID exact_hit / DOI zero_hits 未在可核验的 EvidenceCard 中体现。"
+}

@@ -1,0 +1,73 @@
+{
+  "preflight_ext_version": "A.6.6.3",
+  "real_api_calls": 0,
+  "all_passed": true,
+  "checks": [
+    {
+      "check_id": 1,
+      "name": "AgentMiddleware.wrap_tool_call 可用",
+      "passed": true,
+      "detail": "has wrap_tool_call=True"
+    },
+    {
+      "check_id": 2,
+      "name": "ToolCallRequest 可用",
+      "passed": true,
+      "detail": "import ok"
+    },
+    {
+      "check_id": 3,
+      "name": "middleware 注入未来 A1 的 create_agent 入口",
+      "passed": true,
+      "detail": "alias==create_agent:True; runner_uses:True; patches:True"
+    },
+    {
+      "check_id": 4,
+      "name": "生命周期使用 request.tool_call[\"id\"]",
+      "passed": true,
+      "detail": "authoritative id from request.tool_call['id']"
+    },
+    {
+      "check_id": 5,
+      "name": "不使用 run_manager.run_id 做关联",
+      "passed": true,
+      "detail": "'run_manager' in middleware source=False"
+    },
+    {
+      "check_id": 6,
+      "name": "LifecycleReconciler 已安装",
+      "passed": true,
+      "detail": "reconciler wired into hooks + middleware"
+    },
+    {
+      "check_id": 7,
+      "name": "EvidenceCard artifact 守卫有真实 Shadow 调用方",
+      "passed": true,
+      "detail": "shadow.build_evidence_cards -> cards_from_shadow_event"
+    },
+    {
+      "check_id": 8,
+      "name": "ToolLifecycleProxy 旧路径不与 middleware 双计数",
+      "passed": true,
+      "detail": "proxy_absent:True; no_tool_wrap:True"
+    },
+    {
+      "check_id": 9,
+      "name": "restore/uninstall 在 finally 生效",
+      "passed": true,
+      "detail": "runner finally handle.restore():True; uninstall==restore:True"
+    },
+    {
+      "check_id": 10,
+      "name": "失败 Manifest 构造器可用",
+      "passed": true,
+      "detail": "build_failure_manifest(_safe) callable"
+    },
+    {
+      "check_id": 11,
+      "name": "Trace 输出目录无覆盖风险",
+      "passed": true,
+      "detail": "rerun1_preserved:True; transient_backed_up:True; metrics timestamped:True"
+    }
+  ]
+}

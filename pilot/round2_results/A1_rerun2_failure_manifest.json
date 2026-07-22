@@ -1,0 +1,59 @@
+{
+  "run_id": "stage1_A1_17750",
+  "manifest_schema_version": "runmanifest-v1",
+  "manifest_kind": "failure_diagnostic",
+  "status": "failed",
+  "primary_failure": "执行出错：max_tool_rounds; 执行出错：tool_lifecycle_inconsistent",
+  "failure_stage": "executor",
+  "failure_reason": "执行出错：max_tool_rounds; 执行出错：tool_lifecycle_inconsistent",
+  "trace_incomplete": false,
+  "observation_trace_failed": false,
+  "human_review": true,
+  "shadow_status": "not_run_due_to_upstream_failure",
+  "lifecycle_counts": {
+    "requested": 9,
+    "executed": 8,
+    "tool_returned": 8,
+    "failed": 0,
+    "observed": 8
+  },
+  "selected_tools": [
+    "list_skills",
+    "query_data_lake",
+    "retrieve_resources",
+    "search_evidence",
+    "search_literature"
+  ],
+  "tool_events": [
+    {
+      "requested": [
+        "list_skills",
+        "search_evidence",
+        "search_literature"
+      ],
+      "executed": [
+        "list_skills",
+        "search_evidence",
+        "search_literature"
+      ],
+      "observed": [
+        "list_skills",
+        "search_evidence",
+        "search_literature"
+      ]
+    }
+  ],
+  "lifecycle_inconsistencies": [
+    {
+      "kind": "requested_not_executed",
+      "tool_call_id_hash": "1405ef84afdc69fd",
+      "tool_name": "search_literature"
+    }
+  ],
+  "unauthorized_tool_calls": [],
+  "trace_file_sha256": null,
+  "evidence_cards": [],
+  "claims": [],
+  "note": "{\"consistency\": {\"selected\": [\"list_skills\", \"query_data_lake\", \"retrieve_resources\", \"search_evidence\", \"search_literature\"], \"requested\": [\"list_skills\", \"search_evidence\", \"search_literature\"], \"executed\": [\"list_skills\", \"search_evidence\", \"search_literature\"], \"observed\": [\"list_skills\", \"search_evidence\", \"search_literature\"], \"requested_not_executed\": [\"search_literature\"], \"executed_without_tool_message\": [], \"observed_without_request\": [], \"requested_outside_selected\": [], \"unauthorized_executed\": []}, \"budget\": {\"stage\": \"stage1\", \"actual_usd\": 0.086985, \"reserved_open_usd\": 0.0, \"committed_usd\": 0.086985, \"calls_global\": 11, \"calls_by_model\": {\"claude-opus-4-8\": 2, \"deepseek-v4-flash\": 9}, \"calls_by_role\": {\"planner\": 2, \"executor\": 9}, \"cancelled\": false, \"rejected_before_invoke\": 0, \"retries\": 0, \"limits\": {\"max_usd_global\": 25.0, \"max_usd_stage\": 3.0, \"max_usd_task\": 1.5, \"max_calls_global\": 200, \"max_calls_task\": 21, \"max_calls_per_model\": {\"claude-opus-4-8\": 4, \"deepseek-v4-flash\": 17}, \"max_calls_per_role\": {\"planner\": 2, \"verifier\": 2, \"claim_extractor\": 1, \"executor\": 16}, \"task_timeout_s\": 600.0, \"max_retries\": 0}, \"ledger\": \"<repo>\\\\pilot\\\\round2_results\\\\stage1_ledger.jsonl\"}, \"loop_guard\": {\"tool_rounds\": 8, \"max_tool_rounds\": 8, \"distinct_signatures\": 8, \"rounds_without_progress\": 2, \"progress_signal_count\": 5, \"events\": [{\"event\": \"tool_round\", \"round\": 1, \"ts\": 1784757809.5000136, \"tool_name\": \"list_skills\", \"signature\": \"list_skills::44136fa355b3678a\"}, {\"event\": \"progress\", \"round\": 1, \"ts\": 1784757809.836979, \"new_signals\": [\"observed_result:c976e561237590d467f6834e10046b6e1b21cd36cdd6baff0681071974cd6007\"]}, {\"event\": \"tool_round\", \"round\": 2, \"ts\": 1784757811.8875782, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::3a8169cd56d71e91\"}, {\"event\": \"progress\", \"round\": 2, \"ts\": 1784757812.3562365, \"new_signals\": [\"observed_result:cfcb6035283b9e95aa80fccdc0abae70ac352d4fce6b2a7e660cb29db128d70e\"]}, {\"event\": \"tool_round\", \"round\": 3, \"ts\": 1784757813.9659472, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::5cbf822ae8b96db4\"}, {\"event\": \"progress\", \"round\": 3, \"ts\": 1784757814.3675349, \"new_signals\": [\"observed_result:39cbaa27f5cce632ab2623f538cdf47ad37a4eb27a90246c2987e2774373cb43\"]}, {\"event\": \"tool_round\", \"round\": 4, \"ts\": 1784757816.0802648, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::ee6eb31a2b00f106\"}, {\"event\": \"no_progress_round\", \"round\": 4, \"ts\": 1784757816.4667501, \"streak\": 1}, {\"event\": \"tool_round\", \"round\": 5, \"ts\": 1784757817.9191701, \"tool_name\": \"search_evidence\", \"signature\": \"search_evidence::3875530037024369\"}, {\"event\": \"progress\", \"round\": 5, \"ts\": 1784757818.3641286, \"new_signals\": [\"observed_result:0b1775d9b4f19b714596542f2470a31971de9b1e6f9c6c6d3171e03d821ffc3e\"]}, {\"event\": \"tool_round\", \"round\": 6, \"ts\": 1784757819.8999412, \"tool_name\": \"search_evidence\", \"signature\": \"search_evidence::0bfdd95d55ce1e6a\"}, {\"event\": \"progress\", \"round\": 6, \"ts\": 1784757820.2657883, \"new_signals\": [\"observed_result:1af2af90f38eda51bc0a20e753d2ec0d86119295a933c3e361c7e24d17b76b11\"]}, {\"event\": \"tool_round\", \"round\": 7, \"ts\": 1784757821.7994316, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::db8b030c07495577\"}, {\"event\": \"no_progress_round\", \"round\": 7, \"ts\": 1784757822.1785333, \"streak\": 1}, {\"event\": \"tool_round\", \"round\": 8, \"ts\": 1784757823.5700784, \"tool_name\": \"search_literature\", \"signature\": \"search_literature::92b6820d13248695\"}, {\"event\": \"no_progress_round\", \"round\": 8, \"ts\": 1784757824.0873594, \"streak\": 2}, {\"event\": \"loop_guard_triggered\", \"round\": 8, \"ts\": 1784757825.2392898, \"reason\": \"max_tool_rounds\", \"limit\": 8}]}}",
+  "phi_warning": "本 manifest 可能含科研文本；不得保存患者可识别信息(PHI)/密钥/授权头，已递归脱敏。"
+}
