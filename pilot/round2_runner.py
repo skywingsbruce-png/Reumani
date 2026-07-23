@@ -141,7 +141,9 @@ def run_stage(stage, task_ids):
     gate = HardBudgetGate(stage=stage, ledger_path=OUT / f"{stage}_ledger.jsonl", **LIMITS)
     gate.check_switches()          # 两个显式开关缺一不可，且 CI 中一律拒绝
     _, runconf, roles = _wrap_paid_entrypoints(gate)   # 包不住即抛，Pilot 不启动
-    from ssc_a1 import run_agent
+    # A.7.1：exact-ID 任务经 query classifier 走确定性 Action（绕开 ReAct Executor）；
+    # 机制类/开放式任务仍走原 ssc_a1.run_agent，行为不变。
+    from pilot.exact_id_agent import run_routed_agent as run_agent
 
     results, halted = [], None
     for tid in task_ids:
