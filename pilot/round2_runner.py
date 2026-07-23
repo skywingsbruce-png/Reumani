@@ -141,6 +141,13 @@ def run_stage(stage, task_ids):
     gate = HardBudgetGate(stage=stage, ledger_path=OUT / f"{stage}_ledger.jsonl", **LIMITS)
     gate.check_switches()          # 两个显式开关缺一不可，且 CI 中一律拒绝
     _, runconf, roles = _wrap_paid_entrypoints(gate)   # 包不住即抛，Pilot 不启动
+    # A.7.1.3：Claim 提取显式绑定到**专用** claim_extractor 角色。
+    # 角色缺失/未包装/role 错/非同一账本/模型非冻结 flash/thinking 未关/max_retries≠0
+    # → 直接拒绝启动，绝不静默退回 deepseek_llm_pro，也绝不把 Claim 记成 Executor。
+    claim_role_conf = PT.assert_claim_extractor_ready(roles.get("claim_extractor"), gate)
+    from shadow import build_claim_extractor
+    claim_extractor = build_claim_extractor(roles["claim_extractor"])
+    runconf["claim_extractor_role"] = claim_role_conf
     # A.7.1：exact-ID 任务经 query classifier 走确定性 Action（绕开 ReAct Executor）；
     # 机制类/开放式任务仍走原 ssc_a1.run_agent，行为不变。
     from pilot.exact_id_agent import run_routed_agent as run_agent
@@ -164,7 +171,8 @@ def run_stage(stage, task_ids):
             state = run_agent(task["question"], constraints=task.get("constraints", ""),
                               max_iterations=2, shadow=True,
                               planner_model=roles["planner"],      # 显式注入：分别计量
-                              verifier_model=roles["verifier"])
+                              verifier_model=roles["verifier"],
+                              claim_extractor=claim_extractor)     # 专用角色，独立计量
             m = _metrics(state, task, time.monotonic() - t0)
             m["error"] = None
             m["executor_trace"] = trace.consistency()

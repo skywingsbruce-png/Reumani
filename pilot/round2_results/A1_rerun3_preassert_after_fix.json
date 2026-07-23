@@ -1,0 +1,49 @@
+{
+  "phase": "A1-rerun3 pre-assertions (re-run after A.7.1.3 fix)",
+  "real_paid_calls": 0,
+  "blocked_inner_llm_invokes": 2,
+  "classify": "exact_id",
+  "calls_by_role": {
+    "verifier": 1,
+    "claim_extractor": 1
+  },
+  "claim_extractor_role_conf": {
+    "role": "claim_extractor",
+    "model_id": "deepseek-v4-flash",
+    "max_retries": 0,
+    "wrapped": true,
+    "same_gate": true
+  },
+  "tool_spies": {
+    "search_literature": 0,
+    "search_evidence": 0
+  },
+  "react_spies": {
+    "execute": 0,
+    "make_plan": 0,
+    "create_agent": 0
+  },
+  "shadow_status": "ok",
+  "evidence_cards": 1,
+  "real_shared_ledger": {
+    "bytes_before": 21686,
+    "bytes_after": 21686,
+    "untouched": true
+  },
+  "assertions": {
+    "classify==exact_id": "PASS",
+    "planner_calls==0": "PASS",
+    "executor_calls==0": "PASS",
+    "verifier_calls>=1": "PASS",
+    "claim_extractor_calls>=1": "PASS",
+    "claim_not_counted_as_executor": "PASS",
+    "roles_only_actually_run": "PASS",
+    "search_literature==0": "PASS",
+    "legacy_search_evidence==0": "PASS",
+    "react_execute==0": "PASS",
+    "make_plan==0": "PASS",
+    "real_ledger_unchanged": "PASS"
+  },
+  "all_pass": true,
+  "note": "temporary ledger used; shared ledger never opened for write; inner paid clients sentinel-blocked so zero real API calls"
+}

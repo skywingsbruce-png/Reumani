@@ -150,10 +150,14 @@ def build_evidence_cards(events):
 
 
 # ---------- 3) 从 Executor 输出提取原子 Claim（extractor 可注入；不改写相关为因果）----------
-def default_claim_extractor(model="deepseek"):
-    """生产用：LLM 把最终答案拆成原子 Claim。返回 (final_text, card_ids)->list[dict]。"""
-    from ssc_pi_agent import deepseek_llm_pro, judge_llm
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+def build_claim_extractor(llm):
+    """【显式依赖注入】直接使用**传入的 LLM 对象**做 Claim 提取。
+
+    Pilot 必须用它并传入 `GatedModel(role="claim_extractor")`，从而：
+    - Claim 调用计入 claim_extractor 角色（不消耗 executor 额度）；
+    - 不再按模型名字符串回查全局对象，不读取 ssc_pi_agent.deepseek_llm_pro。
+    Prompt 与科学逻辑与原实现逐字一致（未改）。
+    """
 
     def _extract(final_text, card_ids):
         prompt = (
@@ -166,6 +170,17 @@ def default_claim_extractor(model="deepseek"):
         return json.loads(re.search(r"\[.*\]", llm.invoke(prompt).content, re.DOTALL).group(0))
 
     return _extract
+
+
+def default_claim_extractor(model="deepseek"):
+    """向后兼容入口：按模型名解析**全局**客户端。
+
+    ⚠️ Pilot **不得**使用它——它会拿到 ssc_pi_agent.deepseek_llm_pro（在 Pilot 里被绑成
+    executor 角色），导致 Claim 调用被计成 Executor。Pilot 请用 build_claim_extractor(llm)
+    并显式传入 roles["claim_extractor"]。
+    """
+    from ssc_pi_agent import deepseek_llm_pro, judge_llm
+    return build_claim_extractor(judge_llm if model == "claude" else deepseek_llm_pro)
 
 
 def extract_claims(final_text, cards, extractor):

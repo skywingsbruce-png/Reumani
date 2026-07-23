@@ -1,0 +1,66 @@
+{
+  "phase": "A1-rerun3-deterministic / pre-run assertions (section 2)",
+  "decision": "BLOCKED — paid A1 NOT started",
+  "real_paid_calls": 0,
+  "real_shared_ledger": {
+    "bytes_before": 21686,
+    "bytes_after": 21686,
+    "untouched": true,
+    "note": "assertion harness used a temporary ledger; shared ledger never opened for write"
+  },
+  "baseline_verified": {
+    "dev_head": "144edeb",
+    "public_head": "7097f2a",
+    "protocol_hashes_ok": true,
+    "a1_history_docs_ok": true,
+    "ledger_reserved": 40,
+    "ledger_reconciled": 40,
+    "open_reservations": 0
+  },
+  "assertions": {
+    "classify_is_exact_id": {"result": "PASS", "value": "exact_id"},
+    "planner_calls_zero": {"result": "PASS", "value": 0},
+    "executor_calls_zero": {"result": "FAIL", "value": 1},
+    "verifier_calls_at_least_one": {"result": "PASS", "value": 1},
+    "claim_extractor_calls_at_least_one": {"result": "FAIL", "value": 0},
+    "search_literature_zero": {"result": "PASS", "value": 0},
+    "legacy_search_evidence_zero": {"result": "PASS", "value": 0},
+    "react_execute_zero": {"result": "PASS", "value": 0},
+    "make_plan_zero": {"result": "PASS", "value": 0},
+    "real_ledger_untouched": {"result": "PASS", "value": true}
+  },
+  "observed_calls_by_role": {"verifier": 1, "executor": 1},
+  "roles_constructed": ["claim_extractor", "executor", "planner", "verifier"],
+  "root_cause": {
+    "summary": "Claim extraction is metered under role 'executor' instead of 'claim_extractor'.",
+    "chain": [
+      "round2_runner._wrap_paid_entrypoints binds only judge_llm->roles['planner'] and deepseek_llm_pro->roles['executor']",
+      "shadow.default_claim_extractor('deepseek') resolves llm = ssc_pi_agent.deepseek_llm_pro",
+      "deepseek_llm_pro is roles['executor'] (GatedModel role='executor')",
+      "therefore the Claim extractor call increments calls_by_role['executor']",
+      "roles['claim_extractor'] is constructed by build_pilot_roles but never wired to any caller"
+    ],
+    "impact": [
+      "violates required assertion Executor calls = 0",
+      "violates required assertion Claim extractor calls >= 1",
+      "claim extraction consumes the executor per-role cap (16) instead of the claim_extractor cap (1)",
+      "per-role budget accounting for claim extraction is incorrect"
+    ],
+    "not_affected": [
+      "gate still enforces budget (the call IS gated, only the role label/cap is wrong)",
+      "no ReAct / Planner / search_literature / legacy search_evidence involvement",
+      "exact-id deterministic routing, EvidenceCard construction and Shadow all behaved correctly"
+    ]
+  },
+  "side_observations": {
+    "shadow_status": "ok",
+    "evidence_cards": 1,
+    "verification_status": "verifier_unavailable (expected: inner LLM was sentinel-blocked in this dry assertion)"
+  },
+  "actions_taken": [
+    "stopped before any paid call",
+    "no code modified",
+    "no protocol/addendum modified",
+    "A1 not run; B1 not run"
+  ]
+}

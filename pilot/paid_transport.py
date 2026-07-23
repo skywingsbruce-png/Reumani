@@ -130,6 +130,40 @@ def assert_deepseek_nonthinking(role, obj, model_id):
     return True
 
 
+def assert_claim_extractor_ready(model, gate, *, expected_role="claim_extractor",
+                                 expected_model_id=None):
+    """§4 禁止静默回退：专用 Claim 角色必须**完全就位**，否则拒绝启动。
+
+    逐项检查：角色对象存在 / 已被 Gate 包装 / role 标签正确 / 绑定的是当前 Stage 的同一
+    gate（即同一账本）/ 模型钉死冻结的 DeepSeek Flash / thinking disabled / max_retries=0。
+    任一不满足直接抛 GateConfigError —— 绝不静默退回 deepseek_llm_pro，也绝不把 Claim
+    记成 Executor 以继续运行。
+    """
+    expected_model_id = expected_model_id or PINNED_DEEPSEEK
+    if model is None:
+        raise GateConfigError("缺少专用 claim_extractor 角色 → 拒绝启动（不得回退到 executor）")
+    if not getattr(model, _WRAPPED, False):
+        raise GateConfigError("claim_extractor 未被 Budget Gate 包装 → 拒绝启动")
+    role = object.__getattribute__(model, "_role")
+    if role != expected_role:
+        raise GateConfigError(
+            f"claim_extractor 角色标签错误：期望 {expected_role!r}，实际 {role!r} → 拒绝启动")
+    bound_gate = object.__getattribute__(model, "_gate")
+    if bound_gate is not gate:
+        raise GateConfigError("claim_extractor 绑定的不是当前 Stage 的 Budget Gate/账本 → 拒绝启动")
+    model_id = object.__getattribute__(model, "_model_id")
+    if model_id != expected_model_id:
+        raise GateConfigError(
+            f"claim_extractor 模型必须为 {expected_model_id!r}，实际 {model_id!r} → 拒绝启动")
+    assert_deepseek_nonthinking(expected_role, model, model_id)      # thinking 必须 disabled
+    t = inspect_transport(model)
+    if t.get("max_retries") != 0:
+        raise GateConfigError(
+            f"claim_extractor max_retries 必须为 0，实际 {t.get('max_retries')!r} → 拒绝启动")
+    return {"role": role, "model_id": model_id, "max_retries": t.get("max_retries"),
+            "wrapped": True, "same_gate": True}
+
+
 def resolve_anthropic_billing(obj, model_id):
     """§4：解析并锁定 Anthropic 计费模式；不合规直接拒绝。
     客户端没有显式 speed / inference_geo 字段时，接受"参数不存在 = 官方默认"，
