@@ -1,0 +1,10 @@
+b3646d346c1e18fa1293fa275bc81a04e95f6aed917213d6689ee6c528a31381  SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_2.md
+algorithm: sha256 (over LF-normalized bytes)
+version: Addendum 2
+frozen_at: 2026-07-23
+depends_on: SHADOW_PILOT_ROUND2_PROTOCOL_V2.md; SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_1.md
+v2_sha256_unchanged: c76f589485e4ebfd728c27b653d2735f3ebd1c6930087c244e4efbdba9d66696
+v1_sha256_unchanged: 5d166bce159de665c4df677aef6765803575a48827afdc5d061cb49ff54f0f22
+addendum_1_sha256_unchanged: de3afcdd2131ba17717eb2d93a543e350aeff16e11c2ecc32edd8d583f9ca7f3
+code_baseline: dev 2a8dbf0 / public 6b8da9d (A.7.0, CI Run #42)
+scope: deterministic exact-id resolution contract only; no change to tasks, scoring, thresholds, budget or loop caps
