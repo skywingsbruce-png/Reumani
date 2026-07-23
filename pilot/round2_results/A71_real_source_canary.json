@@ -1,0 +1,370 @@
+{
+  "llm_sentinels": [
+    "langchain_openai.ChatOpenAI",
+    "langchain_anthropic.ChatAnthropic"
+  ],
+  "cases": [
+    {
+      "label": "A1_frozen",
+      "route": "exact_id",
+      "elapsed_s": 2.532,
+      "all_terminal": true,
+      "completion_reason": "all_ids_terminal",
+      "counts": {
+        "verified": 1,
+        "not_found": 1,
+        "mismatch": 0,
+        "manual_needed": 0
+      },
+      "batch_sha256": "c9e9aa9331c0441aa8a7c75aa927b71d3b78ef77a0ef17c679d95863efa0ff16",
+      "http_requests": 5,
+      "requests_per_source_id": {
+        "pubmed_by_pmid::41657283": 1,
+        "epmc_by_pmid::41657283": 1,
+        "crossref_by_doi::10.1080/03009742.2024.2302553": 1,
+        "doiorg_by_doi::10.1080/03009742.2024.2302553": 1,
+        "epmc_by_doi::10.1080/03009742.2024.2302553": 1
+      },
+      "timings": [
+        {
+          "method": "pubmed_by_pmid",
+          "id": "41657283",
+          "elapsed_s": 0.654,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        },
+        {
+          "method": "epmc_by_pmid",
+          "id": "41657283",
+          "elapsed_s": 0.436,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        },
+        {
+          "method": "crossref_by_doi",
+          "id": "10.1080/03009742.2024.2302553",
+          "elapsed_s": 0.646,
+          "retrieval_status": "zero_hits",
+          "http_status": 404,
+          "error_type": null
+        },
+        {
+          "method": "doiorg_by_doi",
+          "id": "10.1080/03009742.2024.2302553",
+          "elapsed_s": 0.388,
+          "retrieval_status": "zero_hits",
+          "http_status": 404,
+          "error_type": null
+        },
+        {
+          "method": "epmc_by_doi",
+          "id": "10.1080/03009742.2024.2302553",
+          "elapsed_s": 0.406,
+          "retrieval_status": "zero_hits",
+          "http_status": 200,
+          "error_type": null
+        }
+      ],
+      "ids": [
+        {
+          "original_input": "PMID:41657283",
+          "normalized_id": "41657283",
+          "id_type": "pmid",
+          "retrieval_status_by_source": {
+            "pubmed": "exact_hit",
+            "europepmc": "exact_hit"
+          },
+          "resolution_status": "verified",
+          "canonical_pmid": "41657283",
+          "canonical_doi": "10.1080/07853890.2026.2627057",
+          "canonical_title": "From technological iteration to clinical breakthrough: advances of CAR-T cell therapy in autoimmune diseases.",
+          "journal": "Annals of medicine",
+          "year": "2026",
+          "content_level": "metadata_only",
+          "warnings": [],
+          "error_type": null,
+          "sha256": "76b1ab1ce2844013f348f603cbf277171f943564d173f846486f7efbb2fb2ecb"
+        },
+        {
+          "original_input": "10.1080/03009742.2024.2302553",
+          "normalized_id": "10.1080/03009742.2024.2302553",
+          "id_type": "doi",
+          "retrieval_status_by_source": {
+            "crossref": "zero_hits",
+            "doi.org": "zero_hits",
+            "europepmc": "zero_hits"
+          },
+          "resolution_status": "not_found",
+          "canonical_pmid": null,
+          "canonical_doi": null,
+          "canonical_title": null,
+          "journal": null,
+          "year": null,
+          "content_level": "metadata_only",
+          "warnings": [],
+          "error_type": null,
+          "sha256": "3e7f4b170a9f9f0d2787de5d1866aabe3485792aed138f67150f193511e175ac"
+        }
+      ],
+      "evidence_cards": [
+        {
+          "evidence_id": "41657283",
+          "pmid": "41657283",
+          "doi": "10.1080/07853890.2026.2627057",
+          "title": "From technological iteration to clinical breakthrough: advances of CAR-T cell therapy in autoimmune diseases.",
+          "tier": "abstract",
+          "evidence_grade": "初筛",
+          "provenance_tool": "resolve_exact_ids",
+          "provenance_source": "https://pubmed.ncbi.nlm.nih.gov/41657283/",
+          "provenance_source_ids": [
+            "41657283"
+          ],
+          "provenance_content_level": "metadata_only",
+          "content_hash": null,
+          "hash_algorithm": null
+        }
+      ]
+    },
+    {
+      "label": "known_valid_pmid",
+      "route": "exact_id",
+      "elapsed_s": 0.915,
+      "all_terminal": true,
+      "completion_reason": "all_ids_terminal",
+      "counts": {
+        "verified": 1,
+        "not_found": 0,
+        "mismatch": 0,
+        "manual_needed": 0
+      },
+      "batch_sha256": "48581434d1cb048edf56721577eda89fd28d2c9d6a771b5b89b6beb09d8ac3a0",
+      "http_requests": 2,
+      "requests_per_source_id": {
+        "pubmed_by_pmid::33301246": 1,
+        "epmc_by_pmid::33301246": 1
+      },
+      "timings": [
+        {
+          "method": "pubmed_by_pmid",
+          "id": "33301246",
+          "elapsed_s": 0.51,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        },
+        {
+          "method": "epmc_by_pmid",
+          "id": "33301246",
+          "elapsed_s": 0.405,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        }
+      ],
+      "ids": [
+        {
+          "original_input": "PMID:33301246",
+          "normalized_id": "33301246",
+          "id_type": "pmid",
+          "retrieval_status_by_source": {
+            "pubmed": "exact_hit",
+            "europepmc": "exact_hit"
+          },
+          "resolution_status": "verified",
+          "canonical_pmid": "33301246",
+          "canonical_doi": "10.1056/nejmoa2034577",
+          "canonical_title": "Safety and Efficacy of the BNT162b2 mRNA Covid-19 Vaccine.",
+          "journal": "The New England journal of medicine",
+          "year": "2020",
+          "content_level": "metadata_only",
+          "warnings": [],
+          "error_type": null,
+          "sha256": "aa40beafa58a6c98240d6af0d97ec482173faaba4db9c729aea4828a6f1dd11f"
+        }
+      ],
+      "evidence_cards": [
+        {
+          "evidence_id": "33301246",
+          "pmid": "33301246",
+          "doi": "10.1056/nejmoa2034577",
+          "title": "Safety and Efficacy of the BNT162b2 mRNA Covid-19 Vaccine.",
+          "tier": "abstract",
+          "evidence_grade": "初筛",
+          "provenance_tool": "resolve_exact_ids",
+          "provenance_source": "https://pubmed.ncbi.nlm.nih.gov/33301246/",
+          "provenance_source_ids": [
+            "33301246"
+          ],
+          "provenance_content_level": "metadata_only",
+          "content_hash": null,
+          "hash_algorithm": null
+        }
+      ]
+    },
+    {
+      "label": "known_valid_doi",
+      "route": "exact_id",
+      "elapsed_s": 1.364,
+      "all_terminal": true,
+      "completion_reason": "all_ids_terminal",
+      "counts": {
+        "verified": 1,
+        "not_found": 0,
+        "mismatch": 0,
+        "manual_needed": 0
+      },
+      "batch_sha256": "e46066ebc3cd9b9af673eb72584dccad138716ace16e3a517d9c02cbea0504e7",
+      "http_requests": 3,
+      "requests_per_source_id": {
+        "crossref_by_doi::10.1038/s41586-020-2649-2": 1,
+        "doiorg_by_doi::10.1038/s41586-020-2649-2": 1,
+        "epmc_by_doi::10.1038/s41586-020-2649-2": 1
+      },
+      "timings": [
+        {
+          "method": "crossref_by_doi",
+          "id": "10.1038/s41586-020-2649-2",
+          "elapsed_s": 0.605,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        },
+        {
+          "method": "doiorg_by_doi",
+          "id": "10.1038/s41586-020-2649-2",
+          "elapsed_s": 0.349,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        },
+        {
+          "method": "epmc_by_doi",
+          "id": "10.1038/s41586-020-2649-2",
+          "elapsed_s": 0.41,
+          "retrieval_status": "exact_hit",
+          "http_status": 200,
+          "error_type": null
+        }
+      ],
+      "ids": [
+        {
+          "original_input": "10.1038/s41586-020-2649-2",
+          "normalized_id": "10.1038/s41586-020-2649-2",
+          "id_type": "doi",
+          "retrieval_status_by_source": {
+            "crossref": "exact_hit",
+            "doi.org": "exact_hit",
+            "europepmc": "exact_hit"
+          },
+          "resolution_status": "verified",
+          "canonical_pmid": null,
+          "canonical_doi": "10.1038/s41586-020-2649-2",
+          "canonical_title": "Array programming with NumPy",
+          "journal": "Nature",
+          "year": "2020",
+          "content_level": "metadata_only",
+          "warnings": [],
+          "error_type": null,
+          "sha256": "75921991aaf901ba617031bcbde8d2750cafcd117598115936eb4284ce4d00e6"
+        }
+      ],
+      "evidence_cards": [
+        {
+          "evidence_id": "10.1038/s41586-020-2649-2",
+          "pmid": null,
+          "doi": "10.1038/s41586-020-2649-2",
+          "title": "Array programming with NumPy",
+          "tier": "abstract",
+          "evidence_grade": "初筛",
+          "provenance_tool": "resolve_exact_ids",
+          "provenance_source": "https://doi.org/10.1038/s41586-020-2649-2",
+          "provenance_source_ids": [
+            "10.1038/s41586-020-2649-2"
+          ],
+          "provenance_content_level": "metadata_only",
+          "content_hash": null,
+          "hash_algorithm": null
+        }
+      ]
+    },
+    {
+      "label": "nonexistent_wellformed_doi",
+      "route": "exact_id",
+      "elapsed_s": 1.525,
+      "all_terminal": true,
+      "completion_reason": "all_ids_terminal",
+      "counts": {
+        "verified": 0,
+        "not_found": 1,
+        "mismatch": 0,
+        "manual_needed": 0
+      },
+      "batch_sha256": "c9ce4b745817700ac891dbeb3c0faa226976faaa21abfd128ae835b528259f77",
+      "http_requests": 3,
+      "requests_per_source_id": {
+        "crossref_by_doi::10.9999/this.doi.does.not.exist.999999": 1,
+        "doiorg_by_doi::10.9999/this.doi.does.not.exist.999999": 1,
+        "epmc_by_doi::10.9999/this.doi.does.not.exist.999999": 1
+      },
+      "timings": [
+        {
+          "method": "crossref_by_doi",
+          "id": "10.9999/this.doi.does.not.exist.999999",
+          "elapsed_s": 0.618,
+          "retrieval_status": "zero_hits",
+          "http_status": 404,
+          "error_type": null
+        },
+        {
+          "method": "doiorg_by_doi",
+          "id": "10.9999/this.doi.does.not.exist.999999",
+          "elapsed_s": 0.447,
+          "retrieval_status": "zero_hits",
+          "http_status": 404,
+          "error_type": null
+        },
+        {
+          "method": "epmc_by_doi",
+          "id": "10.9999/this.doi.does.not.exist.999999",
+          "elapsed_s": 0.459,
+          "retrieval_status": "zero_hits",
+          "http_status": 200,
+          "error_type": null
+        }
+      ],
+      "ids": [
+        {
+          "original_input": "10.9999/this.doi.does.not.exist.999999",
+          "normalized_id": "10.9999/this.doi.does.not.exist.999999",
+          "id_type": "doi",
+          "retrieval_status_by_source": {
+            "crossref": "zero_hits",
+            "doi.org": "zero_hits",
+            "europepmc": "zero_hits"
+          },
+          "resolution_status": "not_found",
+          "canonical_pmid": null,
+          "canonical_doi": null,
+          "canonical_title": null,
+          "journal": null,
+          "year": null,
+          "content_level": "metadata_only",
+          "warnings": [],
+          "error_type": null,
+          "sha256": "bcc390ee9d693168b7d803135a632a96b8552df85cdbd4a2d73e207accb8e101"
+        }
+      ],
+      "evidence_cards": []
+    }
+  ],
+  "llm_calls": {
+    "planner": 0,
+    "executor": 0,
+    "verifier": 0,
+    "claim": 0,
+    "shadow": 0,
+    "any": 0
+  }
+}

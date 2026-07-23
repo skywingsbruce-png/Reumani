@@ -1,0 +1,170 @@
+{
+  "source_level": [
+    {
+      "scenario": "timeout",
+      "method": "pubmed_by_pmid",
+      "retrieval_status": "source_error",
+      "error_type": "parse_error:Timeout",
+      "http_status": null,
+      "underlying_requests": 1
+    },
+    {
+      "scenario": "dns_connection_error",
+      "method": "pubmed_by_pmid",
+      "retrieval_status": "source_error",
+      "error_type": "parse_error:ConnectionError",
+      "http_status": null,
+      "underlying_requests": 1
+    },
+    {
+      "scenario": "http_429_always",
+      "method": "pubmed_by_pmid",
+      "retrieval_status": "source_error",
+      "error_type": "rate_limited_429",
+      "http_status": null,
+      "underlying_requests": 2
+    },
+    {
+      "scenario": "http_429_then_200",
+      "method": "pubmed_by_pmid",
+      "retrieval_status": "exact_hit",
+      "error_type": null,
+      "http_status": 200,
+      "underlying_requests": 2
+    },
+    {
+      "scenario": "http_503",
+      "method": "pubmed_by_pmid",
+      "retrieval_status": "source_error",
+      "error_type": "http_503",
+      "http_status": null,
+      "underlying_requests": 2
+    },
+    {
+      "scenario": "json_parse_error",
+      "method": "pubmed_by_pmid",
+      "retrieval_status": "source_error",
+      "error_type": "parse_error:ValueError",
+      "http_status": null,
+      "underlying_requests": 1
+    }
+  ],
+  "resolution_level": [
+    {
+      "scenario": "timeout",
+      "id_type": "pmid",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "pubmed": "source_error",
+        "europepmc": "not_queried"
+      },
+      "error_type": "parse_error:Timeout",
+      "total_requests": 1
+    },
+    {
+      "scenario": "timeout_doi",
+      "id_type": "doi",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "crossref": "source_error",
+        "doi.org": "source_error",
+        "europepmc": "source_error"
+      },
+      "error_type": "parse_error:Timeout",
+      "total_requests": 3
+    },
+    {
+      "scenario": "dns_connection_error",
+      "id_type": "pmid",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "pubmed": "source_error",
+        "europepmc": "not_queried"
+      },
+      "error_type": "parse_error:ConnectionError",
+      "total_requests": 1
+    },
+    {
+      "scenario": "dns_connection_error_doi",
+      "id_type": "doi",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "crossref": "source_error",
+        "doi.org": "source_error",
+        "europepmc": "source_error"
+      },
+      "error_type": "parse_error:ConnectionError",
+      "total_requests": 3
+    },
+    {
+      "scenario": "http_429_always",
+      "id_type": "pmid",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "pubmed": "source_error",
+        "europepmc": "not_queried"
+      },
+      "error_type": "rate_limited_429",
+      "total_requests": 2
+    },
+    {
+      "scenario": "http_429_always_doi",
+      "id_type": "doi",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "crossref": "source_error",
+        "doi.org": "source_error",
+        "europepmc": "source_error"
+      },
+      "error_type": "rate_limited_429",
+      "total_requests": 6
+    },
+    {
+      "scenario": "http_503",
+      "id_type": "pmid",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "pubmed": "source_error",
+        "europepmc": "not_queried"
+      },
+      "error_type": "http_503",
+      "total_requests": 2
+    },
+    {
+      "scenario": "http_503_doi",
+      "id_type": "doi",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "crossref": "source_error",
+        "doi.org": "source_error",
+        "europepmc": "source_error"
+      },
+      "error_type": "http_503",
+      "total_requests": 6
+    },
+    {
+      "scenario": "json_parse_error",
+      "id_type": "pmid",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "pubmed": "source_error",
+        "europepmc": "not_queried"
+      },
+      "error_type": "parse_error:ValueError",
+      "total_requests": 1
+    },
+    {
+      "scenario": "json_parse_error_doi",
+      "id_type": "doi",
+      "resolution_status": "manual_needed",
+      "retrieval_status_by_source": {
+        "crossref": "source_error",
+        "doi.org": "source_error",
+        "europepmc": "source_error"
+      },
+      "error_type": "parse_error:ValueError",
+      "total_requests": 3
+    }
+  ],
+  "no_network_error_became_not_found": true
+}
