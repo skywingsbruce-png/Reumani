@@ -1,0 +1,88 @@
+{
+  "route": "exact_id",
+  "elapsed_s": 2.519,
+  "all_terminal": true,
+  "counts": {
+    "verified": 1,
+    "not_found": 1,
+    "mismatch": 0,
+    "manual_needed": 0
+  },
+  "ids": [
+    {
+      "id": "41657283",
+      "type": "pmid",
+      "resolution_status": "verified",
+      "by_source": {
+        "pubmed": "exact_hit",
+        "europepmc": "exact_hit"
+      },
+      "title": "From technological iteration to clinical breakthrough: advances of CAR-T cell therapy in autoimmune diseases.",
+      "journal": "Annals of medicine",
+      "year": "2026",
+      "attempts_per_source": {
+        "pubmed": 1,
+        "europepmc": 1
+      }
+    },
+    {
+      "id": "10.1080/03009742.2024.2302553",
+      "type": "doi",
+      "resolution_status": "not_found",
+      "by_source": {
+        "crossref": "zero_hits",
+        "doi.org": "zero_hits",
+        "europepmc": "zero_hits"
+      },
+      "title": null,
+      "journal": null,
+      "year": null,
+      "attempts_per_source": {
+        "crossref": 1,
+        "doi.org": 1,
+        "europepmc": 1
+      }
+    }
+  ],
+  "cards": [
+    {
+      "pmid": "41657283",
+      "doi": "10.1080/07853890.2026.2627057",
+      "content_hash": "ca9333f5c43960b11e6c8908d88c540ed6c77fef153ce49e55ed341aec9271be",
+      "hash_algorithm": "sha256",
+      "content_level": "metadata_only",
+      "source": "https://pubmed.ncbi.nlm.nih.gov/41657283/",
+      "source_ids": [
+        "41657283"
+      ]
+    }
+  ],
+  "timeout_retry_proof": {
+    "resolution_status": "verified",
+    "pubmed_attempts": [
+      {
+        "source": "pubmed",
+        "attempt": 1,
+        "http_status": null,
+        "error_type": "timeout",
+        "elapsed_s": 0.0
+      },
+      {
+        "source": "pubmed",
+        "attempt": 2,
+        "http_status": 200,
+        "error_type": null,
+        "elapsed_s": 0.0
+      }
+    ],
+    "total_transport_calls": 3
+  },
+  "ledger_bytes_before": 21686,
+  "ledger_bytes_after": 21686,
+  "ledger_unchanged": true,
+  "llm_calls": 0,
+  "llm_sentinels": [
+    "langchain_openai.ChatOpenAI",
+    "langchain_anthropic.ChatAnthropic"
+  ]
+}

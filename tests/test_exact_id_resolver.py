@@ -8,7 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pilot.exact_id_resolver import (ExactIdBatchResult, _Retryable, _with_retry,
+from pilot.exact_id_resolver import (MAX_ATTEMPTS, ExactIdBatchResult, HttpSources,
                                      extract_ids, normalize_doi, normalize_pmid,
                                      resolve_exact_ids, resolve_one)
 
@@ -205,24 +205,36 @@ def test_one_query_per_source_per_id():
 
 @pytest.mark.unit
 def test_controlled_retry_on_429_only_once():
-    """#19：429 → 程序控制的一次退避重试（非 LLM，不改查询）。"""
-    calls = {"n": 0}
+    """#19：429 → 程序控制的一次退避重试（非 LLM，不改查询），总请求 ≤ 2。"""
+    class _Resp:
+        def __init__(self, status, payload=None):
+            self.status_code, self._p, self.headers = status, payload or {}, {}
+        def json(self):
+            return self._p
 
-    def flaky():
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise _Retryable("rate_limited_429")
-        return "ok"
+    ok_payload = {"result": {PMID: {"title": "T", "fulljournalname": "J", "pubdate": "2026",
+                                    "articleids": []}, "uids": [PMID]}}
 
-    val, etype = _with_retry(flaky, retries=1)
-    assert val == "ok" and etype is None and calls["n"] == 2
+    # 429 → 200：重试后成功
+    st = {"n": 0}
+    class _T1:
+        def get(self, url=None, params=None, timeout=None, **k):
+            st["n"] += 1
+            return _Resp(429) if st["n"] == 1 else _Resp(200, ok_payload)
+    hs = HttpSources(); hs._requests = _T1()
+    r = hs.pubmed_by_pmid(PMID)
+    assert r["retrieval_status"] == "exact_hit" and st["n"] == 2
 
-    def always():
-        calls["n"] += 1
-        raise _Retryable("rate_limited_429")
-    calls["n"] = 0
-    val2, etype2 = _with_retry(always, retries=1)
-    assert val2 is None and etype2 == "rate_limited_429" and calls["n"] == 2   # 只重试一次
+    # 持续 429：只重试一次，总请求 == MAX_ATTEMPTS
+    st2 = {"n": 0}
+    class _T2:
+        def get(self, url=None, params=None, timeout=None, **k):
+            st2["n"] += 1
+            return _Resp(429)
+    hs2 = HttpSources(); hs2._requests = _T2()
+    r2 = hs2.pubmed_by_pmid(PMID)
+    assert r2["retrieval_status"] == "source_error" and r2["error_type"] == "rate_limited"
+    assert st2["n"] == MAX_ATTEMPTS == 2
 
 
 @pytest.mark.unit

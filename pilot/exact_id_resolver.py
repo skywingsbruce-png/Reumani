@@ -135,71 +135,156 @@ class ExactIdBatchResult(BaseModel):
     sha256: Optional[str] = None
 
 
-# ============================ 来源客户端 ============================
-def _with_retry(fn, *, retries=1):
-    """仅对网络错误做程序控制的一次退避重试；不改查询、非 LLM 调用。
-    返回 (result, error_type)。error_type=None 表示成功。"""
-    import time
-    last = None
-    for attempt in range(retries + 1):
-        try:
-            return fn(), None
-        except _Retryable as e:          # 429 / 超时 / 连接错误 → 允许一次重试
-            last = e
-            if attempt < retries:
-                time.sleep(min(0.2 * (attempt + 1), 1.0))
-                continue
-            return None, e.error_type
-        except Exception as e:           # 解析等其它异常 → 不重试
-            return None, f"parse_error:{type(e).__name__}"
-    return None, getattr(last, "error_type", "source_error")
+# ============================ 传输层异常分类（A.7.1.2）============================
+ERR_TIMEOUT = "timeout"
+ERR_CONNECTION = "connection_error"
+ERR_DNS = "dns_error"
+ERR_RATE_LIMITED = "rate_limited"
+ERR_SERVER = "server_error"
+ERR_PARSE = "parse_error"
+ERR_CLIENT = "client_error"
+ERR_NOT_FOUND = "not_found"          # 协议级明确无记录（404 等）→ 映射为 zero_hits
+
+# 只有**瞬时**错误允许一次程序控制重试；DNS 视为永久错误，parse/client/not_found 不重试。
+RETRYABLE = frozenset({ERR_TIMEOUT, ERR_CONNECTION, ERR_RATE_LIMITED, ERR_SERVER})
+MAX_ATTEMPTS = 2                     # 1 次 + 至多 1 次重试（总请求 ≤ 2）
+BASE_BACKOFF_S = 0.2
+MAX_BACKOFF_S = 2.0                  # Retry-After 也受此上限约束
+
+_DNS_MARKERS = ("getaddrinfo", "name or service not known", "nodename nor servname",
+                "temporary failure in name resolution", "nameresolutionerror",
+                "no address associated with hostname")
 
 
-class _Retryable(Exception):
-    def __init__(self, error_type):
-        super().__init__(error_type)
-        self.error_type = error_type
+def _classify_http(status):
+    """HTTP 状态码 → 错误类型；None 表示成功。"""
+    if status == 429:
+        return ERR_RATE_LIMITED
+    if status == 404:
+        return ERR_NOT_FOUND
+    if status >= 500:
+        return ERR_SERVER
+    if 400 <= status < 500:
+        return ERR_CLIENT
+    return None
 
 
-def _src(source, status, meta=None, error_type=None, http_status=None):
+def _classify_exception(exc):
+    """传输层异常 → 错误类型。**绝不**把 timeout/ConnectionError 误标为 parse_error。"""
+    import socket
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    if "timeout" in name or "timeout" in text:
+        return ERR_TIMEOUT
+    # DNS：异常链里有 socket.gaierror，或文本命中解析失败标记
+    e = exc
+    for _ in range(5):
+        if isinstance(e, socket.gaierror):
+            return ERR_DNS
+        e = getattr(e, "__cause__", None) or getattr(e, "__context__", None)
+        if e is None:
+            break
+    if any(m in text for m in _DNS_MARKERS):
+        return ERR_DNS
+    if "connection" in name or "connection" in text:
+        return ERR_CONNECTION
+    return ERR_CONNECTION            # 其它传输异常保守归为连接错误（可重试一次）
+
+
+def _retry_after_seconds(resp):
+    """尊重 Retry-After（秒或 HTTP-date），但受 MAX_BACKOFF_S 上限约束。"""
+    try:
+        raw = (resp.headers or {}).get("Retry-After") if resp is not None else None
+    except Exception:
+        raw = None
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(float(str(raw).strip()), MAX_BACKOFF_S))
+    except Exception:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        dt = parsedate_to_datetime(str(raw))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, min((dt - datetime.now(timezone.utc)).total_seconds(), MAX_BACKOFF_S))
+    except Exception:
+        return None
+
+
+def _backoff_seconds(error_type, resp, attempt):
+    if error_type == ERR_RATE_LIMITED:
+        ra = _retry_after_seconds(resp)
+        if ra is not None:
+            return ra
+    return min(BASE_BACKOFF_S * attempt, MAX_BACKOFF_S)
+
+
+def _src(source, status, meta=None, error_type=None, http_status=None, attempts=None):
     return {"source": source, "retrieval_status": status, "metadata": meta or {},
-            "error_type": error_type, "http_status": http_status}
+            "error_type": error_type, "http_status": http_status,
+            "attempts": attempts or []}
 
 
 class HttpSources:
-    """默认真实来源：只访问免费 API，绝不调用付费 LLM。"""
+    """默认真实来源：只访问免费 API，绝不调用付费 LLM。
+    统一传输层：精确异常分类 + 有界重试（同一来源同一 ID 总请求 ≤ 2）。"""
 
     def __init__(self, timeout=20):
         import requests
         self._requests = requests
         self.timeout = timeout
 
-    def _get(self, url, params=None):
-        def _do():
-            r = self._requests.get(url, params=params, timeout=self.timeout)
-            if r.status_code == 429:
-                raise _Retryable("rate_limited_429")
-            if r.status_code >= 500:
-                raise _Retryable(f"http_{r.status_code}")
-            return r
-        try:
-            r, err = _with_retry(_do)
-        except Exception as e:                 # 连接层异常
-            return None, "network_error"
-        if err:
-            return None, err
-        return r, None
+    def _request(self, url, params, source):
+        """返回 {ok, response, error_type, http_status, attempts}。
+        重试不改变查询、不调用 LLM、不切换检索方式；只记录 source/attempt/状态/耗时，
+        不记录 URL 查询参数或任何认证头。"""
+        import time
+        attempts = []
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            t0 = time.time()
+            resp, status, err = None, None, None
+            try:
+                resp = self._requests.get(url, params=params, timeout=self.timeout)
+                status = getattr(resp, "status_code", None)
+                err = _classify_http(status) if status is not None else ERR_CONNECTION
+            except Exception as exc:
+                err = _classify_exception(exc)
+            attempts.append({"source": source, "attempt": attempt, "http_status": status,
+                             "error_type": err, "elapsed_s": round(time.time() - t0, 3)})
+            if err is None:
+                return {"ok": True, "response": resp, "error_type": None,
+                        "http_status": status, "attempts": attempts}
+            if err in RETRYABLE and attempt < MAX_ATTEMPTS:
+                time.sleep(_backoff_seconds(err, resp, attempt))
+                continue                       # 同一 url/params 原样重试
+            return {"ok": False, "response": resp, "error_type": err,
+                    "http_status": status, "attempts": attempts}
+        return {"ok": False, "response": None, "error_type": ERR_CONNECTION,
+                "http_status": None, "attempts": attempts}
+
+    @staticmethod
+    def _from_transport(source, t):
+        """传输层失败 → 来源级状态。404/协议级 not-found → zero_hits；其余 → source_error。"""
+        if t["error_type"] == ERR_NOT_FOUND:
+            return _src(source, "zero_hits", http_status=t["http_status"],
+                        attempts=t["attempts"])
+        return _src(source, "source_error", error_type=t["error_type"],
+                    http_status=t["http_status"], attempts=t["attempts"])
 
     def pubmed_by_pmid(self, pmid):
-        r, err = self._get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
-                           {"db": "pubmed", "id": pmid, "retmode": "json"})
-        if err:
-            return _src("pubmed", "source_error", error_type=err)
+        t = self._request("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+                          {"db": "pubmed", "id": pmid, "retmode": "json"}, "pubmed")
+        if not t["ok"]:
+            return self._from_transport("pubmed", t)
         try:
-            res = r.json().get("result", {})
+            res = t["response"].json().get("result", {})
             rec = res.get(str(pmid))
-            if not rec or rec.get("error") or "uids" in res and str(pmid) not in res.get("uids", []):
-                return _src("pubmed", "zero_hits", http_status=r.status_code)
+            if not rec or rec.get("error") or ("uids" in res and str(pmid) not in res.get("uids", [])):
+                return _src("pubmed", "zero_hits", http_status=t["http_status"],
+                            attempts=t["attempts"])
             doi = None
             for a in rec.get("articleids", []):
                 if a.get("idtype") == "doi":
@@ -207,9 +292,11 @@ class HttpSources:
             meta = {"pmid": str(pmid), "doi": doi, "title": rec.get("title"),
                     "journal": rec.get("fulljournalname") or rec.get("source"),
                     "year": (rec.get("pubdate", "") or "")[:4]}
-            return _src("pubmed", "exact_hit", meta, http_status=r.status_code)
-        except Exception as e:
-            return _src("pubmed", "source_error", error_type=f"parse_error:{type(e).__name__}")
+            return _src("pubmed", "exact_hit", meta, http_status=t["http_status"],
+                        attempts=t["attempts"])
+        except Exception:
+            return _src("pubmed", "source_error", error_type=ERR_PARSE,
+                        http_status=t["http_status"], attempts=t["attempts"])
 
     def epmc_by_pmid(self, pmid):
         return self._epmc(f"EXT_ID:{pmid} AND SRC:MED", "europepmc")
@@ -218,30 +305,32 @@ class HttpSources:
         return self._epmc(f'DOI:"{doi}"', "europepmc")
 
     def _epmc(self, query, source):
-        r, err = self._get("https://www.ebi.ac.uk/europepmc/webservices/rest/search",
-                           {"query": query, "format": "json", "resultType": "core", "pageSize": 1})
-        if err:
-            return _src(source, "source_error", error_type=err)
+        t = self._request("https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                          {"query": query, "format": "json", "resultType": "core",
+                           "pageSize": 1}, source)
+        if not t["ok"]:
+            return self._from_transport(source, t)
         try:
-            res = r.json().get("resultList", {}).get("result", [])
+            res = t["response"].json().get("resultList", {}).get("result", [])
             if not res:
-                return _src(source, "zero_hits", http_status=r.status_code)
+                return _src(source, "zero_hits", http_status=t["http_status"],
+                            attempts=t["attempts"])
             it = res[0]
             meta = {"pmid": it.get("pmid"), "doi": it.get("doi"), "title": it.get("title"),
                     "journal": it.get("journalTitle") or it.get("source"),
                     "year": (it.get("firstPublicationDate", "") or "")[:4]}
-            return _src(source, "exact_hit", meta, http_status=r.status_code)
-        except Exception as e:
-            return _src(source, "source_error", error_type=f"parse_error:{type(e).__name__}")
+            return _src(source, "exact_hit", meta, http_status=t["http_status"],
+                        attempts=t["attempts"])
+        except Exception:
+            return _src(source, "source_error", error_type=ERR_PARSE,
+                        http_status=t["http_status"], attempts=t["attempts"])
 
     def crossref_by_doi(self, doi):
-        r, err = self._get(f"https://api.crossref.org/works/{doi}")
-        if err:
-            return _src("crossref", "source_error", error_type=err)
-        if r.status_code == 404:
-            return _src("crossref", "zero_hits", http_status=404)
+        t = self._request(f"https://api.crossref.org/works/{doi}", None, "crossref")
+        if not t["ok"]:
+            return self._from_transport("crossref", t)
         try:
-            msg = r.json().get("message", {})
+            msg = t["response"].json().get("message", {})
             title = (msg.get("title") or [None])[0]
             year = None
             parts = (msg.get("issued", {}).get("date-parts") or [[None]])[0]
@@ -249,21 +338,26 @@ class HttpSources:
                 year = str(parts[0])
             meta = {"pmid": None, "doi": msg.get("DOI"), "title": title,
                     "journal": (msg.get("container-title") or [None])[0], "year": year}
-            return _src("crossref", "exact_hit", meta, http_status=r.status_code)
-        except Exception as e:
-            return _src("crossref", "source_error", error_type=f"parse_error:{type(e).__name__}")
+            return _src("crossref", "exact_hit", meta, http_status=t["http_status"],
+                        attempts=t["attempts"])
+        except Exception:
+            return _src("crossref", "source_error", error_type=ERR_PARSE,
+                        http_status=t["http_status"], attempts=t["attempts"])
 
     def doiorg_by_doi(self, doi):
-        r, err = self._get(f"https://doi.org/api/handles/{doi}")
-        if err:
-            return _src("doi.org", "source_error", error_type=err)
+        t = self._request(f"https://doi.org/api/handles/{doi}", None, "doi.org")
+        if not t["ok"]:
+            return self._from_transport("doi.org", t)
         try:
-            code = r.json().get("responseCode")
+            code = t["response"].json().get("responseCode")
             if code == 1:
-                return _src("doi.org", "exact_hit", {"doi": doi}, http_status=r.status_code)
-            return _src("doi.org", "zero_hits", http_status=r.status_code)   # 100 = handle not found
-        except Exception as e:
-            return _src("doi.org", "source_error", error_type=f"parse_error:{type(e).__name__}")
+                return _src("doi.org", "exact_hit", {"doi": doi},
+                            http_status=t["http_status"], attempts=t["attempts"])
+            return _src("doi.org", "zero_hits", http_status=t["http_status"],
+                        attempts=t["attempts"])          # 100 = handle not found
+        except Exception:
+            return _src("doi.org", "source_error", error_type=ERR_PARSE,
+                        http_status=t["http_status"], attempts=t["attempts"])
 
 
 # ============================ 裁决（状态机核心）============================
@@ -394,20 +488,44 @@ def resolve_one(id_type, normalized, original, sources) -> ExactIdResolution:
 
 
 # ============================ EvidenceCard（仅 verified）============================
+def card_hash_payload(res: ExactIdResolution, source: str) -> dict:
+    """EvidenceCard 内容 hash 的**规范化 payload**（A.7.1.2 §3）。
+
+    只含用于构卡的结构化元数据；**不含**查询时间、run_id、临时路径，
+    因此同一元数据跨运行 hash 稳定；任一关键元数据变化则 hash 变化。
+    与 ExactIdResolution.sha256 是**不同** payload，不互相冒充。
+    """
+    return {
+        "normalized_pmid": res.canonical_pmid,
+        "normalized_doi": res.canonical_doi,
+        "canonical_title": res.canonical_title,
+        "journal": res.journal,
+        "year": res.year,
+        "source": source,
+        "content_level": "metadata_only",
+        "source_ids": sorted([x for x in (res.canonical_pmid, res.canonical_doi) if x]),
+    }
+
+
 def _card_for(res: ExactIdResolution):
-    """只为 verified 构卡；PMID/DOI 仅取自结构化来源响应。"""
+    """只为 verified 构卡；PMID/DOI 仅取自结构化来源响应。
+    卡的 provenance 写入 content_hash(sha256) —— 对规范化结构化元数据求值。"""
     if res.resolution_status != "verified":
         return None
     import evidence_build as EB
+    link = (f"https://pubmed.ncbi.nlm.nih.gov/{res.canonical_pmid}/" if res.canonical_pmid
+            else (f"https://doi.org/{res.canonical_doi}" if res.canonical_doi else ""))
     paper = {"pmid": res.canonical_pmid, "doi": res.canonical_doi,
              "title": res.canonical_title or "", "journal": res.journal or "",
-             "year": res.year or "", "link": (f"https://pubmed.ncbi.nlm.nih.gov/{res.canonical_pmid}/"
-                                               if res.canonical_pmid else
-                                               (f"https://doi.org/{res.canonical_doi}" if res.canonical_doi else "")),
+             "year": res.year or "", "link": link,
              "content_level": "metadata_only", "supporting_excerpt": "",
              "source_database": "PubMed/Crossref exact-id"}
-    return EB.abstract_card_from_paper(paper, tool_name="resolve_exact_ids",
+    card = EB.abstract_card_from_paper(paper, tool_name="resolve_exact_ids",
                                        query=res.normalized_id)
+    payload = card_hash_payload(res, link)
+    prov = card.provenance.model_copy(update={
+        "content_hash": compute_hash(payload), "hash_algorithm": "sha256"})
+    return card.model_copy(update={"provenance": prov})
 
 
 # ============================ 批量 Action ============================
