@@ -1,0 +1,26 @@
+{
+  "checks": {
+    "1_classifier_open_no_special_case": true,
+    "2_four_independent_gated_roles": true,
+    "4_sdk_retries_zero": true,
+    "5_budget_and_caps_effective": true,
+    "3_roles_cannot_borrow_quota": true,
+    "route_is_open": true,
+    "no_real_llm_leaked": true,
+    "roles_metered_separately_on_real_path": true,
+    "10_guards_installed": true,
+    "16_real_shared_ledger_untouched": true,
+    "13_verifier_nl_not_authoritative_fact": true,
+    "14_15_failure_manifest_and_trace_failclosed": true,
+    "6_12_invariants_covered_by_green_suite": true
+  },
+  "calls_by_role": {
+    "planner": 2,
+    "executor": 2,
+    "claim_extractor": 1
+  },
+  "route": "open",
+  "invariant_tests_tail": "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+  "real_ledger_untouched": true,
+  "all_pass": true
+}

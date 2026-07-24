@@ -1,0 +1,94 @@
+{
+  "run_id": "B1-canary-900fbe2d",
+  "task_id": "B1",
+  "route": "open",
+  "elapsed_s": 73.12,
+  "architecture": "open ReAct (Planner->Executor->tools->Verifier/Claim/Shadow)",
+  "halted": null,
+  "outcome": "executor loop guard (max_tool_rounds=8) -> fail-closed no_verification; Verifier/Claim/Shadow not reached",
+  "lifecycle": {
+    "counts": {
+      "requested": 9,
+      "executed": 8,
+      "tool_returned": 8,
+      "failed": 0,
+      "observed": 8
+    },
+    "calls": 9,
+    "inconsistencies": [
+      {
+        "kind": "requested_not_executed",
+        "tool_call_id_hash": "8d3e1b6d86002d8c",
+        "tool_name": "query_data_lake"
+      }
+    ],
+    "trace_incomplete": false,
+    "observation_trace_failed": false
+  },
+  "executor_trace_consistency": {
+    "selected": [
+      "list_skills",
+      "query_data_lake",
+      "retrieve_resources",
+      "search_literature"
+    ],
+    "requested": [
+      "query_data_lake",
+      "search_literature"
+    ],
+    "executed": [
+      "query_data_lake",
+      "search_literature"
+    ],
+    "observed": [
+      "query_data_lake",
+      "search_literature"
+    ],
+    "requested_not_executed": [
+      "query_data_lake"
+    ],
+    "executed_without_tool_message": [],
+    "observed_without_request": [],
+    "requested_outside_selected": [],
+    "unauthorized_executed": []
+  },
+  "loop_guard": {
+    "tool_rounds": 8,
+    "max_tool_rounds": 8,
+    "rounds_without_progress": 0,
+    "distinct_signatures": 8,
+    "tool_round_sequence": [
+      "search_literature",
+      "search_literature",
+      "search_literature",
+      "search_literature",
+      "search_literature",
+      "search_literature",
+      "search_literature",
+      "query_data_lake"
+    ]
+  },
+  "cost": {
+    "actual_usd": 0.083673,
+    "reserved_open_usd": 0.0,
+    "committed_usd": 0.083673,
+    "calls_by_role": {
+      "planner": 2,
+      "executor": 9
+    },
+    "calls_by_model": {
+      "claude-opus-4-8": 2,
+      "deepseek-v4-flash": 9
+    },
+    "retries": 0,
+    "cancelled": false
+  },
+  "evidence_cards": 0,
+  "claims": 0,
+  "verification_results": [],
+  "shadow_status": null,
+  "final_answer_kind": "no_verification (fail-closed; no causal claim emitted)",
+  "final_answer_contains_causal_claim": false,
+  "ledger_bytes_before": 23285,
+  "ledger_bytes_after": 29180
+}
