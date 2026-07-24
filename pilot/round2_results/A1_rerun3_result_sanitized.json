@@ -1,0 +1,117 @@
+{
+  "run_id": "A1-rerun3-deterministic-3ccaed24",
+  "route": "exact_id",
+  "elapsed_s": 9.5,
+  "architecture": "deterministic exact-id (no Planner, no ReAct Executor)",
+  "exact_id_batch": {
+    "all_terminal": true,
+    "ids": [
+      {
+        "id": "41657283",
+        "resolution_status": "verified",
+        "retrieval_status_by_source": {
+          "pubmed": "exact_hit",
+          "europepmc": "exact_hit"
+        }
+      },
+      {
+        "id": "10.1080/03009742.2024.2302553",
+        "resolution_status": "not_found",
+        "retrieval_status_by_source": {
+          "crossref": "zero_hits",
+          "doi.org": "zero_hits",
+          "europepmc": "zero_hits"
+        }
+      }
+    ]
+  },
+  "evidence_cards": [
+    {
+      "pmid": "41657283",
+      "doi": "10.1080/07853890.2026.2627057",
+      "title": "From technological iteration to clinical breakthrough: advances of CAR-T cell therapy in autoimmune diseases.",
+      "tier": "abstract",
+      "evidence_grade": "初筛",
+      "provenance_source": "https://pubmed.ncbi.nlm.nih.gov/41657283/",
+      "provenance_source_ids": [
+        "41657283"
+      ],
+      "content_level": "metadata_only",
+      "content_hash": "ca9333f5c43960b11e6c8908d88c540ed6c77fef153ce49e55ed341aec9271be",
+      "hash_algorithm": "sha256"
+    }
+  ],
+  "old_verifier": {
+    "status": "not_passed",
+    "passed": false,
+    "reason": "第二条记录DOI 10.1080/03009742.2024.2302553被报告为not_found，但该DOI实际对应有效期刊文章，研究问题要求的标题、年份、期刊未能提供，未真正回答",
+    "missing": [
+      "缺DOI 10.1080/03009742.2024.2302553对应的标题、年份、期刊信息，以及其命中方式说明；需核实该DOI是否确实无法检索到而非工具遗漏"
+    ]
+  },
+  "claims": [
+    {
+      "claim_id": "claim_1",
+      "text": "CAR-T细胞疗法在自身免疫性疾病中经历了从技术迭代到临床突破的进展。",
+      "claim_type": "existence",
+      "causal_strength": "none",
+      "verdict": "not_supported",
+      "supporting_evidence_ids": [
+        "41657283"
+      ]
+    },
+    {
+      "claim_id": "claim_2",
+      "text": "CAR-T细胞疗法在自身免疫性疾病领域有临床突破。",
+      "claim_type": "clinical_efficacy",
+      "causal_strength": "unknown",
+      "verdict": "not_supported",
+      "supporting_evidence_ids": [
+        "41657283"
+      ]
+    },
+    {
+      "claim_id": "claim_3",
+      "text": "CAR-T细胞疗法在自身免疫性疾病领域有技术迭代。",
+      "claim_type": "other",
+      "causal_strength": "none",
+      "verdict": "not_supported",
+      "supporting_evidence_ids": [
+        "41657283"
+      ]
+    }
+  ],
+  "shadow": {
+    "shadow_status": "ok",
+    "manifest_schema_version": "runmanifest-v1",
+    "comparison": {
+      "old_passed": false,
+      "shadow_passed": false,
+      "agree": true,
+      "divergence": false
+    },
+    "shadow_verifier": {
+      "passed": false,
+      "status": "not_passed",
+      "human_review_required": true
+    },
+    "claim_extraction_error": null
+  },
+  "cost": {
+    "actual_usd": 0.007876,
+    "reserved_open_usd": 0.0,
+    "committed_usd": 0.007876,
+    "calls_by_role": {
+      "verifier": 1,
+      "claim_extractor": 1
+    },
+    "calls_by_model": {
+      "claude-opus-4-8": 1,
+      "deepseek-v4-flash": 1
+    },
+    "retries": 0,
+    "cancelled": false
+  },
+  "ledger_bytes_before": 21686,
+  "ledger_bytes_after": 22755
+}

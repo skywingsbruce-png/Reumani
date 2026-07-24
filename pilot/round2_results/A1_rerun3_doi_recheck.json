@@ -1,0 +1,28 @@
+{
+  "disputed_doi": "10.1080/03009742.2024.2302553",
+  "note": "独立复核（零 LLM，免费 HTTP，多机构交叉）——Verifier 声称该 DOI 有效，实测证否。",
+  "doiorg_handle_api": {
+    "http": 404,
+    "responseCode": 100,
+    "meaning": "handle_not_found"
+  },
+  "doiorg_resolve": {
+    "final_http": 404,
+    "redirected": false
+  },
+  "crossref": {
+    "http": 404
+  },
+  "datacite": {
+    "http": 404
+  },
+  "europepmc": {
+    "http": 200,
+    "hitCount": 0
+  },
+  "control_known_doi": {
+    "doi": "10.1038/s41586-020-2649-2",
+    "handle_responseCode": 1
+  },
+  "conclusion": "DOI 在所有注册机构均未注册（handle 100 / crossref 404 / datacite 404 / epmc 0），控制 DOI 正常解析（responseCode=1）→ resolver 的 not_found 正确，old Verifier 的'有效'断言为无来源支撑的臆断。"
+}
