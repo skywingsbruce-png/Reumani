@@ -1,0 +1,96 @@
+{
+  "run_id": "A1-verifier-replay-75da9072",
+  "phase": "A1 frozen Verifier-only replay (single paid Verifier call)",
+  "preflight": {
+    "1_only_verifier_role": true,
+    "2_planner_calls_zero": true,
+    "3_executor_calls_zero": true,
+    "4_claim_calls_zero": true,
+    "5_resolver_network_zero": true,
+    "6_verifier_max_one": true,
+    "7_sdk_retries_zero": true,
+    "8_finite_timeout_and_max_tokens": true,
+    "9_worst_cost_within_cap": true,
+    "10_open_reservations_zero": true,
+    "11_unique_run_id": true,
+    "12_input_has_structured_facts": true
+  },
+  "worst_case_usd": 0.506134,
+  "frozen_inputs_unchanged": true,
+  "frozen_input_sha256_before": {
+    "result_sanitized": "ce6603bbe1caef99857526b08f913fba9b2cd75f9a4d86c4fe7ac8f795d118f7",
+    "run_local": "6cbedaecf1d1dbbf45ba08e19bbeaf1e335c988fa3bcdca6f8627a5db60dd1cb",
+    "offline_replay": "9f5dc0584ed3140b689d862ecba83791cbbfd19fc41e3df1d836f7a2adc9eee5",
+    "result_md": "001a7a71f7bcfd89f19a8a3b72bb62cb36bfe2dca3325601099fbf30b7c930ab"
+  },
+  "frozen_input_sha256_after": {
+    "result_sanitized": "ce6603bbe1caef99857526b08f913fba9b2cd75f9a4d86c4fe7ac8f795d118f7",
+    "run_local": "6cbedaecf1d1dbbf45ba08e19bbeaf1e335c988fa3bcdca6f8627a5db60dd1cb",
+    "offline_replay": "9f5dc0584ed3140b689d862ecba83791cbbfd19fc41e3df1d836f7a2adc9eee5",
+    "result_md": "001a7a71f7bcfd89f19a8a3b72bb62cb36bfe2dca3325601099fbf30b7c930ab"
+  },
+  "verifier_input_has_structured_facts": true,
+  "anthropic_calls": 1,
+  "blocked_counts": {
+    "deepseek": 0,
+    "network": 0,
+    "resolver": 0,
+    "execute": 0,
+    "planner": 0,
+    "shadow": 0
+  },
+  "original_verifier_result_frozen": {
+    "status": "not_passed",
+    "passed": false,
+    "reason": "第二条记录DOI 10.1080/03009742.2024.2302553被报告为not_found，但该DOI实际对应有效期刊文章，研究问题要求的标题、年份、期刊未能提供，未真正回答"
+  },
+  "new_verifier_result": {
+    "status": "not_passed",
+    "passed": false,
+    "reason": "PMID 41657283 命中但未报告年份和期刊（均为空），DOI 记录为not_found无法报告标题/年份/期刊，研究问题的完整报告要求未满足",
+    "missing": [
+      "PMID 41657283 的年份与期刊字段（执行结果中为空）；DOI 10.1080/03009742.2024.2302553 若确为not_found应说明检索路径，但研究问题预期的标题/年份/期刊无法提供"
+    ]
+  },
+  "fact_conflicts": [],
+  "two_dimension_verdict": {
+    "resolution_verdict": {
+      "decided_by": "deterministic_resolver",
+      "all_terminal": true,
+      "per_subject": {
+        "PMID:41657283": "verified",
+        "DOI:10.1080/03009742.2024.2302553": "not_found"
+      },
+      "human_review_required": false,
+      "note": "ID 存在性/解析终态是确定性事实，不由 Verifier 的自然语言改写。"
+    },
+    "scientific_support_verdict": {
+      "decided_by": "old_verifier",
+      "passed": false,
+      "status": "not_passed",
+      "reason": "PMID 41657283 命中但未报告年份和期刊（均为空），DOI 记录为not_found无法报告标题/年份/期刊，研究问题的完整报告要求未满足",
+      "note": "现有证据是否足以支持科学结论，由旧 Verifier/Shadow 判定，裁决权不变。"
+    },
+    "verifier_fact_conflict": false,
+    "conflict_types": [],
+    "auto_flip_to_passed": false,
+    "human_review_required": true,
+    "final_answer_authority": "old_verifier"
+  },
+  "cost": {
+    "actual_usd": 0.011235,
+    "reserved_open_usd": 0.0,
+    "committed_usd": 0.011235,
+    "calls_by_role": {
+      "verifier": 1
+    },
+    "calls_by_model": {
+      "claude-opus-4-8": 1
+    },
+    "retries": 0,
+    "cancelled": false
+  },
+  "ledger_bytes_before": 22755,
+  "ledger_bytes_after": 23285,
+  "new_cards_or_claims_generated": 0
+}
