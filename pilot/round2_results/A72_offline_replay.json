@@ -1,0 +1,59 @@
+{
+  "consistency_with_frozen": {
+    "card_hash_match": true,
+    "frozen_hash": "ca9333f5c43960b11e6c8908d88c540ed6c77fef153ce49e55ed341aec9271be",
+    "replay_hash": "ca9333f5c43960b11e6c8908d88c540ed6c77fef153ce49e55ed341aec9271be"
+  },
+  "scenarios": [
+    {
+      "scenario": "A_verifier_claims_doi_valid",
+      "verifier_fact_conflict": true,
+      "conflict_types": [
+        "not_found_claimed_valid"
+      ],
+      "resolution_verdict": {
+        "PMID:41657283": "verified",
+        "DOI:10.1080/03009742.2024.2302553": "not_found"
+      },
+      "scientific_support_passed": false,
+      "auto_flip_to_passed": false,
+      "human_review_required": true,
+      "final_answer_authority": "old_verifier"
+    },
+    {
+      "scenario": "B_not_found_plus_metadata_insufficient",
+      "verifier_fact_conflict": false,
+      "conflict_types": [],
+      "resolution_verdict": {
+        "PMID:41657283": "verified",
+        "DOI:10.1080/03009742.2024.2302553": "not_found"
+      },
+      "scientific_support_passed": false,
+      "auto_flip_to_passed": false,
+      "human_review_required": true,
+      "final_answer_authority": "old_verifier"
+    },
+    {
+      "scenario": "C_correct_restate_pass",
+      "verifier_fact_conflict": false,
+      "conflict_types": [],
+      "resolution_verdict": {
+        "PMID:41657283": "verified",
+        "DOI:10.1080/03009742.2024.2302553": "not_found"
+      },
+      "scientific_support_passed": true,
+      "auto_flip_to_passed": false,
+      "human_review_required": false,
+      "final_answer_authority": "old_verifier"
+    }
+  ],
+  "evidence_cards": [
+    {
+      "pmid": "41657283",
+      "doi": "10.1080/07853890.2026.2627057",
+      "content_level": "metadata_only",
+      "content_hash": "ca9333f5c43960b11e6c8908d88c540ed6c77fef153ce49e55ed341aec9271be"
+    }
+  ],
+  "no_fabricated_card": true
+}

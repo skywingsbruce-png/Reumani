@@ -79,8 +79,18 @@ def run_exact_id_flow(question, *, sources=None, verifier_model=None, claim_extr
     state.observations.append(answer)
     events = _batch_to_tool_events(batch)
 
-    # 旧 Verifier 决定最终答案（裁决权不变）
-    v = ssc_a1.verify(state, answer, verifier_model=verifier_model,
+    # A.7.2：把 Resolver 终态转成只读确定性事实，并给 Verifier**结构化事实上下文**
+    from pilot.exact_id_facts import (build_fact_context, detect_verifier_fact_conflicts,
+                                      facts_from_batch, render_fact_context_text,
+                                      two_dimension_verdict)
+    facts = facts_from_batch(batch)
+    limitations = sorted({(c.get("provenance") or {}).get("content_level")
+                          for c in batch.evidence_cards if c}) if batch.evidence_cards else []
+    fact_context = build_fact_context(facts, batch.evidence_cards, [], limitations)
+    verify_input = answer + "\n\n" + render_fact_context_text(fact_context)
+
+    # 旧 Verifier 决定最终答案（裁决权不变）——输入含清晰分段的确定性事实
+    v = ssc_a1.verify(state, verify_input, verifier_model=verifier_model,
                       evidence_cards=cards, tool_failed=False)
     state.verification_results.append(v)
     if v.get("passed") is True:
@@ -102,6 +112,19 @@ def run_exact_id_flow(question, *, sources=None, verifier_model=None, claim_extr
         except Exception as e:
             state.shadow = {"shadow_status": "failed", "shadow_error_type": type(e).__name__,
                             "shadow_error_message": str(e)[:300]}
+
+    # A.7.2：Verifier 返回后做确定性事实冲突检测 + 两维 verdict（附加标记，不改裁决权）。
+    # Verifier 的自然语言不得自动成为新事实；不因冲突自动改判 passed；不静默覆盖旧结果。
+    verifier_stmt = f"{v.get('reason', '')} {' '.join(v.get('missing') or [])}"
+    conflicts = detect_verifier_fact_conflicts(verifier_stmt, facts, cards=batch.evidence_cards)
+    grounding = two_dimension_verdict(facts, v, conflicts)
+    grounding["authoritative_facts"] = [f.model_dump() for f in facts]
+    grounding["fact_context"] = fact_context
+    if isinstance(state.shadow, dict):
+        state.shadow["fact_grounding"] = grounding
+        if conflicts:
+            state.shadow["human_review"] = True
+    state.fact_grounding = grounding
     return state
 
 
