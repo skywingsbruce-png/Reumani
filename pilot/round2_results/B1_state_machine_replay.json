@@ -1,0 +1,170 @@
+{
+  "note": "OFFLINE architecture simulation of OpenTaskExecutionContract. NOT a real B1 run; no model/network; does NOT claim B1 passed.",
+  "steps": [
+    {
+      "step_id": 1,
+      "objective": "检索 IL-6 与皮肤评分关系文献",
+      "allowed_tools": [
+        "search_literature"
+      ],
+      "call_budget": 2,
+      "attempts": 1,
+      "status": "satisfied",
+      "observations": [
+        {
+          "attempt": 1,
+          "novelty": {
+            "transport": true,
+            "identifier": true,
+            "evidence": true,
+            "scientific_progress": true
+          }
+        }
+      ],
+      "evidence_ids": [
+        "38000001"
+      ],
+      "success_criteria": "获得 ≥1 张带研究设计标注的 EvidenceCard",
+      "completion_reason": "success_criteria_met",
+      "remaining_gaps": []
+    },
+    {
+      "step_id": 2,
+      "objective": "本地 corpus 交叉核验",
+      "allowed_tools": [
+        "query_data_lake"
+      ],
+      "call_budget": 1,
+      "attempts": 1,
+      "status": "insufficient",
+      "observations": [
+        {
+          "attempt": 1,
+          "retrieval_status": "zero_hits"
+        }
+      ],
+      "evidence_ids": [],
+      "success_criteria": "获得 corpus 检索终态",
+      "completion_reason": "zero_hits (本地无该精确记录，≠该领域无研究)",
+      "remaining_gaps": [
+        "本地 corpus 未命中，不能推断领域无研究"
+      ]
+    }
+  ],
+  "all_terminal": true,
+  "evidence_cards": [
+    {
+      "pmid": "38000001",
+      "doi": null,
+      "study_design": "cross-sectional",
+      "content_level": "abstract",
+      "content_hash": "814774af5a7292841fc9110813b4a0dd7ae190b371530e06c806baafea35c042",
+      "hash_algorithm": "sha256"
+    }
+  ],
+  "evidence_axes": [
+    "('cross-sectional', False, False, 'human')"
+  ],
+  "timeline": [
+    {
+      "step": 1,
+      "attempt": 1,
+      "scientific_progress": true,
+      "transport_only": false
+    },
+    {
+      "step": 2,
+      "attempt": 1,
+      "scientific_progress": false,
+      "transport_only": false,
+      "retrieval_status": "zero_hits"
+    }
+  ],
+  "no_infinite_search": true,
+  "transport_novelty_not_counted_as_progress": false,
+  "causal_calibration": {
+    "axes_present": {
+      "association": true,
+      "temporal_evidence": false,
+      "dose_response": false,
+      "intervention_evidence": false,
+      "genetic_instrumental": false,
+      "mechanistic_plausibility": true,
+      "reverse_causation_addressed": false,
+      "confounding_addressed": false,
+      "clinical_evidence": false
+    },
+    "causal_strength": "association",
+    "association_not_upgraded_to_causal": true
+  },
+  "controlled_insufficient_conclusion": {
+    "resolved_question": "SSc 中血清 IL-6 与皮肤评分（mRSS）的关系及证据层级",
+    "available_evidence": [
+      {
+        "pmid": "38000001",
+        "study_design": "cross-sectional",
+        "content_level": "abstract"
+      }
+    ],
+    "unsupported_claims": [
+      "IL-6 升高导致皮肤纤维化加重（确定性因果）"
+    ],
+    "causal_strength": "association",
+    "missing_evidence": [
+      "纵向/时序证据",
+      "干预（RCT/敲除回补）证据",
+      "剂量-反应",
+      "混杂控制",
+      "反向因果排查"
+    ],
+    "limitations": [
+      "证据为横断面相关，无法确立时间先后/因果",
+      "本地 corpus 未命中不等于无研究",
+      "摘要级证据，未核全文"
+    ],
+    "recommended_next_action": "检索纵向队列/干预研究或 Mendelian randomization 以评估因果"
+  },
+  "stages_invoked": {
+    "verifier": true,
+    "claim_extractor": true,
+    "claim_graph": true,
+    "shadow": true
+  },
+  "verifier_result": {
+    "passed": false,
+    "status": "insufficient_for_causal",
+    "reason": "仅横断面关联证据，不支持因果结论；结构化结论已正确降级为 association"
+  },
+  "claims": [
+    {
+      "claim_id": "c1",
+      "text": "SSc 患者血清 IL-6 与 mRSS 正相关",
+      "claim_type": "association",
+      "causal_strength": "correlational",
+      "supporting_ids": [
+        "38000001"
+      ]
+    }
+  ],
+  "claim_graph": [
+    {
+      "claim_id": "c1",
+      "verdict": "partially_supported",
+      "note": "关联被横断面证据支持；因果不被支持"
+    }
+  ],
+  "lifecycle_counts": {
+    "requested": 2,
+    "executed": 2,
+    "tool_returned": 2,
+    "observed": 2,
+    "failed": 0
+  },
+  "run_metrics": {
+    "tool_calls": 2,
+    "evidence_cards": 1,
+    "claims": 1,
+    "source": "aggregated from Lifecycle + EvidenceAccumulator + Gate"
+  },
+  "telemetry_consistent": true
+}
