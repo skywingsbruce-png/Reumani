@@ -117,6 +117,22 @@ genetic_instrumental / mechanistic_plausibility / reverse_causation / confoundin
 - 迁移：**淘汰** `metrics.execution.tool_calls`（从 `state.shadow` 汇总的旧口径），改由 Lifecycle
   提供 `tool_calls`，消除“Lifecycle=8 / metrics=0”冲突。
 
+### 4.8 结构化文献工具前置条件（A.7.3.1 补充，**硬前置**）
+**开放任务不能在 legacy `search_literature` 字符串上直接建立 EvidenceAccumulator。** 生产实现前
+必须二选一（否则 EvidenceAccumulator/构卡缺少可靠字段，novelty 分级失去依据）：
+
+- **方案 A**：把 `search_literature` 改为 `content_and_artifact`，返回结构化文献记录；或
+- **方案 B**：建立**严格、可验证、fail-closed** 的 `LiteratureToolResultAdapter`（离线重放已用
+  `literature_adapter` 演示 fail-closed 语义）。
+
+结构化文献记录（`litrec-v1`）至少含：`pmid/doi`、`title/year/journal`、`abstract 或
+content_level`、`study_design`、`species`、`longitudinal/interventional 标记`、`source`、`query`、
+`provenance`、`content_hash`、`schema_version`。**无法可靠提取的字段必须置 `unknown`，
+不得由 LLM 猜测**；整条无法解析时 fail-closed（不构卡、不猜 ID）。
+
+> A.7.3.1 离线重放的 `literature_adapter` 对非 `litrec-v1` / 无 ID 的输入抛 `LiteratureParseError`，
+> 是该前置条件的可执行验证锚点。
+
 ## 5. 三方案比较
 
 | 维度 | A 纯 ReAct 只改 Prompt | B ReAct + Step Controller + EvidenceAccumulator | C 确定性工作流替代开放 ReAct |
@@ -136,25 +152,51 @@ genetic_instrumental / mechanistic_plausibility / reverse_causation / confoundin
 侵入大、灵活性下降；方案 A 不触根因。**不默认“更自由=更好”。** 若后续开放任务证明仍不稳定，
 再向 C 迁移。
 
-## 6. 离线状态机重放结果
-`pilot/round2_results/B1_state_machine_replay.json`（纯离线模拟，非真实 B1）：两次检索重复→第一步
-satisfied 后停；仅横断面 → causal_strength=association（不升为因果）；data lake zero_hits→insufficient
-且标注“≠无研究”；missing_evidence 明确列出；全步骤终态→synthesis；产出**非空校准的 insufficient
-结论**；Verifier/Claim/ClaimGraph/Shadow 均被调用；无无限搜索；Lifecycle=Metrics=timeline 一致。
-10 条断言全通过。**这只是架构模拟，不代表 B1 已通过。**
+## 6. 离线状态机重放结果（A.7.3.1：可执行 + 自动化测试）
+**可执行重放源码 + 自动化测试**：`tests/test_open_task_convergence_replay.py`（离线，无模型/网络，
+所有 fixture 明确标 FAKE，不导入生产执行链），产物 `pilot/round2_results/B1_state_machine_replay.json`
+由该模块**运行时生成**（非预生成）。10 个 pytest 全通过，真实演示：
+
+- **两次** `search_literature`：第 1 次结构化命中（identifier+evidence+decision novelty →
+  scientific_progress=true）；第 2 次同证据、transport 排序不同（transport_novelty=true，
+  identifier/evidence/decision=false，**scientific_progress=false**）；`attempts=2`，**不允许第三次**；
+  timeline 明确含两次文献检索；正向字段 `transport_only_does_not_reset_scientific_progress=true`。
+- **四级 novelty 语义**：新 PMID→identifier；同 PMID 不同字节→仅 transport；同 PMID 新增纵向设计→
+  evidence；新增干预证据→decision（causal_tier 升到 intervention_supported）。
+- **legacy 无法解析 → fail-closed**（`literature_adapter` 抛 `LiteratureParseError`）。
+- data lake `zero_hits`→insufficient 且标注“≠该领域无研究”；受控 insufficient 结论**非空**、
+  `missing_evidence` 非空、**不出现“还缺：[]”**。
+- **五个 fake 阶段真实被调用**（CallCounter）：`synthesize→verify→claim_extract→claim_graph→shadow`
+  顺序正确、各 call_count=1；Verifier **看得到 EvidenceCard** 并判 `insufficient_for_causal`；
+  Claim 只引用已有 evidence_id；Shadow **不新建 EvidenceCard**。
+- **遥测单一权威一致**：Lifecycle `requested=executed=tool_returned=observed=3`、`failed=0`；
+  `run_metrics.tool_calls` 取自 Lifecycle、`evidence_cards` 取自 Accumulator、`stage_calls` 取自
+  CallCounter、`timeline_len=3` 三者一致。
+
+**这只是架构模拟，不代表 B1 已通过。**
 
 ## 7. 决策、迁移、测试、风险
 
 **决策**：采用方案 B 的 OpenTaskExecutionContract；exact-ID 任务保持现状；机制类走带 Step
 Controller 的 ReAct；旧 Verifier 裁决权不变；Shadow 仍只记录对比。
 
-**建议的最小提交顺序（每步独立、可回滚，均需单独批准，本轮不实现）**：
-1. `feat: EvidenceAccumulator + novelty 分级`（transport/identifier/evidence/decision），单元测试。
-2. `fix: no_progress 只认 identifier/evidence/decision novelty`（替换 lifecycle 注入的纯 result-hash 信号）。
-3. `feat: 执行内 evidence building`（每轮工具返回即构卡/更新累加器，复用 evidence_build）。
-4. `feat: PlanStepState + 步骤级预算 + 确定性状态机`（Step Controller）。
-5. `feat: 受控 insufficient 结论 + 因果校准契约`（修复“还缺：[]”）。
-6. `refactor: 遥测单一权威`（淘汰 metrics.execution.tool_calls，改由 Lifecycle 汇总）。
+**修正后的实现顺序（A.7.3.1；每步独立、可回滚，均需单独批准，本轮不实现）**：
+1. OpenTask / PlanStep / EvidenceAccumulator **schema 契约**（纯数据契约 + 单测）。
+2. `search_literature` **结构化 artifact（方案 A）或严格 adapter（方案 B）**（见 §4.8 硬前置）。
+3. **EvidenceAccumulator 与 novelty 分级**（transport/identifier/evidence/decision）。
+4. **执行内 EvidenceCard 构建**（每轮工具返回即构卡/更新累加器，复用 evidence_build）。
+5. **Step Controller、步骤预算和终态转换**（PlanStepState 状态机）。
+6. **synthesis 与 controlled insufficient conclusion**（修复“还缺：[]”）。
+7. **因果校准检查**（association/temporal/intervention/… 分级，缺时序/干预不升因果）。
+8. **遥测单一权威**（淘汰 `metrics.execution.tool_calls`，改由 Lifecycle 汇总）。
+9. **fake 开放任务完整端到端验收**（离线，到 synthesize→verify→claim→claim_graph→shadow）。
+10. **起草并冻结 Addendum 3**。
+11. **经批准后才允许一次真实 B1 重跑。**
+
+**关键顺序约束（A.7.3.1）**：**不要先修改 `no_progress` 再补证据结构**。在缺少结构化证据
+（步骤 2-4）之前，系统无法判断 scientific progress，单独改 `no_progress`（旧步骤 2）会让守卫
+失去可靠的进展依据。因此 novelty/no_progress 的修正必须**排在结构化文献工具 + 执行内构卡 +
+EvidenceAccumulator 之后**（即步骤 3 内含 novelty 分级，依赖步骤 2 的结构化记录）。
 
 **测试计划**（零付费、离线/fake）：novelty 分级；no_progress 只被 evidence novelty 重置；步骤预算
 达上限即终态；受控 insufficient 非空且无“还缺：[]”；因果题缺时序/干预→association 不升因果；
