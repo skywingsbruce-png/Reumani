@@ -31,34 +31,8 @@ IdType = Literal["pmid", "doi"]
 
 
 # ============================ 规范化与提取 ============================
-def normalize_pmid(raw) -> Optional[str]:
-    """`PMID:41657283` / `PMID 41657283` / URL / 裸数字 → `41657283`；非法 → None。"""
-    s = str(raw or "").strip()
-    low = s.lower()
-    for pre in ("pmid:", "pmid ", "pmid"):
-        if low.startswith(pre):
-            s = s[len(pre):].strip()
-            break
-    m = _ids._PMID_URL.search(s)
-    if m:
-        s = m.group(1)
-    s = s.strip().strip(".,;:)]}")
-    return s if _ids.valid_pmid(s) else None
-
-
-def normalize_doi(raw) -> Optional[str]:
-    """`doi:10..` / `https://doi.org/10..` / 裸 DOI → 小写规范化 DOI；非法 → None。
-    DOI 大小写不敏感，规范化为小写。"""
-    s = str(raw or "").strip()
-    low = s.lower()
-    for pre in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/",
-                "http://dx.doi.org/", "doi:", "doi "):
-        if low.startswith(pre):
-            s = s[len(pre):].strip()
-            break
-    s = _ids._strip_doi_tail(s.strip())
-    s = s.lower()
-    return s if _ids.valid_doi(s) else None
+# A.7.4.1.1：ID 规范化权威已下沉到最低层 ids.py；此处仅**委托**（re-export），不复制正则。
+from ids import normalize_doi, normalize_pmid   # noqa: E402,F401
 
 
 def extract_ids(query_or_ids) -> list[dict]:

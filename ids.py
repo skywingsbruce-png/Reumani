@@ -61,6 +61,37 @@ def extract_dois(text):
     return out
 
 
+def normalize_pmid(raw):
+    """`PMID:41657283` / `PMID 41657283` / URL / 裸数字 → `41657283`；非法 → None。
+    单一 ID 规范化权威（A.7.4.1.1 下沉自 pilot.exact_id_resolver，逻辑逐字不变）。"""
+    s = str(raw or "").strip()
+    low = s.lower()
+    for pre in ("pmid:", "pmid ", "pmid"):
+        if low.startswith(pre):
+            s = s[len(pre):].strip()
+            break
+    m = _PMID_URL.search(s)
+    if m:
+        s = m.group(1)
+    s = s.strip().strip(".,;:)]}")
+    return s if valid_pmid(s) else None
+
+
+def normalize_doi(raw):
+    """`doi:10..` / `https://doi.org/10..` / 裸 DOI → 小写规范化 DOI；非法 → None。
+    DOI 大小写不敏感，规范化为小写。"""
+    s = str(raw or "").strip()
+    low = s.lower()
+    for pre in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/",
+                "http://dx.doi.org/", "doi:", "doi "):
+        if low.startswith(pre):
+            s = s[len(pre):].strip()
+            break
+    s = _strip_doi_tail(s.strip())
+    s = s.lower()
+    return s if valid_doi(s) else None
+
+
 _CIT = re.compile(r"\bPMID[:\s]*\d+|\bPMC\d+|10\.\d{4,}/\S+|pubmed\.ncbi\.nlm\.nih\.gov/\d+|\bGSE\d+", re.I)
 
 

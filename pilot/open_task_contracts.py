@@ -5,25 +5,50 @@
 不实现状态转换/累计逻辑，不调用 LLM / 网络 / 数据库 / 账本。
 
 复用现有唯一权威，**不复制**：
-- `schemas._Strict`（extra="forbid" 基类）、`schemas.Provenance`、`schemas.AbstractEvidenceCard`；
+- `schemas._Strict`（extra="forbid" 基类）、`schemas.Provenance`、三种 `EvidenceCard` 子类；
 - `ids.valid_pmid/valid_doi`（ID 判定权威）；
-- `pilot.exact_id_resolver.normalize_pmid/normalize_doi`（ID 规范化权威，内部即委托 ids.py）。
+- `ids.normalize_pmid/normalize_doi`（ID 规范化权威已下沉到最低层 ids.py）。
 
-无循环依赖：schemas / ids 不导入本模块；exact_id_resolver 不导入本模块（见报告 §5）。
+无循环依赖：schemas / ids 不导入本模块（见报告 §7）。
 """
 
 from __future__ import annotations
 
 import re
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
 from pydantic import Field, field_validator, model_validator
 
 import ids as _ids
-from schemas import Provenance, _Strict
-from pilot.exact_id_resolver import normalize_doi, normalize_pmid
+from ids import normalize_doi, normalize_pmid          # 规范化权威在最低层 ids.py
+from schemas import (AbstractEvidenceCard, AnalysisEvidenceCard, ContentLevel,
+                     FullTextEvidenceCard, Provenance, _Strict)
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_GSE_KEY = re.compile(r"^GSE\d{3,7}$")
+
+# 复用现有 EvidenceCard 子类体系（不新建第二套）；以 tier 作可判别联合。
+EvidenceCardUnion = Annotated[
+    Union[AbstractEvidenceCard, FullTextEvidenceCard, AnalysisEvidenceCard],
+    Field(discriminator="tier"),
+]
+
+# content-level 边界：LiteratureRecord 对外遵守 Addendum 3 的 "fulltext"；
+# 转成 Provenance/EvidenceCard（schemas.ContentLevel 用 "full_text"）时集中映射，禁止散落字符串判断。
+_LIT_TO_PROV_CONTENT_LEVEL: dict[str, ContentLevel] = {
+    "metadata_only": "metadata_only",
+    "abstract": "abstract",
+    "fulltext": "full_text",       # 唯一映射点：fulltext → schemas 的 full_text
+    "unknown": "metadata_only",    # 保守：未知不得升级
+}
+
+
+def literature_content_level_to_provenance(level: str) -> ContentLevel:
+    """LiteratureRecord content_level → schemas.Provenance/EvidenceCard 的 ContentLevel。
+    集中定义 + 测试；运行时不得散落 'fulltext'/'full_text' 字符串判断。"""
+    if level not in _LIT_TO_PROV_CONTENT_LEVEL:
+        raise ValueError(f"未知 literature content_level：{level!r}")
+    return _LIT_TO_PROV_CONTENT_LEVEL[level]
 
 # ---------------- 枚举 ----------------
 StepStatus = Literal["pending", "running", "satisfied", "insufficient", "failed", "blocked"]
@@ -56,6 +81,9 @@ class LiteratureRecord(_Strict):
     source_ids: list[str] = Field(default_factory=list)
     content_hash: str
     hash_algorithm: Literal["sha256"] = "sha256"
+    # 全文可验证来源定位（Addendum 3 "至少包括" 之外的可选补充；标 fulltext 时必备其一）
+    fulltext_ref: Optional[str] = None
+    fulltext_content_hash: Optional[str] = None
 
     @field_validator("source")
     @classmethod
@@ -89,9 +117,17 @@ class LiteratureRecord(_Strict):
             raise ValueError("PMID/DOI 至少一个必须存在且合法")
         object.__setattr__(self, "pmid", pmid)
         object.__setattr__(self, "doi", doi)
-        # 缺 abstract 不得自动标为 fulltext
-        if self.content_level == "fulltext" and not (self.abstract and self.abstract.strip()):
-            raise ValueError("缺少全文/摘要内容时不得标为 fulltext")
+        has_abstract = bool(self.abstract and self.abstract.strip())
+        # 没有 abstract → 只能 metadata_only 或 unknown
+        if not has_abstract and self.content_level in ("abstract", "fulltext"):
+            raise ValueError("缺少 abstract 时 content_level 只能为 metadata_only 或 unknown")
+        # 有 abstract → 最多 abstract；标 fulltext 必须有可验证全文来源定位
+        if self.content_level == "fulltext":
+            if self.fulltext_content_hash is not None and not _HEX64.match(self.fulltext_content_hash):
+                raise ValueError("fulltext_content_hash 必须为 64 位小写十六进制或 None")
+            if not (self.fulltext_ref or self.fulltext_content_hash):
+                raise ValueError("标记 fulltext 必须提供可验证全文来源（fulltext_ref 或 fulltext_content_hash）；"
+                                 "仅有 abstract 不得冒充 fulltext")
         return self
 
 
@@ -191,22 +227,35 @@ class PlanStepState(_Strict):
 
 # ============================ 7. EvidenceAccumulatorState ============================
 class EvidenceAccumulatorState(_Strict):
-    evidence_cards: list[dict] = Field(default_factory=list)   # AbstractEvidenceCard.model_dump()
-    evidence_ids: list[str] = Field(default_factory=list)
-    identifier_index: dict[str, int] = Field(default_factory=dict)   # id → evidence_cards 下标
+    # 强类型：复用现有 EvidenceCard 子类（可判别联合，非任意 dict）
+    evidence_cards: list[EvidenceCardUnion] = Field(default_factory=list)
+    # identifier_index：normalized PMID/DOI/GSE → evidence_id（稳定，不随卡重排失效）
+    identifier_index: dict[str, str] = Field(default_factory=dict)
     evidence_axes: list[str] = Field(default_factory=list)
     claim_support_levels: dict[str, str] = Field(default_factory=dict)
     novelty_history: list[NoveltyAssessment] = Field(default_factory=list)
     scientific_no_progress_rounds: int = 0
 
+    @property
+    def evidence_ids(self) -> list[str]:
+        """由 cards 派生的稳定证据 ID 列表（非第二套漂移列表）。"""
+        return [c.evidence_id for c in self.evidence_cards]
+
     @model_validator(mode="after")
     def _check(self):
-        eids = [c.get("evidence_id") for c in self.evidence_cards]
-        if len(eids) != len(set(e for e in eids if e is not None)):
+        eids = [c.evidence_id for c in self.evidence_cards]
+        if len(eids) != len(set(eids)):
             raise ValueError("EvidenceCard evidence_id 不得重复")
-        for key, idx in self.identifier_index.items():
-            if not (0 <= idx < len(self.evidence_cards)):
-                raise ValueError(f"identifier_index[{key!r}]={idx} 悬空（无对应 EvidenceCard）")
+        idset = set(eids)
+        for key, eid in self.identifier_index.items():
+            if eid not in idset:
+                raise ValueError(f"identifier_index[{key!r}]={eid!r} 悬空（无对应 evidence_id）")
+            # key 必须是**已规范化**的 PMID / DOI / GSE（等于其自身规范化形式）
+            is_pmid = normalize_pmid(key) == key
+            is_doi = normalize_doi(key) == key
+            is_gse = bool(_GSE_KEY.match(key))
+            if not (is_pmid or is_doi or is_gse):
+                raise ValueError(f"identifier_index key 未规范化/非法 ID：{key!r}")
         if self.scientific_no_progress_rounds < 0:
             raise ValueError("scientific_no_progress_rounds 必须 ≥ 0")
         # transport-only novelty 的 scientific_progress 必为 False（派生保证）→ 不会自动重置
@@ -265,15 +314,37 @@ class OpenTaskRunState(_Strict):
     @model_validator(mode="after")
     def _check(self):
         step_ids = [s.step_id for s in self.steps]
-        if len(step_ids) != len(set(step_ids)):
+        step_id_set = set(step_ids)
+        if len(step_ids) != len(step_id_set):
             raise ValueError("step_id 必须唯一")
-        if self.current_step_id is not None and self.current_step_id not in set(step_ids):
+        if self.current_step_id is not None and self.current_step_id not in step_id_set:
             raise ValueError("current_step_id 必须引用已有步骤")
-        if self.conclusion is not None and self.steps \
-                and not all(s.is_terminal() for s in self.steps):
-            raise ValueError("所有步骤进入终态前不得存在 conclusion")
+        all_terminal = bool(self.steps) and all(s.is_terminal() for s in self.steps)
+        # conclusion 只能在存在步骤且全部终态后出现；空 steps 不得有 conclusion
+        if self.conclusion is not None and not all_terminal:
+            raise ValueError("步骤为空或未全部终态时不得存在 conclusion")
+        # 所有步骤终态后 current_step_id 应为 None
+        if all_terminal and self.current_step_id is not None:
+            raise ValueError("所有步骤终态后 current_step_id 应为 None")
+        # status 与 conclusion / primary_failure 的一致性
+        if self.status == "finished" and self.conclusion is None:
+            raise ValueError("finished 必须有 conclusion")
+        if self.status == "running" and self.primary_failure:
+            raise ValueError("running 不得有 primary_failure")
         if self.status == "failed" and not self.primary_failure:
             raise ValueError("failed 时 primary_failure 必须存在")
+        # observation 引用完整性
+        obs_ids = [o.observation_id for o in self.observations]
+        if len(obs_ids) != len(set(obs_ids)):
+            raise ValueError("observation_id 不得重复")
+        obs_id_set = set(obs_ids)
+        for o in self.observations:
+            if o.step_id not in step_id_set:
+                raise ValueError(f"observation.step_id={o.step_id} 引用不存在的 step")
+        for s in self.steps:
+            for oid in s.observations:
+                if oid not in obs_id_set:
+                    raise ValueError(f"PlanStep {s.step_id} 的 observation 引用悬空：{oid!r}")
         return self
 
 
