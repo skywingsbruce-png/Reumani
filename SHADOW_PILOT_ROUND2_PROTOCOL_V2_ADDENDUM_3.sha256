@@ -1,0 +1,11 @@
+49486a3a80004163c1d648c3592078b7e89c8e8800fef65dcfd1f69bc045a0b1  SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_3.md
+algorithm: sha256 (over LF-normalized bytes)
+version: Addendum 3
+frozen_at: 2026-07-24
+depends_on: SHADOW_PILOT_ROUND2_PROTOCOL_V2.md; SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_1.md; SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_2.md
+v2_sha256_unchanged: c76f589485e4ebfd728c27b653d2735f3ebd1c6930087c244e4efbdba9d66696
+v1_sha256_unchanged: 5d166bce159de665c4df677aef6765803575a48827afdc5d061cb49ff54f0f22
+addendum_1_sha256_unchanged: de3afcdd2131ba17717eb2d93a543e350aeff16e11c2ecc32edd8d583f9ca7f3
+addendum_2_sha256_unchanged: b3646d346c1e18fa1293fa275bc81a04e95f6aed917213d6689ee6c528a31381
+code_baseline: dev c3433af / public 1ec9c8f (A.7.3.1, CI Run #53)
+scope: bounded convergence contract for route=open scientific tasks only; no change to tasks, scoring, evidence thresholds, budget or loop caps; does not modify v1/v2/Addendum 1/2
