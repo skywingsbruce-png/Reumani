@@ -107,8 +107,12 @@ def evidence_card_from_literature_record(rec, *, identifier_only_grade="候选")
     - study_design/species 未报告 → 保留 NOT_REPORTED，不从标题猜测；
     - 保留原始 provenance / source_ids / content_hash；evidence_id 稳定可复现（含内容 hash 前缀 → 版本可区分）。
     """
-    from pilot.open_task_contracts import LiteratureRecord  # 延迟导入，避免根层与 pilot 循环耦合
-    if not isinstance(rec, LiteratureRecord):
+    # 鸭子类型校验（避免与 pilot 的循环导入，且对模块 reload 造成的类身份变化健壮）：
+    # 严格拒绝仍由上层 EvidenceAccumulator 的 LiteratureRecord.model_validate 负责。
+    _required = ("content_hash", "provenance", "content_level", "pmid", "doi",
+                 "title", "abstract", "study_design", "species")
+    if isinstance(rec, (str, bytes, dict, list, tuple)) or type(rec).__name__ != "LiteratureRecord" \
+            or not all(hasattr(rec, a) for a in _required):
         raise TypeError("evidence_card_from_literature_record 只接受已校验的 LiteratureRecord")
     primary = rec.pmid or rec.doi
     evidence_id = f"{primary}::{rec.content_hash[:12]}"     # 同内容→同 id（幂等）；内容变→新版本卡
