@@ -1,0 +1,64 @@
+{
+  "note": "A.7.4.2 free-source canary against real Europe PMC. Zero LLM, zero paid, shared ledger untouched. Desensitized (no raw response / no full abstracts).",
+  "query": "systemic sclerosis skin fibrosis",
+  "artifact_ok": true,
+  "artifact_schema_version": "toolresult-v1",
+  "artifact_tool_name": "search_literature",
+  "retrieval_status": "success",
+  "record_count": 5,
+  "content_level_distribution": {
+    "abstract": 5
+  },
+  "warnings": [],
+  "records_summary": [
+    {
+      "pmid": "42286837",
+      "doi": "10.1080/19490976.2026.2679197",
+      "content_level": "abstract",
+      "title_head": "Recent advances and clinical relevance of microbiome dynamic",
+      "content_hash": "2638f64a06a53c28c729642e4480a6d9a5c18b158eea7ed1124c5cd6693b5f00",
+      "hash_algorithm": "sha256",
+      "record_and_provenance_hash_consistent": true
+    },
+    {
+      "pmid": "41982149",
+      "doi": "10.1080/19420862.2026.2657629",
+      "content_level": "abstract",
+      "title_head": "Preclinical characterization of AZD1163, a first-in-class an",
+      "content_hash": "6c3e420bf4d4cb3a883c9f09e15271a54b32e1ebc0ddc6d88a05d118d94fbc55",
+      "hash_algorithm": "sha256",
+      "record_and_provenance_hash_consistent": true
+    },
+    {
+      "pmid": "41866921",
+      "doi": "10.1080/13880209.2026.2638602",
+      "content_level": "abstract",
+      "title_head": "Therapeutic potential of &lt;i&gt;Asiaticoside&lt;/i&gt; in ",
+      "content_hash": "6511fefadf78660bf91957303979e97d7ef7e56c1d8cb353f2f1fc01d9c9a1c1",
+      "hash_algorithm": "sha256",
+      "record_and_provenance_hash_consistent": true
+    },
+    {
+      "pmid": "41837883",
+      "doi": "10.1080/07853890.2026.2642893",
+      "content_level": "abstract",
+      "title_head": "Growth factor applications and clinical translation: advance",
+      "content_hash": "cd40c3096d750bd1cfe5b11181d5345ecee20e6aabcdaa622b25faf280857dba",
+      "hash_algorithm": "sha256",
+      "record_and_provenance_hash_consistent": true
+    },
+    {
+      "pmid": "41657283",
+      "doi": "10.1080/07853890.2026.2627057",
+      "content_level": "abstract",
+      "title_head": "From technological iteration to clinical breakthrough: advan",
+      "content_hash": "ee9b9db5f4b420de6ff00100545d2f4e5eb144e47005f29db524a68588f624a9",
+      "hash_algorithm": "sha256",
+      "record_and_provenance_hash_consistent": true
+    }
+  ],
+  "content_head": "- Recent advances and clinical relevance of microbiome dynamics in health and disease. | Gavanji S, Suhail M, Bencurova E, Dandekar T, Othman EM. | MED | 2026-06-12 | https://pubmed.ncbi.nlm.nih.gov/4",
+  "ledger_bytes_before": 29180,
+  "ledger_bytes_after": 29180,
+  "shared_ledger_untouched": true
+}
