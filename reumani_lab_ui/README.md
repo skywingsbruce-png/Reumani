@@ -18,6 +18,26 @@ source, and issues **no network requests**.
 - ✅ Uploaded files stay **in the browser only** (localStorage) — nothing is sent anywhere.
 - ✅ Status is always shown with a **glyph + label**, never by color alone (accessibility).
 
+## Status & roadmap
+
+- **This is a mock prototype.** It is **not yet connected to a real Agent.**
+- Next phase is **A.7.4.3 EvidenceAccumulator** (backend), then the Step Controller.
+- **UI-1** will wire this workspace to real events: the mock store
+  (`src/store/LabStore.tsx`) is replaced by an **API / SSE** client while the
+  presentational components (all consuming `useLab()`) stay unchanged.
+
+## Screenshots
+
+Captured from the running dev server against mock data only (no real research data,
+no keys, no patient data, no absolute paths). Source: `docs/screenshots/`.
+
+| View | Image |
+| --- | --- |
+| Main workbench — 1920×1080 | ![workbench 1920×1080](docs/screenshots/workbench-1920x1080.png) |
+| Main workbench — 1440×900 | ![workbench 1440×900](docs/screenshots/workbench-1440x900.png) |
+| Clarification card expanded | ![clarification expanded](docs/screenshots/clarification-expanded.png) |
+| Artifact preview drawer | ![artifact preview](docs/screenshots/artifact-preview.png) |
+
 ## Stack
 
 - React 19 + TypeScript + Vite 8

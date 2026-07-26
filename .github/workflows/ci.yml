@@ -99,3 +99,29 @@ jobs:
         run: |
           pip check
           python -c "import schemas, retrieval, verifier, planner, claim_graph, tool_registry, memory_store, lit_ranking, lit_cleaning, hypothesis_triage, eval_harness, evidence_build, safety"
+
+  # 9) Reumani Lab UI (UI-0) — independent front-end job. Node only, no Python.
+  # Mock prototype: no real Agent/LLM/API. Any failing step fails this job.
+  frontend:
+    name: 9) frontend (Reumani Lab UI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reumani_lab_ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: reumani_lab_ui/package-lock.json
+      - name: install (clean, from lockfile)
+        run: npm ci
+      - name: typecheck
+        run: npm run typecheck
+      - name: unit tests (vitest)
+        run: npm run test
+      - name: production build
+        run: npm run build
+      - name: lint (oxlint)
+        run: npm run lint
