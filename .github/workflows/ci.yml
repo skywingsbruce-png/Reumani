@@ -125,3 +125,15 @@ jobs:
         run: npm run build
       - name: lint (oxlint)
         run: npm run lint
+
+  # 10) Reumani runtime API (A.7.4.5) — Starlette 隔离依赖；Python 科研 CI 保持不变。
+  runtime_api:
+    name: 10) runtime API (starlette)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-ci.txt -r requirements-runtime.txt
+      - name: runtime + event + API tests
+        run: pytest tests/test_runtime_events.py tests/test_event_store.py tests/test_open_task_runtime.py tests/test_runtime_api.py

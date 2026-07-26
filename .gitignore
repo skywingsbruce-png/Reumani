@@ -24,3 +24,8 @@ streamlit_debug.log
 pilot/round2_results/*.jsonl
 pilot/round2_results/*_ledger*
 pilot/round2_results/A1_preflight.json
+
+# A.7.4.5 runtime event JSONL (per-run local event store; never committed)
+pilot/runtime_runs/
+runtime_runs/
+*.runtime.jsonl

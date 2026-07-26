@@ -1,0 +1,5 @@
+# 隔离的运行时 API 依赖（A.7.4.5）——与既有 requirements-ci（numpy/langchain 等）分离，避免污染。
+# 仅本地/CI 运行时 API 用；不引入 FastAPI 重依赖，直接用 Starlette + httpx(TestClient)。
+starlette>=0.37
+httpx>=0.27
+uvicorn>=0.30
