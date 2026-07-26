@@ -20,11 +20,46 @@ source, and issues **no network requests**.
 
 ## Status & roadmap
 
-- **This is a mock prototype.** It is **not yet connected to a real Agent.**
-- Next phase is **A.7.4.3 EvidenceAccumulator** (backend), then the Step Controller.
-- **UI-1** will wire this workspace to real events: the mock store
-  (`src/store/LabStore.tsx`) is replaced by an **API / SSE** client while the
-  presentational components (all consuming `useLab()`) stay unchanged.
+- Default is a **mock prototype** (no backend needed for development).
+- **API mode (UI-1)** is now available: the workspace can be driven by real
+  backend runtime events over SSE (see below). Plan steps, EvidenceCard counts,
+  timeline, trace, todos and artifacts are then event-driven, not mock.
+- The deterministic backend (EvidenceAccumulator + Step Controller + bounded
+  runtime) runs offline demo fixtures only — no paid model, no external network.
+- Still to come: real Clarification / Approval / Pause / Resume write-back.
+
+## Running in API mode (real backend events)
+
+Two data sources are selectable via env vars (default **mock**, so dev never
+breaks when the backend is absent):
+
+```
+VITE_REUMANI_DATA_SOURCE=mock | api
+VITE_REUMANI_API_BASE=http://127.0.0.1:8799
+```
+
+1. Start the Python runtime API (from the repo root; binds 127.0.0.1 only):
+
+```bash
+python -c "from pilot.runtime_api import serve; serve(port=8799)"
+```
+
+2. Start the UI in API mode (loads `.env.api`):
+
+```bash
+npm run dev:api
+```
+
+On load the UI creates an offline **demo run** (`POST /api/demo-runs`), reads the
+snapshot, then streams events via SSE. Events are applied idempotently by
+`sequence` (reconnect never duplicates). All network access lives in
+`src/data/ApiDataSource.ts`; components never call `fetch` directly. The event
+contract is shared with Python via `src/contracts/reumani-event-v1.json`.
+Stop calls the real backend stop endpoint (cooperative cancellation); Resume and
+Clarification write-back are deferred to a later phase.
+
+Screenshots of API mode: `docs/screenshots/api-workbench-1920x1080.png`,
+`docs/screenshots/api-stopped-1920x1080.png`.
 
 ## Screenshots
 

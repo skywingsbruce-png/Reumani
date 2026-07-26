@@ -9,6 +9,9 @@ import {
   mockClarifications, mockPlanSteps, mockTimeline, mockTodos, mockTrace,
 } from '../mocks/tasks'
 import { mockArtifacts } from '../mocks/artifacts'
+import { ApiDataSource, type Connection } from '../data/ApiDataSource'
+import { applyRuntimeEvent, type RunStatus, type RuntimeSlice } from '../data/eventMapping'
+import type { RuntimeEvent } from '../data/runtimeEvents'
 
 // ---- mock service boundary: a single place components read/write through. ----
 // Later this can be replaced by a real API/SSE client without touching components.
@@ -28,6 +31,12 @@ interface LabState {
   runtime: RuntimeState
   fileSearch: string
   taskSearch: string
+  // API mode (event-driven). In mock mode these keep their defaults.
+  mode: 'mock' | 'api'
+  runStatus: RunStatus
+  connection: Connection
+  apiRunId: string | null
+  appliedSeq: number          // highest applied event sequence (idempotency)
 }
 
 type Action =
@@ -42,6 +51,9 @@ type Action =
   | { type: 'runtime_tick'; ms: number }
   | { type: 'runtime_stop' }
   | { type: 'runtime_resume' }
+  | { type: 'api_start'; runId: string }
+  | { type: 'apply_event'; ev: RuntimeEvent }
+  | { type: 'set_connection'; connection: Connection }
 
 const LS_KEY = 'reumani-lab-ui-v1'
 
@@ -61,6 +73,26 @@ function seed(): LabState {
     runtime: { phase: 'running', elapsedMs: 128_000 },
     fileSearch: '',
     taskSearch: '',
+    mode: 'mock',
+    runStatus: 'running',
+    connection: 'closed',
+    apiRunId: null,
+    appliedSeq: -1,
+  }
+}
+
+// Fresh empty state for API mode — one live project/task, everything else event-driven.
+function apiSeed(runId: string): LabState {
+  return {
+    projects: [{ id: 'live', name: 'Live runtime', subtitle: 'API mode · offline demo run' }],
+    currentProjectId: 'live',
+    tasks: [{ id: runId, projectId: 'live', title: 'Bounded open-task demo run',
+              status: 'running', group: 'running', updatedAt: new Date().toISOString() }],
+    currentTaskId: runId,
+    files: [], planSteps: [], timeline: [], trace: [], clarifications: [], todos: [], artifacts: [],
+    runtime: { phase: 'running', elapsedMs: 0 },
+    fileSearch: '', taskSearch: '',
+    mode: 'api', runStatus: 'running', connection: 'connecting', apiRunId: runId, appliedSeq: -1,
   }
 }
 
@@ -140,17 +172,53 @@ function reducer(state: LabState, action: Action): LabState {
       ]
       return { ...state, runtime: { ...state.runtime, phase: 'running' }, timeline }
     }
+    case 'api_start':
+      return apiSeed(action.runId)
+    case 'set_connection':
+      return { ...state, connection: action.connection }
+    case 'apply_event': {
+      const ev = action.ev
+      if (ev.run_id !== state.apiRunId) return state
+      if (ev.sequence <= state.appliedSeq) return state          // idempotent: dedupe by sequence
+      const slice: RuntimeSlice = {
+        taskId: state.currentTaskId, planSteps: state.planSteps, timeline: state.timeline,
+        trace: state.trace, artifacts: state.artifacts, runtime: state.runtime,
+        runStatus: state.runStatus,
+      }
+      const next = applyRuntimeEvent(slice, ev)
+      const terminal = ev.event_type === 'run_completed' || ev.event_type === 'run_failed'
+        || ev.event_type === 'run_stopped'
+      const tasks = terminal
+        ? state.tasks.map((t) => t.id === state.currentTaskId
+            ? { ...t, status: next.runStatus === 'finished' ? 'completed' as const
+                : 'failed' as const,
+                group: next.runStatus === 'finished' ? 'completed' as const : 'failed' as const }
+            : t)
+        : state.tasks
+      return {
+        ...state, planSteps: next.planSteps, timeline: next.timeline, trace: next.trace,
+        artifacts: next.artifacts, runtime: next.runtime, runStatus: next.runStatus,
+        tasks, appliedSeq: ev.sequence,
+      }
+    }
     default:
       return state
   }
 }
 
-interface LabContextValue {
+export interface LabContextValue {
   state: LabState
   dispatch: Dispatch<Action>
   // convenience derived selectors
   currentProject: () => Project | undefined
   currentTask: () => TaskSession | undefined
+  requestStop: () => void       // api mode → real stop endpoint; mock mode → local stop
+}
+
+function apiConfig(): string | null {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
+  if (env.VITE_REUMANI_DATA_SOURCE !== 'api') return null
+  return env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799'
 }
 
 const LabContext = createContext<LabContextValue | null>(null)
@@ -181,15 +249,16 @@ export function LabProvider({ children }: { children: ReactNode }) {
     return base
   })
 
-  // persist user-driven state
+  // persist user-driven state (mock mode only — API state is event-driven, not authoritative here)
   useEffect(() => {
+    if (state.mode === 'api') return
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
         clarifications: state.clarifications, todos: state.todos,
         files: state.files, planSteps: state.planSteps,
       }))
     } catch { /* ignore */ }
-  }, [state.clarifications, state.todos, state.files, state.planSteps])
+  }, [state.mode, state.clarifications, state.todos, state.files, state.planSteps])
 
   // runtime timer (front-end only)
   const rafRef = useRef<number | null>(null)
@@ -199,10 +268,43 @@ export function LabProvider({ children }: { children: ReactNode }) {
   }, [])
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
 
+  // API mode: create a demo run, register it, then stream real backend events.
+  const dsRef = useRef<ApiDataSource | null>(null)
+  const runIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    const base = apiConfig()
+    if (!base) return
+    const ds = new ApiDataSource(base)
+    dsRef.current = ds
+    let cancelled = false
+    void (async () => {
+      try {
+        const runId = await ds.createRun()
+        if (cancelled) return
+        runIdRef.current = runId
+        dispatch({ type: 'api_start', runId })
+        await ds.subscribe(runId, {
+          onEvent: (ev) => dispatch({ type: 'apply_event', ev }),
+          onConnection: (c) => dispatch({ type: 'set_connection', connection: c }),
+        })
+      } catch {
+        dispatch({ type: 'set_connection', connection: 'reconnecting' })
+      }
+    })()
+    return () => { cancelled = true; ds.dispose() }
+  }, [])
+
   const value = useMemo<LabContextValue>(() => ({
     state, dispatch,
     currentProject: () => state.projects.find((p) => p.id === state.currentProjectId),
     currentTask: () => state.tasks.find((t) => t.id === state.currentTaskId),
+    requestStop: () => {
+      if (state.mode === 'api' && runIdRef.current && dsRef.current) {
+        void dsRef.current.stop(runIdRef.current)   // run_stopped will arrive via SSE
+      } else {
+        dispatch({ type: 'runtime_stop' })
+      }
+    },
   }), [state])
 
   return <LabContext.Provider value={value}>{children}</LabContext.Provider>
