@@ -96,6 +96,43 @@ def abstract_card_from_paper(paper, *, tool_name="search_evidence", query=""):
         human_review_status="pending")
 
 
+def evidence_card_from_literature_record(rec, *, identifier_only_grade="候选"):
+    """确定性地把【已校验的】LiteratureRecord 构造成 AbstractEvidenceCard（A.7.4.3）。
+
+    复用现有 schemas 证据卡类型，不新建第二套卡：
+    - content_level=abstract → 摘要级卡，supporting_excerpt 取自真实 abstract（不改写）；
+    - content_level=metadata_only → 明确标记的 identifier-only 低等级候选卡
+      （evidence_grade=候选、extraction_confidence 低、无 excerpt、provenance 标 identifier_only）；
+    - content_level=fulltext → 本阶段不产 FullTextEvidenceCard，保守降级为摘要级卡（记录原始层级）；
+    - study_design/species 未报告 → 保留 NOT_REPORTED，不从标题猜测；
+    - 保留原始 provenance / source_ids / content_hash；evidence_id 稳定可复现（含内容 hash 前缀 → 版本可区分）。
+    """
+    from pilot.open_task_contracts import LiteratureRecord  # 延迟导入，避免根层与 pilot 循环耦合
+    if not isinstance(rec, LiteratureRecord):
+        raise TypeError("evidence_card_from_literature_record 只接受已校验的 LiteratureRecord")
+    primary = rec.pmid or rec.doi
+    evidence_id = f"{primary}::{rec.content_hash[:12]}"     # 同内容→同 id（幂等）；内容变→新版本卡
+    is_abstract_level = rec.content_level in ("abstract", "fulltext")   # fulltext 降级为摘要级卡
+    excerpt = (rec.abstract or "")[:400] if (is_abstract_level and rec.abstract) else ""
+    grade = "初筛" if is_abstract_level else identifier_only_grade
+    confidence = 0.4 if is_abstract_level else 0.1
+    quality = "structured_abstract" if is_abstract_level else "identifier_only_metadata"
+    # 复用记录自带 provenance（已含 content_hash/source_ids/content_level）；只补充质量标注，不改内容
+    prov = rec.provenance.model_copy(update={
+        "parameters": {**dict(rec.provenance.parameters),
+                       "provenance_quality": quality,
+                       "literature_content_level": rec.content_level}})
+    return AbstractEvidenceCard(
+        evidence_id=evidence_id, title=rec.title or NOT_REPORTED, provenance=prov,
+        pmid=rec.pmid, doi=rec.doi, publication_status="unknown",
+        study_type=rec.study_design or NOT_REPORTED,
+        species=rec.species or NOT_REPORTED,
+        supporting_excerpt=excerpt, main_claims=[],
+        evidence_direction="inconclusive",
+        extraction_confidence=confidence, evidence_grade=grade,
+        human_review_status="pending")
+
+
 def analysis_card(evidence_id, title, dataset, method, *, result="", statistic=None,
                   sample_size=None, code_commit=None, dataset_version=None,
                   limitations=None, direction="inconclusive", excerpt="") -> AnalysisEvidenceCard:
