@@ -6,6 +6,10 @@
          预印本/撤稿据来源标注；找不到的字段写 NOT_REPORTED，不猜测。
 """
 
+from collections.abc import Mapping
+
+from pydantic import BaseModel, ValidationError
+
 from schemas import (AbstractEvidenceCard, AnalysisEvidenceCard, Provenance, NOT_REPORTED)
 import ids
 
@@ -107,13 +111,19 @@ def evidence_card_from_literature_record(rec, *, identifier_only_grade="候选")
     - study_design/species 未报告 → 保留 NOT_REPORTED，不从标题猜测；
     - 保留原始 provenance / source_ids / content_hash；evidence_id 稳定可复现（含内容 hash 前缀 → 版本可区分）。
     """
-    # 鸭子类型校验（避免与 pilot 的循环导入，且对模块 reload 造成的类身份变化健壮）：
-    # 严格拒绝仍由上层 EvidenceAccumulator 的 LiteratureRecord.model_validate 负责。
-    _required = ("content_hash", "provenance", "content_level", "pmid", "doi",
-                 "title", "abstract", "study_design", "species")
-    if isinstance(rec, (str, bytes, dict, list, tuple)) or type(rec).__name__ != "LiteratureRecord" \
-            or not all(hasattr(rec, a) for a in _required):
-        raise TypeError("evidence_card_from_literature_record 只接受已校验的 LiteratureRecord")
+    from pilot.open_task_contracts import LiteratureRecord  # 延迟导入，避免根层与 pilot 循环耦合
+    # 严格重验证（reload-safe，但拒绝伪装对象）：不用类名/hasattr 作真实性边界。
+    # 接受 Pydantic BaseModel 或合法映射 → 取 payload → 用**当前权威** LiteratureRecord 重验证。
+    if isinstance(rec, BaseModel):
+        payload = rec.model_dump()
+    elif isinstance(rec, Mapping):
+        payload = dict(rec)
+    else:
+        raise TypeError("evidence_card_from_literature_record 只接受 LiteratureRecord/BaseModel 或映射来源")
+    try:
+        rec = LiteratureRecord.model_validate(payload)   # 缺字段/非法 hash·provenance·ID/同名伪类在此被拒
+    except ValidationError as e:
+        raise TypeError(f"LiteratureRecord 重验证失败：{e.error_count()} 处") from e
     primary = rec.pmid or rec.doi
     evidence_id = f"{primary}::{rec.content_hash[:12]}"     # 同内容→同 id（幂等）；内容变→新版本卡
     is_abstract_level = rec.content_level in ("abstract", "fulltext")   # fulltext 降级为摘要级卡

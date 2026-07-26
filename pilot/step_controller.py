@@ -279,21 +279,20 @@ def evaluate_step(run_state: OpenTaskRunState, step_id: int, tool_outcome: ToolO
                          allow=True, remaining_budget=remaining_budget, sci=False,
                          gaps=list(step.remaining_gaps), attempts_after=effective_attempts, counted=True)
 
-    # ok：机器判定 success criteria + 收敛
+    # ok：**先**判定机器可判定 success criteria；满足即立即终止（预算是上限，不是目标调用次数）
     criteria_met = _criteria_met(criteria, run_state.accumulator)
-    converged = no_progress >= criteria.max_scientific_no_progress     # 最近一次无科学进展
-    must_stop = converged or remaining_budget <= 0
-    if not must_stop:
-        return _decision(run_state, step, tool_outcome, action="continue_step",
-                         next_status="running", reason="有科学进展且预算未耗尽，继续",
-                         allow=True, remaining_budget=remaining_budget, sci=sci,
-                         gaps=list(step.remaining_gaps), attempts_after=effective_attempts, counted=True)
     if criteria_met:
         return _decision(run_state, step, tool_outcome, action="complete_satisfied",
-                         next_status="satisfied",
-                         reason=("成功标准达成；" + ("已收敛（无新科学进展）" if converged else "预算已耗尽")),
+                         next_status="satisfied", reason="成功标准已满足，立即终止（不为耗尽预算继续检索）",
                          allow=False, remaining_budget=remaining_budget, sci=sci,
                          gaps=_causal_gaps(run_state), attempts_after=effective_attempts, counted=True)
+    # 未满足：有剩余预算且未达 no-progress 阈值 → 继续；否则 insufficient
+    converged = no_progress >= criteria.max_scientific_no_progress
+    if remaining_budget > 0 and not converged:
+        return _decision(run_state, step, tool_outcome, action="continue_step",
+                         next_status="running", reason="成功标准未满足，预算未耗尽且仍有进展空间，继续",
+                         allow=True, remaining_budget=remaining_budget, sci=sci,
+                         gaps=list(step.remaining_gaps), attempts_after=effective_attempts, counted=True)
     gaps = _causal_gaps(run_state) or ["证据不足以满足成功标准"]
     reason = "scientific no-progress 阈值达到，证据不足" if converged else "工具预算耗尽，证据不足"
     return _decision(run_state, step, tool_outcome, action="complete_insufficient",
@@ -353,6 +352,128 @@ def apply_decision(run_state: OpenTaskRunState, decision: StepDecision,
         conclusion=run_state.conclusion, status=run_status,
         primary_failure=primary_failure, human_review=run_state.human_review or decision.human_review,
     )
+
+
+# ------------------------- 两阶段执行前授权 -------------------------
+# 目的：工具执行前先授权并预留 attempt；被拒时工具调用计数必须保持 0、不生成假 ToolOutcome、
+# 不增加 EvidenceCard。授权成功后同一 reservation 只能 settle 一次；未 settle 的 reservation 可检测；
+# 不允许绕过 authorize 直接 settle。OpenTaskRunState 为冻结契约（不可加字段），故 reservation 台账
+# 放在独立 ReservationLedger，并与 run_state 一起装进 ControllerSession。
+class Reservation(_Strict):
+    reservation_id: str
+    request_id: str
+    step_id: int
+    tool_name: str
+    attempt_number: int
+    settled: bool = False
+
+
+class ReservationLedger(_Strict):
+    reservations: list[Reservation] = Field(default_factory=list)
+
+    def open(self) -> list:
+        return [r for r in self.reservations if not r.settled]
+
+    def open_for_step(self, step_id: int) -> list:
+        return [r for r in self.open() if r.step_id == step_id]
+
+    def has_request(self, request_id: str) -> bool:
+        return any(r.request_id == request_id for r in self.reservations)
+
+    def find(self, reservation_id: str) -> Optional[Reservation]:
+        return next((r for r in self.reservations if r.reservation_id == reservation_id), None)
+
+
+class ControllerSession(_Strict):
+    """把冻结的 OpenTaskRunState 与 reservation 台账绑在一起（spec 里的 run_state / reserved_state 视图）。"""
+    run_state: OpenTaskRunState
+    ledger: ReservationLedger = Field(default_factory=ReservationLedger)
+
+
+class AttemptAuthorization(_Strict):
+    authorized: bool
+    reservation_id: str
+    request_id: str
+    step_id: int
+    tool_name: str
+    attempt_number: int
+    remaining_budget_after_reservation: int
+    denial_reason: Optional[str] = None
+    human_review: bool = False
+
+
+def authorize_attempt(session: ControllerSession, step_id: int, tool_name: str,
+                      request_id: str) -> AttemptAuthorization:
+    """执行前授权（纯检查，不执行工具、不改状态）。被拒→authorized=False + denial_reason。"""
+    step = _get_step(session.run_state, step_id)          # step 不存在 → fail-closed（结构性非法）
+    ledger = session.ledger
+    resv_id = f"rsv-{step_id}-{request_id}"
+
+    def deny(reason: str, hr: bool = False) -> AttemptAuthorization:
+        return AttemptAuthorization(authorized=False, reservation_id=resv_id, request_id=request_id,
+                                    step_id=step_id, tool_name=tool_name, attempt_number=0,
+                                    remaining_budget_after_reservation=0, denial_reason=reason,
+                                    human_review=hr)
+
+    if ledger.has_request(request_id):
+        return deny("duplicate_request_id")               # request_id 已处理
+    if step.is_terminal():
+        return deny("step_terminal")                      # 终态不再授权
+    if tool_name not in step.allowed_tools:
+        return deny("unauthorized_tool", hr=True)         # 不在 allowed_tools
+    if tool_name not in _TOOL_BUDGET:
+        return deny("no_tool_policy", hr=True)            # 无明确 policy → fail-closed（不默认无限）
+    budget = min(_TOOL_BUDGET[tool_name], step.call_budget)
+    used = step.attempts + len(ledger.open_for_step(step_id))   # 已结算 + 未结算预留（不跨步骤借用）
+    if used >= budget:
+        return deny("budget_exhausted")
+    attempt_number = used + 1
+    return AttemptAuthorization(authorized=True, reservation_id=resv_id, request_id=request_id,
+                               step_id=step_id, tool_name=tool_name, attempt_number=attempt_number,
+                               remaining_budget_after_reservation=max(0, budget - attempt_number))
+
+
+def reserve(session: ControllerSession, authorization: AttemptAuthorization) -> ControllerSession:
+    """把授权预留为 open reservation（工具执行前）。拒绝的授权不可预留；同一 reservation 不可重复预留。"""
+    if not authorization.authorized:
+        raise StepControllerError("不能预留被拒绝的授权")
+    if session.ledger.find(authorization.reservation_id) is not None:
+        raise StepControllerError(f"reservation 已存在：{authorization.reservation_id}")
+    resv = Reservation(reservation_id=authorization.reservation_id, request_id=authorization.request_id,
+                       step_id=authorization.step_id, tool_name=authorization.tool_name,
+                       attempt_number=authorization.attempt_number, settled=False)
+    return ControllerSession(run_state=session.run_state,
+                             ledger=ReservationLedger(reservations=[*session.ledger.reservations, resv]))
+
+
+def settle_attempt(reserved_session: ControllerSession, authorization: AttemptAuthorization,
+                   tool_outcome: ToolOutcome, accumulation_result: AccumulationResult,
+                   criteria: Optional[StepCriteria] = None) -> StepDecision:
+    """结算一次已预留的 attempt（任何 outcome 都消耗它，含工具抛异常后合成的 error outcome）。
+    无匹配 open reservation → 拒绝（不能绕过 authorize 直接 settle）。"""
+    r = reserved_session.ledger.find(authorization.reservation_id)
+    if r is None or r.settled:
+        raise StepControllerError("无对应 open reservation（不得绕过 authorize 直接 settle，或已结算）")
+    if tool_outcome.step_id != authorization.step_id or tool_outcome.tool_name != authorization.tool_name:
+        raise StepControllerError("tool_outcome 与授权的 step/tool 不一致")
+    return evaluate_step(reserved_session.run_state, authorization.step_id,
+                         tool_outcome, accumulation_result, criteria)
+
+
+def apply_settlement(reserved_session: ControllerSession, decision: StepDecision,
+                     authorization: AttemptAuthorization,
+                     observation: Optional[ObservationRecord] = None) -> ControllerSession:
+    """把 StepDecision 应用为新 run_state，并把 reservation 标记 settled（同一 reservation 只结算一次）。"""
+    new_run = apply_decision(reserved_session.run_state, decision, observation)
+    ledger = ReservationLedger(reservations=[
+        (r.model_copy(update={"settled": True}) if r.reservation_id == authorization.reservation_id else r)
+        for r in reserved_session.ledger.reservations])
+    return ControllerSession(run_state=new_run, ledger=ledger)
+
+
+def open_reservations(session: ControllerSession) -> list:
+    """未结算的 reservation（对账用；正常收尾后应为空）。"""
+    return session.ledger.open()
 
 
 # ------------------------- 受控综合触发 -------------------------
@@ -435,5 +556,7 @@ __all__ = [
     "StepAction", "StepControllerError", "tool_budget", "OUTER_TOOL_ROUND_CAP",
     "StepCriteria", "default_criteria", "ToolOutcome", "StepDecision",
     "evaluate_step", "apply_decision", "step_tool",
+    "Reservation", "ReservationLedger", "ControllerSession", "AttemptAuthorization",
+    "authorize_attempt", "reserve", "settle_attempt", "apply_settlement", "open_reservations",
     "SynthesisRequest", "build_synthesis_request", "build_controlled_insufficient",
 ]

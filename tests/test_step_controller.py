@@ -1,11 +1,13 @@
-"""A.7.4.4 —— 确定性 open-task Step Controller 单元测试 + 离线端到端验收。
+"""A.7.4.4 (+ A.7.4.4.1) —— 确定性 open-task Step Controller 单元测试 + 离线端到端验收。
 
 覆盖：六种 StepStatus、合法/非法转换、literature=2 / data_lake=1 预算、未知工具 fail-closed、
-预算不可借用/关键词不重置、scientific/transport/zero_hits/error 决策、no-progress 阈值、
+预算不可借用/关键词不重置、**满足标准即刻终止（early convergence）**、no-progress 阈值、
 satisfied/insufficient/failed/blocked、全终态才 synthesis、0 卡仍产生受控综合、missing_evidence 非空、
 observation 幂等、terminal 不可重开、primary_failure 保留、JSON round-trip、无 LLM/网络/账本，
-以及 fake B1 端到端（仅离线验收，不代表真实 B1 通过）。
+**两阶段执行前授权（authorize/reserve/settle）**、**reload-safe 严格重验证**，
+以及两阶段 fake B1 端到端（仅离线验收，不代表真实 B1 通过）。
 """
+import importlib
 import pathlib
 
 import pytest
@@ -13,17 +15,24 @@ import pytest
 from tool_envelope import compute_hash
 from schemas import Provenance
 from ids import normalize_pmid
+import pilot.open_task_contracts as otc
 from pilot.open_task_contracts import (LiteratureRecord, PlanStepState, OpenTaskRunState,
                                        ObservationRecord, EvidenceAccumulatorState,
-                                       literature_content_level_to_provenance,
-                                       TERMINAL_STEP_STATUSES)
-from pilot.evidence_accumulator import accumulate
-from pilot import step_controller as sc
+                                       literature_content_level_to_provenance)
+from pilot.evidence_accumulator import accumulate, AccumulatorInputError
+from evidence_build import evidence_card_from_literature_record
+from pilot import step_controller as scmod
 from pilot.step_controller import (evaluate_step, apply_decision, tool_budget, default_criteria,
                                    StepCriteria, ToolOutcome, StepDecision, StepControllerError,
-                                   build_synthesis_request, build_controlled_insufficient)
+                                   build_synthesis_request, build_controlled_insufficient,
+                                   ControllerSession, authorize_attempt, reserve, settle_attempt,
+                                   apply_settlement, open_reservations)
 
 pytestmark = pytest.mark.unit
+
+# criteria 强于默认（第一次横断面 abstract 不满足）→ 用于制造“需要第二次”的场景
+STRICT2 = StepCriteria(tool="search_literature", min_evidence_cards=2, minimum_content_level="abstract",
+                       max_scientific_no_progress=1)
 
 
 # ------------------------------ fixtures ------------------------------
@@ -57,7 +66,7 @@ def run_with(*steps, current=None):
                             steps=list(steps), current_step_id=current or steps[0].step_id)
 
 
-def obs(oid, step_id, tool, status="ok", eids=None):
+def obsrec(oid, step_id, tool, status="ok", eids=None):
     kw = {}
     if status in ("source_error", "parse_error", "tool_error"):
         kw["error_type"] = "e"
@@ -66,26 +75,58 @@ def obs(oid, step_id, tool, status="ok", eids=None):
                              evidence_ids=eids or [], provenance=Provenance(tool_name=tool), **kw)
 
 
-def feed_lit(rs, oid, *, tag="", step_id=1, record=None):
+def feed_lit(rs, oid, *, tag="", step_id=1, record=None, criteria=None):
     r = record or rec(tag=tag)
     ar = accumulate(rs.accumulator, r)
     rs = rs.model_copy(update={"accumulator": ar.state})
     out = ToolOutcome(observation_id=oid, step_id=step_id, tool_name="search_literature", status="ok")
-    dec = evaluate_step(rs, step_id, out, ar)
-    rs = apply_decision(rs, dec, obs(oid, step_id, "search_literature", eids=ar.added_evidence_ids))
+    dec = evaluate_step(rs, step_id, out, ar, criteria)
+    rs = apply_decision(rs, dec, obsrec(oid, step_id, "search_literature", eids=ar.added_evidence_ids))
     return rs, dec, ar
 
 
-# ------------------------------ 状态机 / 转换 ------------------------------
-def test_pending_to_running_then_satisfied_and_no_third_call():
+# ------------------------------ early convergence（Fix 1） ------------------------------
+def test_first_search_satisfies_immediately_no_second():
     rs = run_with(lit_step())
-    rs, d1, _ = feed_lit(rs, "o1", tag="A")
-    assert d1.previous_status == "pending" and d1.next_status == "running"
-    rs, d2, ar2 = feed_lit(rs, "o2", tag="A")                 # 同内容 → transport-only → satisfied
-    assert d2.next_status == "satisfied" and rs.steps[0].attempts == 2
-    assert ar2.novelty.transport_novelty is True and d2.scientific_progress is False
+    rs, d1, _ = feed_lit(rs, "o1", tag="A")                   # 默认 criteria：≥1 abstract 卡
+    assert d1.action == "complete_satisfied" and d1.next_status == "satisfied"
+    assert rs.steps[0].attempts == 1                          # attempts=1 后 satisfied
+    assert d1.allow_another_tool_call is False                # 不为耗尽预算继续检索
 
 
+def test_second_search_only_when_criteria_unmet():
+    rs = run_with(lit_step(budget=2))
+    rs, d1, _ = feed_lit(rs, "o1", tag="A", criteria=STRICT2)  # 需 2 卡 → 第一次不满足
+    assert d1.action == "continue_step"
+    rs, d2, ar2 = feed_lit(rs, "o2", tag="A", criteria=STRICT2)  # 同证据、仍 1 卡 → 无新增
+    assert ar2.novelty.transport_novelty is True
+    assert d2.next_status == "insufficient"                   # 不虚假 satisfied
+    assert d2.remaining_gaps
+
+
+def test_keyword_change_cannot_force_continue():
+    # 默认 criteria 第一次即满足 → 即便换关键词也不得强迫第二次
+    rs = run_with(lit_step())
+    rs, d1, _ = feed_lit(rs, "o1", tag="query-A")
+    assert d1.next_status == "satisfied" and rs.steps[0].attempts == 1
+
+
+def test_keyword_change_does_not_reset_budget_when_unmet():
+    rs = run_with(lit_step(budget=2))
+    rs, _, _ = feed_lit(rs, "o1", tag="query-A", criteria=STRICT2)
+    rs, d2, _ = feed_lit(rs, "o2", tag="query-B", criteria=STRICT2)   # 不同关键词，预算不重置
+    assert rs.steps[0].attempts == 2 and d2.remaining_budget == 0
+
+
+def test_counterevidence_must_be_declared_via_criteria():
+    crit = StepCriteria(tool="search_literature", min_evidence_cards=1, minimum_content_level="abstract",
+                        require_counterevidence_check=True, max_scientific_no_progress=1)
+    rs = run_with(lit_step())
+    rs, d1, _ = feed_lit(rs, "o1", tag="A", criteria=crit)    # 无反证 → 未满足 → 不 satisfied
+    assert d1.action != "complete_satisfied"
+
+
+# ------------------------------ 预算 / 未知工具 ------------------------------
 def test_literature_budget_is_two():
     assert tool_budget("search_literature") == 2
 
@@ -108,37 +149,28 @@ def test_unknown_tool_fail_closed():
 
 def test_budget_not_borrowed_across_steps():
     rs = run_with(lit_step(), dl_step())
-    rs, _, _ = feed_lit(rs, "o1", tag="A")
-    rs, _, _ = feed_lit(rs, "o2", tag="A")                    # lit 用满 2
-    # data lake 仍是自己的 1，不因 lit 耗尽而变化
+    rs, _, _ = feed_lit(rs, "o1", tag="A")                    # lit satisfied (attempts=1)
     ar = accumulate(rs.accumulator, {"retrieval_status": "zero_hits", "records": []})
     rs2 = rs.model_copy(update={"accumulator": ar.state})
     d = evaluate_step(rs2, 2, ToolOutcome(observation_id="o3", step_id=2,
                                           tool_name="query_data_lake", status="zero_hits"), ar)
-    assert d.remaining_budget == 0 and d.next_status == "insufficient"   # 用自己的预算
+    assert d.remaining_budget == 0 and d.next_status == "insufficient"
 
 
-def test_keyword_change_does_not_reset_budget():
-    rs = run_with(lit_step())
-    rs, d1, _ = feed_lit(rs, "o1", tag="query-A")
-    rs, d2, _ = feed_lit(rs, "o2", tag="query-B")             # 不同关键词 → 不同内容，但预算不重置
-    assert rs.steps[0].attempts == 2 and d2.remaining_budget == 0
-
-
-def test_scientific_progress_continues():
+def test_scientific_progress_continues_when_criteria_unmet():
     rs = run_with(lit_step(budget=3))
-    rs, d1, _ = feed_lit(rs, "o1", tag="A")
+    rs, d1, _ = feed_lit(rs, "o1", tag="A", criteria=STRICT2)
     assert d1.action == "continue_step" and d1.scientific_progress is True
 
 
+# ------------------------------ zero_hits / errors / blocked / telemetry ------------------------------
 def test_zero_hits_is_insufficient_not_no_research():
     rs = run_with(dl_step())
     ar = accumulate(rs.accumulator, {"retrieval_status": "zero_hits", "records": []})
     rs = rs.model_copy(update={"accumulator": ar.state})
     d = evaluate_step(rs, 2, ToolOutcome(observation_id="o", step_id=2,
                                          tool_name="query_data_lake", status="zero_hits"), ar)
-    assert d.next_status == "insufficient"
-    assert any("无研究" in g for g in d.remaining_gaps)
+    assert d.next_status == "insufficient" and any("无研究" in g for g in d.remaining_gaps)
 
 
 def test_source_error_retries_then_fails():
@@ -147,8 +179,8 @@ def test_source_error_retries_then_fails():
     rs = rs.model_copy(update={"accumulator": ar.state})
     d1 = evaluate_step(rs, 1, ToolOutcome(observation_id="e1", step_id=1,
                        tool_name="search_literature", status="source_error", error_type="http"), ar)
-    assert d1.action == "continue_step"                        # 预算内一次受限重试
-    rs = apply_decision(rs, d1, obs("e1", 1, "search_literature", status="source_error"))
+    assert d1.action == "continue_step"
+    rs = apply_decision(rs, d1, obsrec("e1", 1, "search_literature", status="source_error"))
     d2 = evaluate_step(rs, 1, ToolOutcome(observation_id="e2", step_id=1,
                        tool_name="search_literature", status="source_error", error_type="http"), ar)
     assert d2.next_status == "failed" and d2.primary_failure == "source_error"
@@ -164,28 +196,19 @@ def test_parse_error_no_budget_fails():
 
 
 def test_no_progress_threshold_insufficient_when_criteria_unmet():
-    # criteria 要求 fulltext（永远不满足），第二次 transport-only → 收敛 → insufficient
     crit = StepCriteria(tool="search_literature", min_evidence_cards=1, minimum_content_level="full_text",
                         max_scientific_no_progress=1)
     rs = run_with(lit_step(budget=3))
-    r = rec(tag="A")
-    ar = accumulate(rs.accumulator, r)
-    rs = rs.model_copy(update={"accumulator": ar.state})
-    d1 = evaluate_step(rs, 1, ToolOutcome(observation_id="o1", step_id=1,
-                       tool_name="search_literature", status="ok"), ar, criteria=crit)
-    rs = apply_decision(rs, d1, obs("o1", 1, "search_literature"))
-    ar2 = accumulate(rs.accumulator, rec(tag="A"))             # 同内容 → no-progress
-    rs = rs.model_copy(update={"accumulator": ar2.state})
-    d2 = evaluate_step(rs, 1, ToolOutcome(observation_id="o2", step_id=1,
-                       tool_name="search_literature", status="ok"), ar2, criteria=crit)
-    assert d2.next_status == "insufficient" and d2.remaining_gaps
+    rs, d1, _ = feed_lit(rs, "o1", tag="A", criteria=crit)    # 无 fulltext 卡 → 未满足 → continue
+    rs, d2, _ = feed_lit(rs, "o2", tag="A", criteria=crit)    # 同内容 → no-progress → insufficient
+    assert d1.action == "continue_step" and d2.next_status == "insufficient" and d2.remaining_gaps
 
 
 def test_unauthorized_tool_blocked():
     rs = run_with(lit_step())
     ar = accumulate(rs.accumulator, rec())
     d = evaluate_step(rs, 1, ToolOutcome(observation_id="o", step_id=1,
-                      tool_name="query_data_lake", status="ok"), ar)   # 不在 allowed_tools
+                      tool_name="query_data_lake", status="ok"), ar)
     assert d.next_status == "blocked" and d.human_review is True
 
 
@@ -198,29 +221,22 @@ def test_telemetry_conflict_failed_human_review():
 
 
 def test_six_step_statuses_reachable():
-    seen = {"pending"}
-    seen.add(run_with(lit_step()).steps[0].status)             # pending 初始
+    seen = {run_with(lit_step()).steps[0].status}             # pending
     rs = run_with(lit_step(budget=3))
-    rs, d, _ = feed_lit(rs, "o1", tag="A")
-    seen.add(d.next_status)                                    # running
-    rs, d2, _ = feed_lit(rs, "o2", tag="A")
-    seen.add(d2.next_status)                                   # satisfied
-    seen.add(evaluate_step(run_with(dl_step()).model_copy(
-        update={"accumulator": accumulate(EvidenceAccumulatorState(),
-                                          {"retrieval_status": "zero_hits", "records": []}).state}),
-        2, ToolOutcome(observation_id="z", step_id=2, tool_name="query_data_lake", status="zero_hits"),
-        accumulate(EvidenceAccumulatorState(), {"retrieval_status": "zero_hits", "records": []})
-    ).next_status)                                            # insufficient
-    seen.add(evaluate_step(run_with(lit_step(budget=1)).model_copy(
-        update={"accumulator": accumulate(EvidenceAccumulatorState(),
-                                          {"retrieval_status": "parse_error", "records": []}).state}),
-        1, ToolOutcome(observation_id="p", step_id=1, tool_name="search_literature",
-                       status="parse_error", error_type="x"),
-        accumulate(EvidenceAccumulatorState(), {"retrieval_status": "parse_error", "records": []})
-    ).next_status)                                            # failed
-    seen.add(evaluate_step(run_with(lit_step()),
-        1, ToolOutcome(observation_id="b", step_id=1, tool_name="query_data_lake", status="ok"),
-        accumulate(EvidenceAccumulatorState(), rec())).next_status)   # blocked
+    rs, d1, _ = feed_lit(rs, "o1", tag="A", criteria=STRICT2)
+    seen.add(d1.next_status)                                  # running
+    seen.add(feed_lit(run_with(lit_step()), "s1", tag="A")[1].next_status)   # satisfied
+    zar = accumulate(EvidenceAccumulatorState(), {"retrieval_status": "zero_hits", "records": []})
+    seen.add(evaluate_step(run_with(dl_step()).model_copy(update={"accumulator": zar.state}),
+             2, ToolOutcome(observation_id="z", step_id=2, tool_name="query_data_lake",
+                            status="zero_hits"), zar).next_status)            # insufficient
+    par = accumulate(EvidenceAccumulatorState(), {"retrieval_status": "parse_error", "records": []})
+    seen.add(evaluate_step(run_with(lit_step(budget=1)).model_copy(update={"accumulator": par.state}),
+             1, ToolOutcome(observation_id="p", step_id=1, tool_name="search_literature",
+                            status="parse_error", error_type="x"), par).next_status)   # failed
+    seen.add(evaluate_step(run_with(lit_step()), 1, ToolOutcome(observation_id="b", step_id=1,
+             tool_name="query_data_lake", status="ok"),
+             accumulate(EvidenceAccumulatorState(), rec())).next_status)     # blocked
     assert {"pending", "running", "satisfied", "insufficient", "failed", "blocked"} <= seen
 
 
@@ -228,17 +244,16 @@ def test_six_step_statuses_reachable():
 def test_synthesis_only_after_all_terminal():
     rs = run_with(lit_step(), dl_step())
     with pytest.raises(StepControllerError):
-        build_synthesis_request(rs)                           # 有 pending → fail-closed
+        build_synthesis_request(rs)
 
 
 def test_synthesis_request_with_zero_cards_is_nonempty():
-    # 单步、直接 insufficient（0 卡）→ 仍产生受控综合请求，missing_evidence 非空
     rs = run_with(dl_step(step_id=1))
     ar = accumulate(rs.accumulator, {"retrieval_status": "zero_hits", "records": []})
     rs = rs.model_copy(update={"accumulator": ar.state})
     d = evaluate_step(rs, 1, ToolOutcome(observation_id="z", step_id=1,
                       tool_name="query_data_lake", status="zero_hits"), ar)
-    rs = apply_decision(rs, d, obs("z", 1, "query_data_lake", status="zero_hits"))
+    rs = apply_decision(rs, d, obsrec("z", 1, "query_data_lake", status="zero_hits"))
     assert d.should_synthesize is True
     req = build_synthesis_request(rs)
     assert req.evidence_ids == [] and req.missing_evidence
@@ -253,20 +268,18 @@ def test_observation_idempotent_apply_twice():
     ar = accumulate(rs.accumulator, r)
     rs = rs.model_copy(update={"accumulator": ar.state})
     d = evaluate_step(rs, 1, ToolOutcome(observation_id="o1", step_id=1,
-                      tool_name="search_literature", status="ok"), ar)
-    rs1 = apply_decision(rs, d, obs("o1", 1, "search_literature"))
-    rs2 = apply_decision(rs1, d, obs("o1", 1, "search_literature"))   # 重放同一 observation
-    assert rs1.steps[0].attempts == 1 and rs2.steps[0].attempts == 1  # 不重复计数
-    # evaluate_step 重放 → echo，不计
+                      tool_name="search_literature", status="ok"), ar, STRICT2)
+    rs1 = apply_decision(rs, d, obsrec("o1", 1, "search_literature"))
+    rs2 = apply_decision(rs1, d, obsrec("o1", 1, "search_literature"))
+    assert rs1.steps[0].attempts == 1 and rs2.steps[0].attempts == 1
     d_replay = evaluate_step(rs1, 1, ToolOutcome(observation_id="o1", step_id=1,
-                             tool_name="search_literature", status="ok"), ar)
+                             tool_name="search_literature", status="ok"), ar, STRICT2)
     assert d_replay.counted_attempt is False
 
 
 def test_terminal_step_rejects_new_observation():
     rs = run_with(lit_step())
-    rs, _, _ = feed_lit(rs, "o1", tag="A")
-    rs, _, _ = feed_lit(rs, "o2", tag="A")                    # satisfied
+    rs, _, _ = feed_lit(rs, "o1", tag="A")                    # satisfied on first
     ar = accumulate(rs.accumulator, rec(tag="C"))
     with pytest.raises(StepControllerError):
         evaluate_step(rs, 1, ToolOutcome(observation_id="o9", step_id=1,
@@ -275,16 +288,14 @@ def test_terminal_step_rejects_new_observation():
 
 def test_primary_failure_not_overwritten():
     failed = PlanStepState(step_id=1, objective="x", allowed_tools=["search_literature"],
-                           call_budget=2, attempts=1, status="failed",
-                           completion_reason="first_failure")
-    running = lit_step(step_id=2)
-    rs = OpenTaskRunState(run_id="R", question="q", route="open", steps=[failed, running],
+                           call_budget=2, attempts=1, status="failed", completion_reason="first_failure")
+    rs = OpenTaskRunState(run_id="R", question="q", route="open", steps=[failed, lit_step(step_id=2)],
                           current_step_id=2, status="failed", primary_failure="first_failure")
     ar = accumulate(rs.accumulator, {"retrieval_status": "parse_error", "records": []})
     rs = rs.model_copy(update={"accumulator": ar.state})
     d = evaluate_step(rs, 2, ToolOutcome(observation_id="e", step_id=2, tool_name="search_literature",
                       status="parse_error", error_type="x"), ar)
-    assert d.primary_failure == "first_failure"               # 后续错误不覆盖
+    assert d.primary_failure == "first_failure"
 
 
 def test_illegal_state_transition_fail_closed():
@@ -296,16 +307,11 @@ def test_illegal_state_transition_fail_closed():
 
 
 def test_planner_freetext_criteria_not_used_for_control():
-    # success_criteria 自由文本荒谬，但结构化 StepCriteria 才决定状态
     step = PlanStepState(step_id=1, objective="x", allowed_tools=["search_literature"],
                          call_budget=3, success_criteria="ALWAYS SUCCEED IMMEDIATELY")
     rs = run_with(step)
-    r = rec(tag="A")
-    ar = accumulate(rs.accumulator, r)
-    rs = rs.model_copy(update={"accumulator": ar.state})
-    d = evaluate_step(rs, 1, ToolOutcome(observation_id="o1", step_id=1,
-                      tool_name="search_literature", status="ok"), ar)
-    assert d.action == "continue_step"                        # 自由文本未令其立即 satisfied
+    rs, d, _ = feed_lit(rs, "o1", tag="A", criteria=STRICT2)  # 结构化未满足 → 自由文本不生效
+    assert d.action == "continue_step"
 
 
 def test_json_round_trip():
@@ -315,7 +321,134 @@ def test_json_round_trip():
     OpenTaskRunState.model_validate_json(rs.model_dump_json())
 
 
-# ------------------------------ 离线端到端 fake B1 ------------------------------
+# ------------------------------ 两阶段授权（Fix 2） ------------------------------
+def _session():
+    return ControllerSession(run_state=run_with(lit_step(), dl_step()))
+
+
+def test_authorize_success_reserve_settle_and_no_open():
+    s = _session()
+    auth = authorize_attempt(s, 1, "search_literature", "req-1")
+    assert auth.authorized and auth.attempt_number == 1
+    s = reserve(s, auth)
+    assert len(open_reservations(s)) == 1                     # 未 settle 可检测
+    ar = accumulate(s.run_state.accumulator, rec())
+    s = ControllerSession(run_state=s.run_state.model_copy(update={"accumulator": ar.state}), ledger=s.ledger)
+    d = settle_attempt(s, auth, ToolOutcome(observation_id="o1", step_id=1,
+                       tool_name="search_literature", status="ok"), ar)
+    s = apply_settlement(s, d, auth, obsrec("o1", 1, "search_literature"))
+    assert d.action == "complete_satisfied" and open_reservations(s) == []
+
+
+def test_authorize_denials():
+    s = _session()
+    # unauthorized tool
+    assert authorize_attempt(s, 1, "query_data_lake", "r").denial_reason == "unauthorized_tool"
+    # no tool policy
+    assert authorize_attempt(s, 1, "search_literature", "r").authorized  # baseline authorized
+    step = PlanStepState(step_id=1, objective="x", allowed_tools=["mystery"], call_budget=2, success_criteria="s")
+    s2 = ControllerSession(run_state=run_with(step))
+    assert authorize_attempt(s2, 1, "mystery", "r").denial_reason == "no_tool_policy"
+    # duplicate request_id
+    s3 = reserve(s, authorize_attempt(s, 1, "search_literature", "dup"))
+    assert authorize_attempt(s3, 1, "search_literature", "dup").denial_reason == "duplicate_request_id"
+
+
+def test_authorize_budget_exhausted_denies_without_tool_call():
+    s = _session()
+    a1 = authorize_attempt(s, 2, "query_data_lake", "d1")     # data_lake budget 1
+    s = reserve(s, a1)
+    a2 = authorize_attempt(s, 2, "query_data_lake", "d2")     # 已有 1 open reservation → 用满
+    assert a2.authorized is False and a2.denial_reason == "budget_exhausted"
+
+
+def test_reserve_denied_authorization_raises():
+    s = _session()
+    denied = authorize_attempt(s, 1, "query_data_lake", "r")
+    with pytest.raises(StepControllerError):
+        reserve(s, denied)
+
+
+def test_settle_without_reservation_is_rejected():
+    s = _session()
+    auth = authorize_attempt(s, 1, "search_literature", "r")  # 未 reserve
+    ar = accumulate(s.run_state.accumulator, rec())
+    with pytest.raises(StepControllerError):
+        settle_attempt(s, auth, ToolOutcome(observation_id="o", step_id=1,
+                       tool_name="search_literature", status="ok"), ar)
+
+
+def test_reservation_settled_once():
+    s = _session()
+    auth = authorize_attempt(s, 1, "search_literature", "r")
+    s = reserve(s, auth)
+    ar = accumulate(s.run_state.accumulator, rec())
+    s = ControllerSession(run_state=s.run_state.model_copy(update={"accumulator": ar.state}), ledger=s.ledger)
+    d = settle_attempt(s, auth, ToolOutcome(observation_id="o", step_id=1,
+                       tool_name="search_literature", status="ok"), ar)
+    s = apply_settlement(s, d, auth, obsrec("o", 1, "search_literature"))
+    with pytest.raises(StepControllerError):                  # 二次 settle 被拒
+        settle_attempt(s, auth, ToolOutcome(observation_id="o", step_id=1,
+                       tool_name="search_literature", status="ok"), ar)
+
+
+def test_settle_succeeds_even_if_tool_raised():
+    # provider/tool 抛异常 → 调用方合成 tool_error outcome → 仍可 settle 为失败
+    s = ControllerSession(run_state=run_with(lit_step(budget=1)))
+    auth = authorize_attempt(s, 1, "search_literature", "r")
+    s = reserve(s, auth)
+    ar = accumulate(s.run_state.accumulator, {"retrieval_status": "tool_error", "records": []})
+    s = ControllerSession(run_state=s.run_state.model_copy(update={"accumulator": ar.state}), ledger=s.ledger)
+    d = settle_attempt(s, auth, ToolOutcome(observation_id="x", step_id=1,
+                       tool_name="search_literature", status="tool_error", error_type="boom"), ar)
+    s = apply_settlement(s, d, auth, obsrec("x", 1, "search_literature", status="tool_error"))
+    assert d.next_status == "failed" and open_reservations(s) == []
+
+
+# ------------------------------ reload-safe 严格重验证（Fix 3） ------------------------------
+def test_record_created_before_reload_still_builds():
+    r = rec("40000010")
+    c1 = evidence_card_from_literature_record(r)
+    importlib.reload(otc)
+    c2 = evidence_card_from_literature_record(r)              # reload 后旧记录仍可重验证构卡
+    assert c1.model_dump() == c2.model_dump()
+
+
+def test_same_named_impostor_rejected():
+    class LiteratureRecord:                                   # 同名伪类，字段不符
+        pmid = "40000011"
+        doi = None
+    with pytest.raises(TypeError):
+        evidence_card_from_literature_record(LiteratureRecord())
+
+
+def test_missing_fields_object_rejected():
+    with pytest.raises(TypeError):
+        evidence_card_from_literature_record({"pmid": "40000012"})
+
+
+def test_illegal_hash_provenance_id_rejected():
+    good = rec("40000013").model_dump()
+    for mutate in ({"content_hash": "nothex"}, {"pmid": "not-a-pmid", "doi": None},
+                   {"provenance": None}):
+        bad = {**good, **mutate}
+        with pytest.raises(TypeError):
+            evidence_card_from_literature_record(bad)
+
+
+def test_plain_dict_cannot_bypass_accumulator():
+    with pytest.raises(AccumulatorInputError):
+        accumulate(EvidenceAccumulatorState(),
+                   {"pmid": "40000014", "content_level": "abstract"})   # 非结构化 dict
+
+
+def test_valid_record_round_trip_stable():
+    r = rec("40000015")
+    assert evidence_card_from_literature_record(r).model_dump() == \
+           evidence_card_from_literature_record(r).model_dump()
+
+
+# ------------------------------ 两阶段离线端到端 fake B1 ------------------------------
 class _Counter:
     def __init__(self):
         self.calls = {}
@@ -324,127 +457,117 @@ class _Counter:
         self.calls[name] = self.calls.get(name, 0) + 1
 
 
-def _fake_verify(concl, cards, c):
-    c.call("verify")
-    return {"status": "insufficient_for_causal" if concl.causal_strength != "causal" else "passed",
-            "saw_card_ids": [x.evidence_id for x in cards]}
-
-
-def _fake_claims(concl, eids, c):
-    c.call("claim_extract")
-    return [{"claim_id": "c1", "supporting_ids": list(eids)}]
-
-
-def _fake_claim_graph(claims, cards, c):
-    c.call("claim_graph")
-    ids = {x.evidence_id for x in cards}
-    return [{"claim_id": cl["claim_id"], "verdict": "partially_supported"
-             if all(s in ids for s in cl["supporting_ids"]) else "not_supported"} for cl in claims]
-
-
-def _fake_shadow(cards, c):
-    c.call("shadow")
-    return {"created_new_cards": False, "n_cards": len(cards)}
-
-
-def replay_b1():
-    """离线可执行 B1 重放（真实 accumulator + 真实 controller + fake 工具/阶段）。
-    NOT a real B1 run；不调用任何模型/网络/账本；固件明确 FAKE。"""
+def replay_b1_two_phase():
+    """两阶段 fake B1：authorize → tool → accumulate → settle，早满足即停。仅离线，不代表真实 B1 通过。"""
     counter = _Counter()
-    lifecycle = {"tool_calls": 0}
-    controller_decisions = 0
-    step_novelty = {}
-    rs = run_with(lit_step(), dl_step())
+    order = []
+    tool_calls = {"search_literature": 0, "query_data_lake": 0}
+    lifecycle = 0
+    decisions = 0
+    session = ControllerSession(run_state=run_with(lit_step(), dl_step()))
 
-    # 文献步骤：第一次横断面 abstract，第二次同证据（transport-only）
-    for oid, tag in (("o1", "A"), ("o2", "A")):
-        lifecycle["tool_calls"] += 1
-        r = rec(pmid="40000001", study_design="cross-sectional", tag=tag)
-        ar = accumulate(rs.accumulator, r)
-        rs = rs.model_copy(update={"accumulator": ar.state})
-        d = evaluate_step(rs, 1, ToolOutcome(observation_id=oid, step_id=1,
-                          tool_name="search_literature", status="ok"), ar)
-        controller_decisions += 1 if d.counted_attempt else 0
-        step_novelty[oid] = ar.novelty
-        rs = apply_decision(rs, d, obs(oid, 1, "search_literature", eids=ar.added_evidence_ids))
+    def attempt(session, step_id, tool, request_id, make):
+        nonlocal lifecycle, decisions
+        order.append(f"authorize:{request_id}")
+        auth = authorize_attempt(session, step_id, tool, request_id)
+        if not auth.authorized:
+            order.append(f"denied:{request_id}:{auth.denial_reason}")
+            return session, None, auth                        # 未授权 → 不调用工具
+        session = reserve(session, auth)
+        order.append(f"tool:{tool}")
+        tool_calls[tool] += 1
+        lifecycle += 1
+        outcome, obsr = make()
+        ar = accumulate(session.run_state.accumulator, outcome["accum_input"])
+        order.append("accumulate")
+        session = ControllerSession(run_state=session.run_state.model_copy(
+            update={"accumulator": ar.state}), ledger=session.ledger)
+        order.append(f"settle:{request_id}")
+        d = settle_attempt(session, auth, outcome["tool_outcome"], ar)
+        decisions += 1
+        session = apply_settlement(session, d, auth, obsr(ar))
+        return session, d, auth
 
-    # 数据湖：zero_hits
-    lifecycle["tool_calls"] += 1
-    ar = accumulate(rs.accumulator, {"retrieval_status": "zero_hits", "records": []})
-    rs = rs.model_copy(update={"accumulator": ar.state})
-    d_dl = evaluate_step(rs, 2, ToolOutcome(observation_id="o3", step_id=2,
-                         tool_name="query_data_lake", status="zero_hits"), ar)
-    controller_decisions += 1 if d_dl.counted_attempt else 0
-    rs = apply_decision(rs, d_dl, obs("o3", 2, "query_data_lake", status="zero_hits"))
+    # 文献：第一次横断面 abstract → early satisfied
+    session, d_lit, _ = attempt(session, 1, "search_literature", "lit-1", lambda: (
+        {"accum_input": rec(study_design="cross-sectional", tag="A"),
+         "tool_outcome": ToolOutcome(observation_id="o1", step_id=1, tool_name="search_literature", status="ok")},
+        lambda ar: obsrec("o1", 1, "search_literature", eids=ar.added_evidence_ids)))
+    # 尝试第二次文献 → 步骤已终态 → 授权被拒，工具不被调用
+    session, d_lit2, auth_lit2 = attempt(session, 1, "search_literature", "lit-2", lambda: (
+        {"accum_input": rec(tag="B"),
+         "tool_outcome": ToolOutcome(observation_id="o2", step_id=1, tool_name="search_literature", status="ok")},
+        lambda ar: obsrec("o2", 1, "search_literature")))
+    # 数据湖：zero_hits → insufficient
+    session, d_dl, _ = attempt(session, 2, "query_data_lake", "dl-1", lambda: (
+        {"accum_input": {"retrieval_status": "zero_hits", "records": []},
+         "tool_outcome": ToolOutcome(observation_id="o3", step_id=2, tool_name="query_data_lake", status="zero_hits")},
+        lambda ar: obsrec("o3", 2, "query_data_lake", status="zero_hits")))
 
-    assert all(s.is_terminal() for s in rs.steps) and d_dl.should_synthesize
-    req = build_synthesis_request(rs)
+    req = build_synthesis_request(session.run_state)
     concl = build_controlled_insufficient(req)
 
-    verdict = _fake_verify(concl, rs.accumulator.evidence_cards, counter)
-    claims = _fake_claims(concl, req.evidence_ids, counter)
-    judged = _fake_claim_graph(claims, rs.accumulator.evidence_cards, counter)
-    shadow = _fake_shadow(rs.accumulator.evidence_cards, counter)
+    def _v(concl, cards):
+        counter.call("verify")
+        return {"status": "insufficient_for_causal" if concl.causal_strength != "causal" else "passed"}
+    verdict = _v(concl, session.run_state.accumulator.evidence_cards)
+    counter.call("claim_extract"); counter.call("claim_graph"); counter.call("shadow")
 
-    run_metrics = {"tool_calls": lifecycle["tool_calls"],
-                   "evidence_cards": len(rs.accumulator.evidence_cards),
-                   "controller_decisions": controller_decisions,
-                   "stage_calls": dict(counter.calls)}
-    return {"rs": rs, "conclusion": concl, "verdict": verdict, "claims": claims,
-            "claim_graph": judged, "shadow": shadow, "run_metrics": run_metrics,
-            "step_novelty": step_novelty, "lit_attempts": rs.steps[0].attempts,
-            "lit_observations": rs.steps[0].observations}
+    run_metrics = {"tool_calls": lifecycle, "evidence_cards": len(session.run_state.accumulator.evidence_cards),
+                   "controller_decisions": decisions, "reservations_settled": len(session.ledger.reservations),
+                   "open_reservations": len(open_reservations(session)), "stage_calls": dict(counter.calls)}
+    return {"session": session, "order": order, "tool_calls": tool_calls, "conclusion": concl,
+            "verdict": verdict, "run_metrics": run_metrics, "lit_decision": d_lit,
+            "lit2_auth": auth_lit2, "dl_decision": d_dl}
 
 
 @pytest.fixture(scope="module")
 def B1():
-    return replay_b1()
+    return replay_b1_two_phase()
 
 
-def test_e2e_literature_first_cross_sectional_second_transport_only(B1):
-    assert B1["step_novelty"]["o1"].scientific_progress is True           # 1: 构卡
-    assert B1["step_novelty"]["o2"].transport_novelty is True             # 2: transport-only
-    assert B1["step_novelty"]["o2"].scientific_progress is False
+def test_e2e_authorize_before_tool_ordering(B1):
+    order = B1["order"]
+    assert order.index("authorize:lit-1") < order.index("tool:search_literature")
+    assert order.index("authorize:dl-1") < order.index("tool:query_data_lake")
+    # 固定顺序 authorize→tool→accumulate→settle（以 lit-1 为例）
+    seg = order[order.index("authorize:lit-1"):order.index("settle:lit-1") + 1]
+    assert seg == ["authorize:lit-1", "tool:search_literature", "accumulate", "settle:lit-1"]
 
 
-def test_e2e_literature_terminal_after_second_no_third(B1):
-    assert B1["rs"].steps[0].status == "satisfied"                        # 3
-    assert B1["lit_attempts"] == 2 and len(B1["lit_observations"]) == 2   # 6: 不发生第三次
+def test_e2e_first_satisfies_and_second_denied_no_tool_call(B1):
+    assert B1["lit_decision"].action == "complete_satisfied"          # 第一次即满足
+    assert B1["session"].run_state.steps[0].attempts == 1
+    assert B1["lit2_auth"].authorized is False                        # 第二次授权被拒
+    assert B1["lit2_auth"].denial_reason == "step_terminal"
+    assert B1["tool_calls"]["search_literature"] == 1                 # 工具只被调用一次
 
 
-def test_e2e_datalake_zero_hits_terminal(B1):
-    assert B1["rs"].steps[1].status == "insufficient"                     # 4,5
+def test_e2e_datalake_zero_hits_terminal_and_synthesis(B1):
+    assert B1["dl_decision"].next_status == "insufficient"
+    assert B1["dl_decision"].should_synthesize is True
+    assert B1["conclusion"].missing_evidence
 
 
-def test_e2e_all_terminal_then_synthesis_nonempty(B1):
-    assert all(s.is_terminal() for s in B1["rs"].steps)                   # 7
-    assert B1["conclusion"].missing_evidence                              # 8: 非空 insufficient
-
-
-def test_e2e_fake_stages_each_called_once(B1):
-    for st in ("verify", "claim_extract", "claim_graph", "shadow"):       # 9-12
-        assert B1["run_metrics"]["stage_calls"].get(st) == 1
-    assert B1["shadow"]["created_new_cards"] is False
-
-
-def test_e2e_causal_strength_association_with_gaps(B1):
-    assert B1["conclusion"].causal_strength == "association"              # 13
+def test_e2e_causal_not_upgraded_by_early_satisfied(B1):
+    assert B1["conclusion"].causal_strength == "association"
     gaps = " ".join(B1["conclusion"].missing_evidence)
-    for kw in ("时序", "干预", "混杂", "反向"):                            # 14
+    for kw in ("时序", "干预", "混杂", "反向"):
         assert kw in gaps
 
 
-def test_e2e_metrics_consistent_across_sources(B1):
-    m = B1["run_metrics"]                                                 # 15
-    assert m["tool_calls"] == 3                                           # Lifecycle
-    assert m["evidence_cards"] == 1                                       # Accumulator
-    assert m["controller_decisions"] == 3                                 # Controller
-    assert m["stage_calls"] == {"verify": 1, "claim_extract": 1, "claim_graph": 1, "shadow": 1}
+def test_e2e_fake_stages_each_once(B1):
+    for st in ("verify", "claim_extract", "claim_graph", "shadow"):
+        assert B1["run_metrics"]["stage_calls"].get(st) == 1
 
 
-def test_e2e_is_offline_only(B1):
-    # 明确：这是离线验收产物，不代表真实 B1 通过
-    assert B1["verdict"]["status"] == "insufficient_for_causal"
+def test_e2e_reservation_and_metrics_consistent_no_open(B1):
+    m = B1["run_metrics"]
+    assert m["tool_calls"] == 2                               # lifecycle：lit 1 + dl 1（被拒的不算）
+    assert m["evidence_cards"] == 1
+    assert m["controller_decisions"] == 2
+    assert m["reservations_settled"] == 2                     # 两个已授权 attempt
+    assert m["open_reservations"] == 0                        # 无未结算 reservation
 
 
 # ------------------------------ 边界 ------------------------------
@@ -460,7 +583,8 @@ def test_no_llm_network_or_ledger_imports():
 
 def test_controller_not_wired_into_production_chain():
     for name in ("ssc_a1.py", "shadow.py", "pilot/exec_wiring.py", "pilot/tool_middleware.py",
-                 "pilot/round2_runner.py", "pilot/literature_adapter.py", "pilot/loop_guard.py"):
+                 "pilot/round2_runner.py", "pilot/literature_adapter.py", "pilot/loop_guard.py",
+                 "search_literature.py"):
         p = _ROOT / name
         if p.exists():
             assert "step_controller" not in p.read_text(encoding="utf-8"), name
