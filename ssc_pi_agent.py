@@ -73,43 +73,72 @@ def read_local_pdf(file_path: str) -> str:
 # ✋ 工具 2：检索最新文献（交给 DeepSeek 辩手用，省 token）
 # ==========================================
 
-@tool
-def search_literature(query: str, max_results: int = 10, preprints_only: bool = False) -> str:
+def _readable_literature_lines(results):
+    """保持旧 search_literature 的可读文本格式（title | authors | journal | date | link）。
+    仅供人类/旧 Agent 阅读；结构化数据在 artifact 里，不重复塞完整 JSON。"""
+    lines = []
+    for item in results:
+        title = item.get("title", "无标题")
+        authors = item.get("authorString", "未知作者")
+        journal = item.get("journalTitle") or item.get("source", "")
+        date = item.get("firstPublicationDate", "")
+        pmid = item.get("pmid")
+        doi = item.get("doi")
+        link = (f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid
+                else (f"https://doi.org/{doi}" if doi else ""))
+        lines.append(f"- {title} | {authors} | {journal} | {date} | {link}")
+    return "\n".join(lines)
+
+
+@tool(response_format="content_and_artifact")
+def search_literature(query: str, max_results: int = 10, preprints_only: bool = False):
     """检索系统性硬化症(SSc)相关的最新学术文献，覆盖 PubMed 已发表论文以及 bioRxiv/medRxiv 预印本，
-    按最新发表时间排序返回标题、作者、期刊/来源、日期和链接。preprints_only=True 时只返回预印本。"""
+    按最新发表时间排序返回标题、作者、期刊/来源、日期和链接。preprints_only=True 时只返回预印本。
+    返回 (可读文本 content, 结构化 artifact=ToolResult)；artifact.data.records 为 LiteratureRecord 列表。"""
+    from tool_envelope import make_toolresult
+    from pilot.literature_adapter import (SOURCE, build_literature_records, records_to_data,
+                                          zero_hits_data)
+    base = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+    q = query if not preprints_only else f"{query} AND SRC:PPR"
+    params = {"query": q, "format": "json", "resultType": "core",
+              "sort": "P_PDATE_D desc", "pageSize": max_results}
+    # ---- 来源请求：网络/HTTP/超时 → source_error（不伪装 zero_hits）----
     try:
-        base = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-        q = query if not preprints_only else f"{query} AND SRC:PPR"
-        params = {
-            "query": q,
-            "format": "json",
-            "sort": "P_PDATE_D desc",
-            "pageSize": max_results,
-        }
         r = requests.get(base, params=params, timeout=15)
         r.raise_for_status()
-        results = r.json().get("resultList", {}).get("result", [])
-        if not results:
-            return "未检索到相关文献。"
-
-        lines = []
-        for item in results:
-            title = item.get("title", "无标题")
-            authors = item.get("authorString", "未知作者")
-            journal = item.get("journalTitle") or item.get("source", "")
-            date = item.get("firstPublicationDate", "")
-            pmid = item.get("pmid")
-            doi = item.get("doi")
-            if pmid:
-                link = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-            elif doi:
-                link = f"https://doi.org/{doi}"
-            else:
-                link = ""
-            lines.append(f"- {title} | {authors} | {journal} | {date} | {link}")
-        return "\n".join(lines)
     except Exception as e:
-        return f"文献检索失败: {e}"
+        art = make_toolresult("search_literature", False, None, content_level="metadata_only",
+                              error_type="source_error", error_message=str(e)[:200],
+                              source=SOURCE, parameters={"query": query})
+        return f"文献检索失败（来源异常 source_error）：{type(e).__name__}", art
+    # ---- 解析：JSON 解析失败 → parse_error ----
+    try:
+        results = r.json().get("resultList", {}).get("result", [])
+    except Exception as e:
+        art = make_toolresult("search_literature", False, None, content_level="metadata_only",
+                              error_type="parse_error", error_message=str(e)[:200],
+                              source=SOURCE, parameters={"query": query})
+        return "文献检索失败（解析失败 parse_error）。", art
+    # ---- zero_hits：请求成功但来源无记录（≠没有研究）----
+    if not results:
+        art = make_toolresult("search_literature", True, zero_hits_data(query),
+                              content_level="metadata_only", source=SOURCE,
+                              parameters={"query": query})
+        return "当前来源未检索到相关文献（未命中 zero_hits）；这不等于该领域没有研究。", art
+    # ---- 构造结构化记录（部分非法只跳过不修补）----
+    records, warnings, skipped = build_literature_records(results, query)
+    if not records:                      # 全部记录无合法 ID → parse_error
+        art = make_toolresult("search_literature", False, None, content_level="metadata_only",
+                              error_type="parse_error",
+                              error_message="来源返回记录均无合法 PMID/DOI，无法安全解析",
+                              source=SOURCE, parameters={"query": query}, warnings=warnings)
+        return "文献检索：来源记录均无法安全解析（无合法 PMID/DOI）。", art
+    data = records_to_data(records, query, warnings)
+    src_ids = sorted({sid for rec in records for sid in rec.source_ids})
+    art = make_toolresult("search_literature", True, data, content_level="abstract",
+                          source=SOURCE, source_ids=src_ids, parameters={"query": query},
+                          warnings=warnings)
+    return _readable_literature_lines(results), art
 
 
 # ==========================================
