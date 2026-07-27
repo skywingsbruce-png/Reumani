@@ -30,16 +30,16 @@ const VERIF: Record<VerifierStatus, { c: string; g: string; label: string }> = {
 }
 
 export function StepBadge({ status }: { status: StepStatus }) {
-  const s = STEP[status]
+  const s = STEP[status] ?? { c: 'b-idle', g: '○', label: String(status) }
   return <span className={`badge ${s.c}`}><span className="g" aria-hidden>{s.g}</span>{s.label}</span>
 }
 export function TaskBadge({ status }: { status: TaskStatus }) {
-  const s = TASK[status]
+  const s = TASK[status] ?? { c: 'b-idle', g: '○', label: String(status), dot: 'var(--st-idle)' }
   return <span className={`badge ${s.c}`}><span className="g" aria-hidden>{s.g}</span>{s.label}</span>
 }
 export function taskDot(status: TaskStatus) { return TASK[status].dot }
 export function VerifierBadge({ status }: { status: VerifierStatus }) {
-  const s = VERIF[status]
+  const s = VERIF[status] ?? { c: 'b-idle', g: '–', label: `Verifier: ${status}` }
   return <span className={`badge ${s.c}`} title={s.label}><span className="g" aria-hidden>{s.g}</span>{s.label}</span>
 }
 

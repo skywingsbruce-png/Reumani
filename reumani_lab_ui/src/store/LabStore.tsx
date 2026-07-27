@@ -215,10 +215,11 @@ export interface LabContextValue {
   requestStop: () => void       // api mode → real stop endpoint; mock mode → local stop
 }
 
-function apiConfig(): string | null {
+function apiConfig(): { base: string; real: boolean } | null {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
   if (env.VITE_REUMANI_DATA_SOURCE !== 'api') return null
-  return env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799'
+  return { base: env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799',
+           real: env.VITE_REUMANI_DEMO_REAL === '1' }
 }
 
 const LabContext = createContext<LabContextValue | null>(null)
@@ -272,9 +273,9 @@ export function LabProvider({ children }: { children: ReactNode }) {
   const dsRef = useRef<ApiDataSource | null>(null)
   const runIdRef = useRef<string | null>(null)
   useEffect(() => {
-    const base = apiConfig()
-    if (!base) return
-    const ds = new ApiDataSource(base)
+    const cfg = apiConfig()
+    if (!cfg) return
+    const ds = new ApiDataSource(cfg.base, { real: cfg.real })
     dsRef.current = ds
     let cancelled = false
     void (async () => {

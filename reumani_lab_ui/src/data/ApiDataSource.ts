@@ -21,6 +21,7 @@ export interface ApiOptions {
   fetchImpl?: typeof fetch
   eventSourceFactory?: ESFactory
   stepDelayMs?: number
+  real?: boolean            // true → backend runs the REAL deterministic component chain
 }
 
 export class ApiDataSource {
@@ -28,6 +29,7 @@ export class ApiDataSource {
   private fetchImpl: typeof fetch
   private esFactory: ESFactory
   private stepDelayMs: number
+  private real: boolean
   private es: EventSourceLike | null = null
   private disposed = false
 
@@ -36,13 +38,14 @@ export class ApiDataSource {
     this.fetchImpl = opts.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a))
     this.esFactory = opts.eventSourceFactory ?? ((url) => new EventSource(url) as unknown as EventSourceLike)
     this.stepDelayMs = opts.stepDelayMs ?? 300
+    this.real = opts.real ?? false
   }
 
   /** Create a demo run and return its run_id (register it before subscribing). */
   async createRun(): Promise<string> {
     const created = await this.fetchImpl(`${this.base}/api/demo-runs`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ step_delay_ms: this.stepDelayMs }),
+      body: JSON.stringify({ step_delay_ms: this.stepDelayMs, real: this.real }),
     })
     return (await created.json()).run_id as string
   }
