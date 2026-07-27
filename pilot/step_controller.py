@@ -39,6 +39,7 @@ StepAction = Literal[
 _TOOL_BUDGET: dict[str, int] = {
     "search_literature": 2,     # 文献检索最多 2 次
     "query_data_lake": 1,       # 数据湖查询最多 1 次
+    "resolve_exact_ids": 1,     # A.7.4.6：确定性 Exact-ID 核验最多 1 次（无跨步骤借用）
 }
 OUTER_TOOL_ROUND_CAP = 8        # 外层工具总轮次（保持不变，仅作只读常量声明，本模块不修改它）
 
@@ -86,6 +87,10 @@ def default_criteria(tool_name: str) -> StepCriteria:
         return StepCriteria(tool=tool_name, min_evidence_cards=1, minimum_content_level="abstract",
                             allow_zero_hits_as_terminal=False, max_scientific_no_progress=1)
     if tool_name == "query_data_lake":
+        return StepCriteria(tool=tool_name, min_evidence_cards=0,
+                            allow_zero_hits_as_terminal=True, max_scientific_no_progress=1)
+    if tool_name == "resolve_exact_ids":
+        # exact_hit → verified（ok，可 0 新卡即满足）；not_found → zero_hits 终态；source_error → 失败
         return StepCriteria(tool=tool_name, min_evidence_cards=0,
                             allow_zero_hits_as_terminal=True, max_scientific_no_progress=1)
     raise StepControllerError(f"无默认 success criteria，fail-closed：{tool_name!r}")

@@ -20,6 +20,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from pilot.event_store import InMemoryEventStore
 from pilot.demo_fixtures import run_demo
+from pilot.real_runtime import run_real_demo
 from pilot.runtime_events import EVENT_SCHEMA
 
 _TERMINAL = frozenset({"run_completed", "run_failed", "run_stopped"})
@@ -43,12 +44,13 @@ class RunManager:
         self._handles: dict[str, _Handle] = {}
         self._lock = threading.Lock()
 
-    def start_demo(self, step_delay_ms: int = 0) -> str:
-        run_id = "demo-" + uuid.uuid4().hex[:12]
+    def start_demo(self, step_delay_ms: int = 0, real: bool = False) -> str:
+        run_id = ("real-" if real else "demo-") + uuid.uuid4().hex[:12]
         handle = _Handle()
         with self._lock:
             self._handles[run_id] = handle
         delay = max(0, int(step_delay_ms)) / 1000.0
+        runner = run_real_demo if real else run_demo   # real: 接入真实确定性组件（离线冻结真实记录）
 
         def sink(ev):
             self.store.append(ev)
@@ -57,7 +59,7 @@ class RunManager:
 
         def work():
             try:
-                res = run_demo(sink, run_id=run_id, should_stop=handle.stop_event.is_set)
+                res = runner(sink, run_id=run_id, should_stop=handle.stop_event.is_set)
                 handle.status = "stopped" if res["stopped"] else ("failed" if res["failed"] else "finished")
             except Exception:                       # noqa: BLE001 — 后台运行失败不崩溃进程
                 handle.status = "failed"
@@ -98,17 +100,18 @@ def create_app(store=None, manager=None) -> Starlette:
         return JSONResponse({"status": "ok", "schema_version": EVENT_SCHEMA})
 
     async def create_demo_run(request):
-        # 只启动内置 demo；忽略任意 body（不接受代码/路径/shell）
-        step_delay_ms = 0
+        # 只启动内置 demo（fake 或接入真实组件的 real）；忽略任意其它 body（不接受代码/路径/shell）
+        step_delay_ms, real = 0, False
         try:
             body = await request.json()
             if isinstance(body, dict):
                 step_delay_ms = int(body.get("step_delay_ms", 0) or 0)
+                real = bool(body.get("real"))
         except Exception:                            # noqa: BLE001 — 无 body 也可
-            step_delay_ms = 0
+            step_delay_ms, real = 0, False
         step_delay_ms = max(0, min(step_delay_ms, 2000))   # 上限，避免滥用
-        run_id = manager.start_demo(step_delay_ms)
-        return JSONResponse({"run_id": run_id, "demo": True}, status_code=201)
+        run_id = manager.start_demo(step_delay_ms, real=real)
+        return JSONResponse({"run_id": run_id, "demo": True, "real": real}, status_code=201)
 
     async def get_run(request):
         run_id = request.path_params["run_id"]

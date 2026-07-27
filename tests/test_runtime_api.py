@@ -90,6 +90,19 @@ def test_demo_run_ignores_arbitrary_payload(client):
     assert evs[1]["safe_payload"].get("step_count") == 2       # 固定的两步 demo
 
 
+def test_real_demo_run_uses_real_components(client):
+    r = client.post("/api/demo-runs", json={"real": True})
+    assert r.status_code == 201 and r.json()["real"] is True
+    run_id = r.json()["run_id"]
+    assert run_id.startswith("real-")
+    events = client.get(f"/api/runs/{run_id}/events").json()["events"]
+    types = [e["event_type"] for e in events]
+    assert types[-1] == "run_completed"
+    ev_counts = [e["safe_payload"].get("evidence_count", 0) for e in events
+                 if e["event_type"] == "evidence_accumulated"]
+    assert max(ev_counts) >= 1                                 # 真实证据卡进入事件流
+
+
 def test_cooperative_stop_before_tool_when_delayed():
     # 带步进延迟 → 后台线程；创建后立即 stop → 不授权任何工具
     import time
