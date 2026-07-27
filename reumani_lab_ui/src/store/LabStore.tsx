@@ -37,6 +37,7 @@ interface LabState {
   connection: Connection
   apiRunId: string | null
   appliedSeq: number          // highest applied event sequence (idempotency)
+  canaryMeta: Record<string, unknown> | null   // desensitized canary meta (calls/cost/tier)
 }
 
 type Action =
@@ -54,6 +55,7 @@ type Action =
   | { type: 'api_start'; runId: string }
   | { type: 'apply_event'; ev: RuntimeEvent }
   | { type: 'set_connection'; connection: Connection }
+  | { type: 'set_canary_meta'; meta: Record<string, unknown> }
 
 const LS_KEY = 'reumani-lab-ui-v1'
 
@@ -78,6 +80,7 @@ function seed(): LabState {
     connection: 'closed',
     apiRunId: null,
     appliedSeq: -1,
+    canaryMeta: null,
   }
 }
 
@@ -93,6 +96,7 @@ function apiSeed(runId: string): LabState {
     runtime: { phase: 'running', elapsedMs: 0 },
     fileSearch: '', taskSearch: '',
     mode: 'api', runStatus: 'running', connection: 'connecting', apiRunId: runId, appliedSeq: -1,
+    canaryMeta: null,
   }
 }
 
@@ -176,6 +180,8 @@ function reducer(state: LabState, action: Action): LabState {
       return apiSeed(action.runId)
     case 'set_connection':
       return { ...state, connection: action.connection }
+    case 'set_canary_meta':
+      return { ...state, canaryMeta: action.meta }
     case 'apply_event': {
       const ev = action.ev
       if (ev.run_id !== state.apiRunId) return state
@@ -215,11 +221,16 @@ export interface LabContextValue {
   requestStop: () => void       // api mode → real stop endpoint; mock mode → local stop
 }
 
-function apiConfig(): { base: string; real: boolean } | null {
+function apiConfig(): { base: string; real: boolean; canaryFake: boolean; fixedRunId?: string } | null {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
   if (env.VITE_REUMANI_DATA_SOURCE !== 'api') return null
-  return { base: env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799',
-           real: env.VITE_REUMANI_DEMO_REAL === '1' }
+  const canary = env.VITE_REUMANI_CANARY               // 'fake' | 'real' | undefined
+  return {
+    base: env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799',
+    real: env.VITE_REUMANI_DEMO_REAL === '1',
+    canaryFake: canary === 'fake',
+    fixedRunId: canary === 'real' ? env.VITE_REUMANI_RUN_ID : undefined,   // serve a completed real canary
+  }
 }
 
 const LabContext = createContext<LabContextValue | null>(null)
@@ -275,7 +286,8 @@ export function LabProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const cfg = apiConfig()
     if (!cfg) return
-    const ds = new ApiDataSource(cfg.base, { real: cfg.real })
+    const ds = new ApiDataSource(cfg.base, { real: cfg.real, canaryFake: cfg.canaryFake,
+                                             fixedRunId: cfg.fixedRunId })
     dsRef.current = ds
     let cancelled = false
     void (async () => {
@@ -287,6 +299,7 @@ export function LabProvider({ children }: { children: ReactNode }) {
         await ds.subscribe(runId, {
           onEvent: (ev) => dispatch({ type: 'apply_event', ev }),
           onConnection: (c) => dispatch({ type: 'set_connection', connection: c }),
+          onCanary: (meta) => dispatch({ type: 'set_canary_meta', meta }),
         })
       } catch {
         dispatch({ type: 'set_connection', connection: 'reconnecting' })

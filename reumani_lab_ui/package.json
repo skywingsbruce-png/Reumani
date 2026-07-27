@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "vite --mode api",
+    "dev:canary": "vite --mode canary",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",

@@ -1,6 +1,7 @@
 import { useLab } from '../store/LabStore'
 import { TaskBadge } from '../ui'
 import { RuntimeControl } from './RuntimeControl'
+import { CanaryBanner } from './CanaryBanner'
 
 interface Props {
   rightOpen: boolean
@@ -24,6 +25,7 @@ export function TaskHeader({ rightOpen, onToggleRight }: Props) {
           <h1 className="task-title-h">{task?.title ?? '任务'}</h1>
           {task && <TaskBadge status={task.status} />}
         </div>
+        <CanaryBanner />
       </div>
       <div className="task-header-actions">
         <RuntimeControl />

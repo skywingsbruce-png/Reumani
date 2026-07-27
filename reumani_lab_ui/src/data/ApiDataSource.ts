@@ -7,6 +7,7 @@ export type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed'
 export interface ApiHandlers {
   onEvent: (ev: RuntimeEvent) => void
   onConnection: (c: Connection) => void
+  onCanary?: (meta: Record<string, unknown>) => void
 }
 
 interface EventSourceLike {
@@ -22,6 +23,8 @@ export interface ApiOptions {
   eventSourceFactory?: ESFactory
   stepDelayMs?: number
   real?: boolean            // true → backend runs the REAL deterministic component chain
+  canaryFake?: boolean      // true → POST /api/canary-runs (zero-paid fake model canary)
+  fixedRunId?: string       // set → subscribe to an existing (e.g. real canary) run, don't create
 }
 
 export class ApiDataSource {
@@ -30,6 +33,8 @@ export class ApiDataSource {
   private esFactory: ESFactory
   private stepDelayMs: number
   private real: boolean
+  private canaryFake: boolean
+  private fixedRunId?: string
   private es: EventSourceLike | null = null
   private disposed = false
 
@@ -39,11 +44,15 @@ export class ApiDataSource {
     this.esFactory = opts.eventSourceFactory ?? ((url) => new EventSource(url) as unknown as EventSourceLike)
     this.stepDelayMs = opts.stepDelayMs ?? 300
     this.real = opts.real ?? false
+    this.canaryFake = opts.canaryFake ?? false
+    this.fixedRunId = opts.fixedRunId
   }
 
-  /** Create a demo run and return its run_id (register it before subscribing). */
+  /** Create a run (or return the fixed existing run) and return its run_id. */
   async createRun(): Promise<string> {
-    const created = await this.fetchImpl(`${this.base}/api/demo-runs`, {
+    if (this.fixedRunId) return this.fixedRunId          // subscribe to an existing (real canary) run
+    const url = this.canaryFake ? `${this.base}/api/canary-runs` : `${this.base}/api/demo-runs`
+    const created = await this.fetchImpl(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ step_delay_ms: this.stepDelayMs, real: this.real }),
     })
@@ -54,8 +63,13 @@ export class ApiDataSource {
   async subscribe(runId: string, h: ApiHandlers): Promise<void> {
     h.onConnection('connecting')
     try {
-      const snap = await this.fetchImpl(`${this.base}/api/runs/${runId}/events`)
-      const list = (await snap.json()).events as unknown[]
+      const snapRes = await this.fetchImpl(`${this.base}/api/runs/${runId}`)   // snapshot (canary meta)
+      const snap = await snapRes.json()
+      if (snap && snap.canary && h.onCanary) h.onCanary(snap.canary as Record<string, unknown>)
+    } catch { /* meta best-effort */ }
+    try {
+      const evRes = await this.fetchImpl(`${this.base}/api/runs/${runId}/events`)
+      const list = (await evRes.json()).events as unknown[]
       for (const raw of list) {
         const p = parseRuntimeEvent(raw)
         if (p.ok) h.onEvent(p.event)

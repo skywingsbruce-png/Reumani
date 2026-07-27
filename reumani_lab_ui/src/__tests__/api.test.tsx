@@ -169,6 +169,25 @@ describe('API-mode store integration', () => {
     act(() => { ctx.dispatch({ type: 'apply_event', ev: mk(0, 'run_failed') }) })
     expect(screen.getByTestId('run-status').textContent).toContain('失败')
   })
+
+  it('canary meta renders a clearly-labelled banner with calls and cost', () => {
+    boot()
+    act(() => {
+      ctx.dispatch({ type: 'set_canary_meta', meta: { canary_kind: 'real', model_calls: 3,
+        usd_cost: 0.1234, causal_tier: 'association' } })
+    })
+    const banner = screen.getByTestId('canary-banner')
+    expect(banner.textContent).toContain('Real model canary')
+    expect(banner.textContent).toContain('Frozen real literature evidence')
+    expect(screen.getByTestId('canary-calls').textContent).toBe('3')
+    expect(screen.getByTestId('canary-cost').textContent).toBe('$0.1234')
+  })
+
+  it('fake canary banner is distinguished from real', () => {
+    boot()
+    act(() => { ctx.dispatch({ type: 'set_canary_meta', meta: { canary_kind: 'fake', model_calls: 3, usd_cost: 0 } }) })
+    expect(screen.getByTestId('canary-banner').textContent).toContain('fake provider')
+  })
 })
 
 // ---------------------------- no scattered fetch ----------------------------
