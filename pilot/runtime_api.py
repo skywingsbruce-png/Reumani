@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 import threading
 import time
 import uuid
@@ -42,7 +44,53 @@ class RunManager:
     def __init__(self, store=None):
         self.store = store or InMemoryEventStore()
         self._handles: dict[str, _Handle] = {}
+        self._meta: dict[str, dict] = {}          # run_id -> desensitized canary meta
         self._lock = threading.Lock()
+
+    def start_canary_fake(self, step_delay_ms: int = 0) -> str:
+        """零付费 fake 金丝雀（含 UI SSE）。真实付费金丝雀永不经 HTTP 触发。"""
+        from pilot.canary_a747 import run_fake_canary
+        run_id = "canary-fake-" + uuid.uuid4().hex[:10]
+        handle = _Handle()
+        with self._lock:
+            self._handles[run_id] = handle
+        delay = max(0, int(step_delay_ms)) / 1000.0
+        ledger = os.path.join(tempfile.gettempdir(), f"reumani_canary_{run_id}.ledger.jsonl")
+
+        def sink(ev):
+            self.store.append(ev)
+            if delay:
+                time.sleep(delay)
+
+        def work():
+            try:
+                res = run_fake_canary(sink, run_id=run_id, ledger_path=ledger,
+                                      should_stop=handle.stop_event.is_set)
+                with self._lock:
+                    self._meta[run_id] = res.get("meta", {})
+                handle.status = "stopped" if res["stopped"] else ("failed" if res["failed"] else "finished")
+            except Exception:                     # noqa: BLE001
+                handle.status = "failed"
+        if delay:
+            handle.thread = threading.Thread(target=work, daemon=True)
+            handle.thread.start()
+        else:
+            work()
+        return run_id
+
+    def load_prepared(self, run_id: str, events, meta: dict, status: str = "finished") -> None:
+        """把一次已完成的（真实金丝雀）运行注入为只读可服务的 run。"""
+        for ev in events:
+            self.store.append(ev)
+        h = _Handle()
+        h.status = status
+        with self._lock:
+            self._handles[run_id] = h
+            self._meta[run_id] = dict(meta or {})
+
+    def meta(self, run_id: str) -> dict:
+        with self._lock:
+            return dict(self._meta.get(run_id, {}))
 
     def start_demo(self, step_delay_ms: int = 0, real: bool = False) -> str:
         run_id = ("real-" if real else "demo-") + uuid.uuid4().hex[:12]
@@ -113,6 +161,19 @@ def create_app(store=None, manager=None) -> Starlette:
         run_id = manager.start_demo(step_delay_ms, real=real)
         return JSONResponse({"run_id": run_id, "demo": True, "real": real}, status_code=201)
 
+    async def create_canary_run(request):
+        # 只启动**零付费 fake** 金丝雀；真实付费金丝雀永不经 HTTP 触发。
+        step_delay_ms = 0
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                step_delay_ms = int(body.get("step_delay_ms", 0) or 0)
+        except Exception:                            # noqa: BLE001
+            step_delay_ms = 0
+        step_delay_ms = max(0, min(step_delay_ms, 2000))
+        run_id = manager.start_canary_fake(step_delay_ms)
+        return JSONResponse({"run_id": run_id, "canary": "fake"}, status_code=201)
+
     async def get_run(request):
         run_id = request.path_params["run_id"]
         if not store.exists(run_id):
@@ -121,7 +182,8 @@ def create_app(store=None, manager=None) -> Starlette:
         return JSONResponse({"run_id": run_id, "status": manager.status(run_id),
                              "event_count": len(events),
                              "last_sequence": events[-1].sequence if events else -1,
-                             "schema_version": EVENT_SCHEMA})
+                             "schema_version": EVENT_SCHEMA,
+                             "canary": manager.meta(run_id) or None})
 
     async def get_events(request):
         run_id = request.path_params["run_id"]
@@ -173,6 +235,7 @@ def create_app(store=None, manager=None) -> Starlette:
     routes = [
         Route("/api/health", health, methods=["GET"]),
         Route("/api/demo-runs", create_demo_run, methods=["POST"]),
+        Route("/api/canary-runs", create_canary_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run, methods=["GET"]),
         Route("/api/runs/{run_id}/events", get_events, methods=["GET"]),
         Route("/api/runs/{run_id}/events/stream", stream_events, methods=["GET"]),

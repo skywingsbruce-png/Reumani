@@ -103,6 +103,23 @@ def test_real_demo_run_uses_real_components(client):
     assert max(ev_counts) >= 1                                 # 真实证据卡进入事件流
 
 
+def test_fake_canary_run_and_meta(client):
+    r = client.post("/api/canary-runs", json={})
+    assert r.status_code == 201 and r.json()["canary"] == "fake"
+    run_id = r.json()["run_id"]
+    assert run_id.startswith("canary-fake-")
+    snap = client.get(f"/api/runs/{run_id}").json()
+    meta = snap["canary"]
+    assert meta["canary_kind"] == "fake"
+    assert meta["model_calls"] == 3 and meta["usd_cost"] == 0.0    # zero-paid fake
+    assert meta["calls_by_role"] == {"synthesizer": 1, "verifier": 1, "claim_extractor": 1}
+    assert meta["causal_tier"] in ("association", "insufficient")   # capped, never causal
+    types = [e["event_type"] for e in client.get(f"/api/runs/{run_id}/events").json()["events"]]
+    for et in ("synthesis_completed", "verification_completed", "claims_extracted",
+               "claim_graph_completed", "shadow_completed", "run_completed"):
+        assert et in types                                         # SSE stage events reach the UI
+
+
 def test_cooperative_stop_before_tool_when_delayed():
     # 带步进延迟 → 后台线程；创建后立即 stop → 不授权任何工具
     import time

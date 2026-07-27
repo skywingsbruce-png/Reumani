@@ -29,3 +29,6 @@ pilot/round2_results/A1_preflight.json
 pilot/runtime_runs/
 runtime_runs/
 *.runtime.jsonl
+
+# A.7.4.7 real canary run dir (raw ledger/events/manifest with local paths; never committed)
+pilot/round2_results/A747_canary/
