@@ -48,6 +48,23 @@ class InMemoryEventStore:
             _check_monotonic(events, event)
             events.append(event)
 
+    def append_batch(self, batch: list) -> None:
+        """原子追加一批事件：先整体校验单调/唯一，全部通过才提交（全有或全无）。"""
+        if not batch:
+            return
+        run_id = batch[0].run_id
+        _check_run_id(run_id)
+        for ev in batch:
+            if ev.run_id != run_id:
+                raise ValueError("append_batch 不允许跨 run_id 混批")
+        with self._lock:
+            events = self._runs.get(run_id, [])
+            probe = list(events)
+            for ev in batch:                       # 先校验整批（不落任何一条），失败即全部拒绝
+                _check_monotonic(probe, ev)
+                probe.append(ev)
+            self._runs[run_id] = probe             # 通过后一次性提交
+
     def list(self, run_id: str, after_sequence: int = -1) -> list:
         _check_run_id(run_id)
         with self._lock:
@@ -74,12 +91,31 @@ class JsonlEventStore:
         return os.path.join(self.root, f"{_check_run_id(run_id)}.jsonl")
 
     def append(self, event: RuntimeEvent) -> None:
+        self.append_batch([event])
+
+    def append_batch(self, batch: list) -> None:
+        """原子追加一批事件：整批校验单调/唯一后，一次 write + fsync 落盘。
+
+        单进程本地 append-only：并发写受 self._lock 串行化。一次系统调用写入整批，
+        写失败自然抛错（fail-closed）；不声称跨进程/多 worker 原子。
+        """
+        if not batch:
+            return
+        run_id = batch[0].run_id
+        for ev in batch:
+            if ev.run_id != run_id:
+                raise ValueError("append_batch 不允许跨 run_id 混批")
         with self._lock:
-            existing = self._read(event.run_id)
-            _check_monotonic(existing, event)
-            line = json.dumps(event.model_dump(), ensure_ascii=False, sort_keys=True)
-            with open(self._path(event.run_id), "a", encoding="utf-8", newline="\n") as f:
-                f.write(line + "\n")
+            existing = self._read(run_id)
+            probe = list(existing)
+            lines = []
+            for ev in batch:                       # 先整批校验（任何一条不合法即拒绝，不落盘）
+                _check_monotonic(probe, ev)
+                probe.append(ev)
+                lines.append(json.dumps(ev.model_dump(), ensure_ascii=False, sort_keys=True))
+            blob = "".join(ln + "\n" for ln in lines)
+            with open(self._path(run_id), "a", encoding="utf-8", newline="\n") as f:
+                f.write(blob)                      # 一次写入整批
                 f.flush()
                 os.fsync(f.fileno())          # 落盘；写失败自然抛错（fail-closed）
 

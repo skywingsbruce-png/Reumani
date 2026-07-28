@@ -48,6 +48,8 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "request_id", "state_version", "question_hash", "action_hash", "arguments_hash",
     "allowed_options", "risk_level", "action_summary", "expected_side_effect",
     "control_state", "is_simulation", "kind", "answer", "allow_other",
+    # A.7.5.1 durability / concurrency (stable hashes + recovery cursors only)
+    "idempotency_hash", "resume_cursor",
 })
 # 明令禁止出现的敏感键子串（即便被误放进白名单外，也在校验层再兜底）
 _FORBIDDEN_SUBSTRINGS = ("prompt", "api_key", "apikey", "authorization", "auth_header",
