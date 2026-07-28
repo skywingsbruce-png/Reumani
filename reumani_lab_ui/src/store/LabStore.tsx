@@ -345,8 +345,12 @@ export function LabProvider({ children }: { children: ReactNode }) {
     if (!cfg) return
     // HITL runs must survive refresh: persist the run id and re-subscribe to the SAME run
     // (interactive, not a replay). Canary "real" mode uses a fixed run id as a read-only replay.
+    // ?run=<id> attaches this tab to an existing HITL run (interactive) so two browsers can
+    // drive the same run; otherwise a HITL tab persists its own run id across refresh.
+    const urlRun = cfg.hitl
+      ? new URLSearchParams(window.location.search).get('run') || undefined : undefined
     const HITL_KEY = `reumani-hitl-run-${cfg.base}`
-    const savedHitl = cfg.hitl ? sessionStorage.getItem(HITL_KEY) || undefined : undefined
+    const savedHitl = cfg.hitl ? (urlRun || sessionStorage.getItem(HITL_KEY) || undefined) : undefined
     const fixedRunId = cfg.fixedRunId || savedHitl
     const isReplay = !!cfg.fixedRunId          // only canary-real is a read-only replay
     const ds = new ApiDataSource(cfg.base, { real: cfg.real, canaryFake: cfg.canaryFake,
