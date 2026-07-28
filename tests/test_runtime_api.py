@@ -212,3 +212,37 @@ def test_cooperative_stop_before_tool_when_delayed():
         time.sleep(0.1)
     types = [e["event_type"] for e in client.get(f"/api/runs/{run_id}/events").json()["events"]]
     assert "run_stopped" in types and "tool_started" not in types
+
+
+# ---- A.7.5.1 §2：通过 HTTP 端点验证"服务重启"后的持久化恢复（新 app + 同一持久化目录） ----
+def test_hitl_api_recovers_across_restart(tmp_path):
+    from pilot.event_store import JsonlEventStore
+    # 进程A：起 run，答澄清 → awaiting_approval
+    app1 = create_app(store=JsonlEventStore(str(tmp_path)))
+    c1 = TestClient(app1)
+    rid, ctl = _hitl_start(c1)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    ctl = c1.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                  json={"expected_state_version": v, "idempotency_key": "a", "selected_option_ids": ["skin"]}).json()["control"]
+    apr, ah, v = ctl["pending"]["request_id"], ctl["pending"]["action_hash"], ctl["state_version"]
+
+    # 进程B："重启"= 全新 app + 全新 RunManager，读同一持久化目录（不复用旧对象）
+    c2 = TestClient(create_app(store=JsonlEventStore(str(tmp_path))))
+    snap = c2.get(f"/api/runs/{rid}").json()
+    assert snap["control"]["control_state"] == "awaiting_approval"          # 恢复出等待审批
+    ra = c2.post(f"/api/runs/{rid}/approvals/{apr}/approve",
+                 json={"expected_state_version": v, "idempotency_key": "ap", "action_hash": ah})
+    assert ra.json()["control"]["control_state"] == "completed" and ra.json()["control"]["tool_calls"] == 1
+    # 重启后重放旧 idempotency_key → 不重复
+    n = len(c2.get(f"/api/runs/{rid}/events").json()["events"])
+    c2.post(f"/api/runs/{rid}/approvals/{apr}/approve",
+            json={"expected_state_version": ra.json()["control"]["state_version"],
+                  "idempotency_key": "ap", "action_hash": ah})
+    assert len(c2.get(f"/api/runs/{rid}/events").json()["events"]) == n
+
+
+def test_serve_rejects_multi_worker():
+    # 单进程单 worker 边界：多 worker 显式拒绝（内存锁不跨进程，不伪装跨进程原子）
+    from pilot.runtime_api import serve
+    with pytest.raises(ValueError):
+        serve(workers=2)

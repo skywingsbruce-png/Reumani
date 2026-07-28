@@ -48,20 +48,34 @@ class RunManager:
         self._hitl: dict[str, object] = {}        # run_id -> HitlRun (human-in-the-loop)
         self._lock = threading.Lock()
 
-    def start_hitl(self) -> str:
-        """创建一个确定性 fake 人机协作运行（跑到第一个澄清点）。"""
+    def start_hitl(self, exec_delay_ms: int = 0) -> str:
+        """创建一个确定性 fake 人机协作运行（跑到第一个澄清点）。
+
+        exec_delay_ms>0 → 审批后的 fake 动作分阶段、每段间可协作暂停（供"执行中 Pause"演示）；
+        默认 0 → 同步执行（确定性）。
+        """
         from pilot.hitl import HitlRun
         run_id = "hitl-" + uuid.uuid4().hex[:10]
         with self._lock:
             self._handles[run_id] = _Handle()
-            run = HitlRun(run_id, self.store.append)
+            run = HitlRun(run_id, self.store, exec_delay_ms=exec_delay_ms)
             self._hitl[run_id] = run
         run.start()
         return run_id
 
     def hitl(self, run_id: str):
+        """返回内存中的 HITL run；若不在内存但持久化日志存在 → 用新对象**恢复**（新进程/新 RunManager）。"""
         with self._lock:
-            return self._hitl.get(run_id)
+            hr = self._hitl.get(run_id)
+            if hr is not None:
+                return hr
+        if str(run_id).startswith("hitl-") and self.store.exists(run_id):
+            from pilot.hitl import HitlRun
+            recovered = HitlRun.recover(run_id, self.store)   # 损坏/断裂 → RecoveryError（调用方转 409）
+            with self._lock:
+                self._hitl.setdefault(run_id, recovered)
+                return self._hitl[run_id]
+        return None
 
     def start_canary_fake(self, step_delay_ms: int = 0) -> str:
         """零付费 fake 金丝雀（含 UI SSE）。真实付费金丝雀永不经 HTTP 触发。"""
@@ -191,15 +205,28 @@ def create_app(store=None, manager=None) -> Starlette:
         return JSONResponse({"run_id": run_id, "canary": "fake"}, status_code=201)
 
     async def create_hitl_run(request):
-        run_id = manager.start_hitl()
+        exec_delay_ms = 0
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                exec_delay_ms = int(body.get("exec_delay_ms", 0) or 0)
+        except Exception:                            # noqa: BLE001 — 无 body 也可
+            exec_delay_ms = 0
+        exec_delay_ms = max(0, min(exec_delay_ms, 5000))   # 上限，防滥用
+        run_id = manager.start_hitl(exec_delay_ms=exec_delay_ms)
         return JSONResponse({"run_id": run_id, "hitl": True}, status_code=201)
 
     async def get_run(request):
+        from pilot.hitl import RecoveryError
         run_id = request.path_params["run_id"]
         if not store.exists(run_id):
             return _bad("run not found", 404)
         events = store.list(run_id)
-        hr = manager.hitl(run_id)
+        try:
+            hr = manager.hitl(run_id)
+        except RecoveryError as e:
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True},
+                                status_code=409)
         status = hr.state if hr is not None else manager.status(run_id)
         return JSONResponse({"run_id": run_id, "status": status,
                              "event_count": len(events),
@@ -211,9 +238,14 @@ def create_app(store=None, manager=None) -> Starlette:
     # ---- human-in-the-loop write endpoints (strict bodies; 409 on conflict; idempotent) ----
     async def _hitl_call(request, fn):
         from pilot.hitl_contracts import (StaleState, IllegalTransition, ContractViolation)
+        from pilot.hitl import RecoveryError
         from pydantic import ValidationError
         run_id = request.path_params["run_id"]
-        hr = manager.hitl(run_id)
+        try:
+            hr = manager.hitl(run_id)                # 不在内存则从持久化日志恢复
+        except RecoveryError as e:
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True},
+                                status_code=409)
         if hr is None:
             return _bad("hitl run not found", 404)
         try:
@@ -309,10 +341,16 @@ def create_app(store=None, manager=None) -> Starlette:
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     async def stop_run(request):
+        from pilot.hitl import RecoveryError
         run_id = request.path_params["run_id"]
         if not store.exists(run_id):
             return _bad("run not found", 404)
-        if manager.hitl(run_id) is not None:         # HITL run → 契约化控制停止（幂等/版本校验）
+        try:
+            is_hitl = manager.hitl(run_id) is not None
+        except RecoveryError as e:
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True},
+                                status_code=409)
+        if is_hitl:                                  # HITL run → 契约化控制停止（幂等/版本校验）
             return await _hitl_call(request, _control("stop"))
         ok = manager.stop(run_id)                    # demo cooperative stop
         return JSONResponse({"run_id": run_id, "stop_requested": ok})
@@ -339,10 +377,25 @@ def create_app(store=None, manager=None) -> Starlette:
     return app
 
 
-def serve(host: str = "127.0.0.1", port: int = 8799):   # pragma: no cover - 本地手动启动
-    """本地启动（仅 127.0.0.1；不默认公网）。"""
+def _durable_store():
+    """持久化事件存储（append-only JSONL）；服务重启后可从同一目录恢复 HITL 控制状态。"""
+    from pilot.event_store import JsonlEventStore
+    root = os.environ.get("REUMANI_RUNTIME_DIR") or os.path.join(tempfile.gettempdir(),
+                                                                  "reumani_runtime")
+    return JsonlEventStore(root)
+
+
+def serve(host: str = "127.0.0.1", port: int = 8799, workers: int = 1):   # pragma: no cover - 本地手动启动
+    """本地启动（仅 127.0.0.1；不默认公网）。
+
+    **单进程、单 worker** 边界：内存锁只在进程内原子。多 worker 会各持独立内存态，
+    无法跨进程原子 → 显式拒绝（不伪装跨进程原子）。持久化用 JSONL 支持"重启恢复"。
+    """
+    if int(workers) != 1:
+        raise ValueError("HITL 控制仅支持单进程单 worker（内存锁不跨进程）；拒绝 workers != 1")
     import uvicorn
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    app = create_app(store=_durable_store())
+    uvicorn.run(app, host=host, port=port, workers=1, log_level="info")
 
 
 __all__ = ["create_app", "RunManager", "serve"]
