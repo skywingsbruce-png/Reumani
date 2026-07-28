@@ -23,8 +23,9 @@ const TL_MAP: Record<string, TimelineEventType> = {
   evidence_accumulated: 'evidence_card', step_satisfied: 'verifier_result',
   step_insufficient: 'verifier_result', step_failed: 'stopped', step_blocked: 'clarification_requested',
   synthesis_started: 'plan_created', synthesis_completed: 'plan_created',
-  verification_completed: 'verifier_result', claims_extracted: 'observation',
-  claim_graph_completed: 'observation', shadow_completed: 'observation',
+  verification_started: 'verifier_result', verification_completed: 'verifier_result',
+  claim_extraction_started: 'observation', claims_extracted: 'observation',
+  shadow_started: 'observation', claim_graph_completed: 'observation', shadow_completed: 'observation',
   artifact_created: 'artifact_created', run_completed: 'resumed', run_failed: 'stopped',
   run_stopped: 'stopped',
 }

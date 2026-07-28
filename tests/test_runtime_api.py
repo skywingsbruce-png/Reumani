@@ -32,7 +32,7 @@ def test_health(client):
 def test_create_demo_run_and_snapshot(client):
     run_id = _create(client)
     snap = client.get(f"/api/runs/{run_id}").json()
-    assert snap["status"] == "finished" and snap["event_count"] == 27
+    assert snap["status"] == "finished" and snap["event_count"] == 30   # +3 stage-started events
 
 
 def test_event_list_and_cursor(client):
@@ -64,7 +64,7 @@ def test_sse_last_event_id_no_duplicates(client):
                        headers={"Last-Event-ID": "10"}) as s:
         body = "".join(s.iter_text())
     ids = [int(ln.split("id: ", 1)[1]) for ln in body.splitlines() if ln.startswith("id: ")]
-    assert min(ids) == 11 and ids[-1] == 26                   # 重连不重复已应用事件
+    assert min(ids) == 11 and ids[-1] == 29                   # 重连不重复已应用事件（30 events）
     assert _sse_events(body)[-1] == "run_completed"
 
 

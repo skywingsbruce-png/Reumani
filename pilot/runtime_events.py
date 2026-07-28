@@ -21,8 +21,11 @@ EventType = Literal[
     "run_created", "plan_ready", "step_started", "attempt_authorized", "attempt_denied",
     "tool_started", "tool_returned", "observation_recorded", "evidence_accumulated",
     "step_satisfied", "step_insufficient", "step_failed", "step_blocked",
-    "synthesis_started", "synthesis_completed", "verification_completed",
-    "claims_extracted", "claim_graph_completed", "shadow_completed", "artifact_created",
+    "synthesis_started", "synthesis_completed",
+    "verification_started", "verification_completed",
+    "claim_extraction_started", "claims_extracted",
+    "shadow_started", "shadow_completed",
+    "claim_graph_completed", "artifact_created",
     "run_completed", "run_failed", "run_stopped",
 ]
 EVENT_TYPES: frozenset = frozenset(EventType.__args__)  # type: ignore[attr-defined]

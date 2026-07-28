@@ -143,6 +143,42 @@ def test_preflight_prices_and_frozen_evidence():
     assert pf["frozen_evidence"]["evidence_count"] >= 1
 
 
+def test_stage_started_completed_pairs_in_order(tmp_path):
+    from pilot.event_store import InMemoryEventStore
+    store = InMemoryEventStore()
+    C.run_fake_canary(store.append, run_id="pairs", ledger_path=str(tmp_path / "l.jsonl"))
+    t = [e.event_type for e in store.list("pairs")]
+    for a, b in (("synthesis_started", "synthesis_completed"),
+                 ("verification_started", "verification_completed"),
+                 ("claim_extraction_started", "claims_extracted"),
+                 ("shadow_started", "shadow_completed")):
+        assert a in t and b in t and t.index(a) < t.index(b), (a, b)
+    assert t.index("shadow_completed") < t.index("run_completed")
+    # every stage_started carries status "running" (UI shows running before run_completed)
+    started = [e for e in store.list("pairs") if e.event_type.endswith("_started")]
+    assert all(e.status == "running" for e in started)
+
+
+def test_stop_between_stages_prevents_next_and_zero_paid(tmp_path, monkeypatch):
+    from pilot.event_store import InMemoryEventStore
+    import pilot.paid_transport as PT
+    monkeypatch.setattr(PT, "build_anthropic", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no real model")))
+    monkeypatch.setattr(PT, "build_deepseek", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no real model")))
+    store = InMemoryEventStore()
+
+    def stop_after_verification():
+        return any(e.event_type == "verification_completed" for e in store.list("mid"))
+
+    res = C.run_fake_canary(store.append, run_id="mid", ledger_path=str(tmp_path / "l.jsonl"),
+                            should_stop=stop_after_verification)
+    t = [e.event_type for e in store.list("mid")]
+    assert "verification_completed" in t
+    assert "claim_extraction_started" not in t and "shadow_started" not in t   # next stage not started
+    assert t[-1] == "run_stopped"
+    assert res["gate"]["calls_by_role"].get("claim_extractor") is None          # claim call never made
+    assert res["open_reservations_ledger"] == 0 and res["stopped"] is True
+
+
 def test_no_real_paid_client_constructed_in_fake(tmp_path, monkeypatch):
     # fake 路径绝不构造真实付费客户端
     import pilot.paid_transport as PT

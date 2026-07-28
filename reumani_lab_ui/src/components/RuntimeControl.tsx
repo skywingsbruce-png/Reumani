@@ -45,7 +45,13 @@ export function RuntimeControl() {
               <span className="g" aria-hidden>↻</span>{conn.label}
             </span>
           )}
-          <button className="btn danger" disabled={!running} onClick={requestStop}>■ Stop</button>
+          {state.replay ? (
+            <button className="btn subtle" data-testid="stop-btn" disabled
+              title="历史运行已完成（只读回放），不能停止">■ Stop（已完成）</button>
+          ) : (
+            <button className="btn danger" data-testid="stop-btn" disabled={!running}
+              onClick={requestStop}>■ Stop</button>
+          )}
         </>
       ) : (
         <>

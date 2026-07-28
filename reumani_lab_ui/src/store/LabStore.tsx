@@ -38,6 +38,7 @@ interface LabState {
   apiRunId: string | null
   appliedSeq: number          // highest applied event sequence (idempotency)
   canaryMeta: Record<string, unknown> | null   // desensitized canary meta (calls/cost/tier)
+  replay: boolean             // read-only replay of a completed run (Stop is disabled)
 }
 
 type Action =
@@ -52,7 +53,7 @@ type Action =
   | { type: 'runtime_tick'; ms: number }
   | { type: 'runtime_stop' }
   | { type: 'runtime_resume' }
-  | { type: 'api_start'; runId: string }
+  | { type: 'api_start'; runId: string; replay?: boolean }
   | { type: 'apply_event'; ev: RuntimeEvent }
   | { type: 'set_connection'; connection: Connection }
   | { type: 'set_canary_meta'; meta: Record<string, unknown> }
@@ -81,22 +82,25 @@ function seed(): LabState {
     apiRunId: null,
     appliedSeq: -1,
     canaryMeta: null,
+    replay: false,
   }
 }
 
-// Fresh empty state for API mode — one live project/task, everything else event-driven.
-function apiSeed(runId: string): LabState {
+// Fresh empty state for API mode — one runtime project/task, everything else event-driven.
+// `replay` = read-only replay of a completed run (vs a live run being streamed now).
+function apiSeed(runId: string, replay: boolean): LabState {
   return {
-    projects: [{ id: 'live', name: 'Live runtime', subtitle: 'API mode · offline demo run' }],
+    projects: [{ id: 'live', name: 'Reumani runtime',
+                 subtitle: replay ? 'Completed run replay · read-only（历史运行）' : 'Live run · API mode' }],
     currentProjectId: 'live',
-    tasks: [{ id: runId, projectId: 'live', title: 'Bounded open-task demo run',
+    tasks: [{ id: runId, projectId: 'live', title: replay ? 'Completed run replay' : 'Live run',
               status: 'running', group: 'running', updatedAt: new Date().toISOString() }],
     currentTaskId: runId,
     files: [], planSteps: [], timeline: [], trace: [], clarifications: [], todos: [], artifacts: [],
     runtime: { phase: 'running', elapsedMs: 0 },
     fileSearch: '', taskSearch: '',
     mode: 'api', runStatus: 'running', connection: 'connecting', apiRunId: runId, appliedSeq: -1,
-    canaryMeta: null,
+    canaryMeta: null, replay,
   }
 }
 
@@ -177,7 +181,7 @@ function reducer(state: LabState, action: Action): LabState {
       return { ...state, runtime: { ...state.runtime, phase: 'running' }, timeline }
     }
     case 'api_start':
-      return apiSeed(action.runId)
+      return apiSeed(action.runId, action.replay ?? false)
     case 'set_connection':
       return { ...state, connection: action.connection }
     case 'set_canary_meta':
@@ -295,7 +299,7 @@ export function LabProvider({ children }: { children: ReactNode }) {
         const runId = await ds.createRun()
         if (cancelled) return
         runIdRef.current = runId
-        dispatch({ type: 'api_start', runId })
+        dispatch({ type: 'api_start', runId, replay: !!cfg.fixedRunId })   // fixed run → completed replay
         await ds.subscribe(runId, {
           onEvent: (ev) => dispatch({ type: 'apply_event', ev }),
           onConnection: (c) => dispatch({ type: 'set_connection', connection: c }),

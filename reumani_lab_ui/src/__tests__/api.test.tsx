@@ -188,6 +188,23 @@ describe('API-mode store integration', () => {
     act(() => { ctx.dispatch({ type: 'set_canary_meta', meta: { canary_kind: 'fake', model_calls: 3, usd_cost: 0 } }) })
     expect(screen.getByTestId('canary-banner').textContent).toContain('fake provider')
   })
+
+  it('live run shows a Live run label (not the old demo label)', () => {
+    render(<LabProvider><Capture /><AppShell /></LabProvider>)
+    act(() => { ctx.dispatch({ type: 'api_start', runId: 'r1', replay: false }) })
+    expect(screen.getByRole('heading', { level: 1, name: 'Live run' })).toBeInTheDocument()
+    expect(screen.queryByText('Bounded open-task demo run')).not.toBeInTheDocument()
+    expect(screen.queryByText(/offline demo run/)).not.toBeInTheDocument()
+  })
+
+  it('completed replay disables Stop with an explanation', () => {
+    render(<LabProvider><Capture /><AppShell /></LabProvider>)
+    act(() => { ctx.dispatch({ type: 'api_start', runId: 'r1', replay: true }) })
+    expect(screen.getByRole('heading', { level: 1, name: 'Completed run replay' })).toBeInTheDocument()
+    const stop = screen.getByTestId('stop-btn')
+    expect(stop).toBeDisabled()
+    expect(stop.getAttribute('title')).toContain('历史运行已完成')
+  })
 })
 
 // ---------------------------- no scattered fetch ----------------------------

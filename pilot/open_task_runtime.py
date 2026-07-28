@@ -25,6 +25,10 @@ _TERMINAL_EVENT = {"satisfied": "step_satisfied", "insufficient": "step_insuffic
                    "failed": "step_failed", "blocked": "step_blocked"}
 
 
+class _StopRequested(RuntimeError):
+    """阶段间协作式停止信号（在 synthesis 下游各阶段之前检查）。"""
+
+
 @dataclass
 class ToolExecution:
     """注入工具的一次执行结果（脱敏）。accum_input 交给 EvidenceAccumulator。"""
@@ -124,6 +128,12 @@ class OpenTaskRuntime:
                            artifact_ids=[a["artifact_id"] for a in artifacts])
             assert not sc.open_reservations(session), "open reservations must be 0"
             return self._result(session, conclusion, stopped=False)
+        except _StopRequested as sr:                    # 阶段间协作式停止 → run_stopped（非失败）
+            session = self._settle_open(session)
+            self._emit("run_stopped", status="stopped", summary="cooperative stop",
+                       safe_payload={"phase": str(sr), "note": "next stage not started"})
+            assert not sc.open_reservations(session)
+            return self._result(session, None, stopped=True)
         except Exception as exc:                        # noqa: BLE001 — 任何异常都结算 reservation
             session = self._settle_open(session)
             self._emit("run_failed", status="failed", summary="runtime exception",
@@ -198,7 +208,12 @@ class OpenTaskRuntime:
                 return session
             # continue：进入下一 attempt
 
-    # ---- synthesis + 下游 fake 阶段 ----
+    def _stop_gate(self, next_stage):
+        """协作式停止：若已请求停止，则不启动下一个尚未开始的模型阶段。"""
+        if self.deps.should_stop():
+            raise _StopRequested(next_stage)
+
+    # ---- synthesis + 下游阶段（每阶段 started/completed 成对） ----
     def _synthesize(self, session):
         d = self.deps
         self._emit("synthesis_started", status="running", summary="synthesis started")
@@ -209,15 +224,21 @@ class OpenTaskRuntime:
                    evidence_ids=list(session.run_state.accumulator.evidence_ids),
                    safe_payload={"causal_strength": conclusion.causal_strength,
                                  "missing_evidence": conclusion.missing_evidence})
+        self._stop_gate("verification")
+        self._emit("verification_started", status="running", summary="verification started")
         verdict = d.verifier(conclusion, cards)
         self._emit("verification_completed", status=verdict.get("status"),
                    summary="verification", safe_payload={"verdict_status": verdict.get("status")})
+        self._stop_gate("claim_extraction")
+        self._emit("claim_extraction_started", status="running", summary="claim extraction started")
         claims = d.claim_extractor(conclusion, list(session.run_state.accumulator.evidence_ids))
         self._emit("claims_extracted", summary=f"{len(claims)} claims",
                    safe_payload={"claim_count": len(claims)})
         graph = d.claim_graph(claims, cards)
         self._emit("claim_graph_completed", summary="claim graph",
                    safe_payload={"graph_verdicts": [g.get("verdict") for g in graph]})
+        self._stop_gate("shadow")
+        self._emit("shadow_started", status="running", summary="shadow started")
         shadow_res = d.shadow(cards)
         self._emit("shadow_completed", summary="shadow",
                    safe_payload={"shadow_created_new_cards": bool(shadow_res.get("created_new_cards"))})
