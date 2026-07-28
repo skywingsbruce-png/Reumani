@@ -123,6 +123,15 @@ h1, h2, h3 { margin: 0; }
 .task-title-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
 .task-title-h { font-size: 17px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.hitl-error { margin-bottom: 12px; padding: 8px 12px; border-radius: var(--radius-sm);
+  background: var(--st-fail-bg); color: var(--st-fail); border: 1px solid #e3c9c8; font-size: 13px; }
+.hitl-card.approval-card { border-color: #e6d3a8; }
+.approval-meta { display: grid; gap: 6px; margin: 10px 0; }
+.approval-meta > div { display: flex; gap: 10px; font-size: 12.5px; }
+.approval-meta dt { color: var(--rm-ink-soft); min-width: 80px; font-weight: 600; }
+.approval-meta dd { margin: 0; color: var(--rm-ink); }
+.approval-note { font-size: 11.5px; color: var(--rm-ink-soft); margin: 6px 0 10px; }
+
 .canary-banner { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   font-size: 12px; padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid; }
 .canary-banner.real { background: var(--st-warn-bg); color: var(--st-warn); border-color: #e6d3a8; }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, act, cleanup, within } from '@testing-library/react'
+import { render, screen, act, cleanup, within, fireEvent } from '@testing-library/react'
 import { parseRuntimeEvent, type RuntimeEvent, EVENT_TYPES } from '../data/runtimeEvents'
 import { applyRuntimeEvent, type RuntimeSlice } from '../data/eventMapping'
 import { ApiDataSource } from '../data/ApiDataSource'
@@ -204,6 +204,70 @@ describe('API-mode store integration', () => {
     const stop = screen.getByTestId('stop-btn')
     expect(stop).toBeDisabled()
     expect(stop.getAttribute('title')).toContain('历史运行已完成')
+  })
+})
+
+// ---------------------------- human-in-the-loop control (A.7.5) ----------------------------
+function bootApi() {
+  render(<LabProvider><Capture /><AppShell /></LabProvider>)
+  act(() => { ctx.dispatch({ type: 'api_start', runId: 'r1', replay: false }) })
+}
+
+describe('HITL control UI', () => {
+  it('renders a clarification card with options and gates Submit until a choice', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'awaiting_clarification',
+      state_version: 1, pending: { type: 'clarification', request_id: 'clr-x', kind: 'single_or_other',
+        allow_other: true, reason: '实验缺少组织来源', allowed_options: [
+          { id: 'skin', label: '皮肤成纤维细胞' }, { id: 'lung', label: '肺成纤维细胞' }, { id: 'both', label: '两者' }] } } }) })
+    const card = screen.getByTestId('hitl-clarification')
+    expect(within(card).getByText('皮肤成纤维细胞')).toBeInTheDocument()
+    expect(screen.getByTestId('clar-submit')).toBeDisabled()
+    fireEvent.click(within(card).getByRole('radio', { name: /皮肤成纤维细胞/ }))
+    expect(screen.getByTestId('clar-submit')).toBeEnabled()
+    expect(screen.getByTestId('control-state').textContent).toContain('等待澄清')
+  })
+
+  it('renders an approval card with tool, risk, side-effect and Approve/Deny', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'awaiting_approval',
+      state_version: 3, pending: { type: 'approval', request_id: 'apr-x', action_hash: 'abcdef0123456789',
+        tool_name: 'simulate_wetlab_package', risk_level: 'high', action_summary: '模拟生成执行包',
+        expected_side_effect: '不连接真实设备', is_simulation: true } } }) })
+    const card = screen.getByTestId('hitl-approval')
+    expect(within(card).getByText('simulate_wetlab_package')).toBeInTheDocument()
+    expect(within(card).getByText(/风险：high/)).toBeInTheDocument()
+    expect(within(card).getByText('仿真 / fake')).toBeInTheDocument()
+    expect(screen.getByTestId('approve-btn')).toBeInTheDocument()
+    expect(screen.getByTestId('deny-btn')).toBeInTheDocument()
+  })
+
+  it('shows a readable conflict message on control error', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control_error', error: '操作与最新状态冲突（stale）。请刷新后重试。' }) })
+    expect(screen.getByTestId('control-error').textContent).toContain('冲突')
+  })
+
+  it('shows Pause when active and Resume when paused; disables during a write', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'awaiting_approval', state_version: 3, pending: null } }) })
+    expect(screen.getByTestId('pause-btn')).toBeInTheDocument()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'paused', state_version: 4, pending: null } }) })
+    expect(screen.getByTestId('resume-btn')).toBeInTheDocument()
+    act(() => { ctx.dispatch({ type: 'set_control_busy', busy: true }) })
+    expect(screen.getByTestId('resume-btn')).toBeDisabled()
+  })
+
+  it('drives control state from SSE events (clarification_requested → pending card)', () => {
+    bootApi()
+    act(() => {
+      ctx.dispatch({ type: 'apply_event', ev: mk(0, 'clarification_requested', { step_id: 1,
+        safe_payload: { control_state: 'awaiting_clarification', state_version: 1, request_id: 'clr-e',
+          kind: 'single_or_other', allow_other: true, reason: '缺组织来源',
+          allowed_options: [{ id: 'skin', label: '皮肤成纤维细胞' }] } }) })
+    })
+    expect(screen.getByTestId('hitl-clarification')).toBeInTheDocument()
+    expect(screen.getByTestId('control-state').textContent).toContain('等待澄清')
   })
 })
 

@@ -39,6 +39,18 @@ interface LabState {
   appliedSeq: number          // highest applied event sequence (idempotency)
   canaryMeta: Record<string, unknown> | null   // desensitized canary meta (calls/cost/tier)
   replay: boolean             // read-only replay of a completed run (Stop is disabled)
+  // Human-in-the-loop control (A.7.5)
+  controlState: string | null           // running / awaiting_clarification / awaiting_approval / paused / ...
+  controlVersion: number                // expected_state_version for the next write
+  pending: Record<string, unknown> | null   // pending clarification/approval card
+  controlError: string | null           // last 409/stale-state message (readable)
+  controlBusy: boolean                  // a control write is in flight (buttons disabled)
+}
+
+const CONTROL_DEFAULTS = {
+  controlState: null as string | null, controlVersion: 0,
+  pending: null as Record<string, unknown> | null, controlError: null as string | null,
+  controlBusy: false,
 }
 
 type Action =
@@ -57,6 +69,9 @@ type Action =
   | { type: 'apply_event'; ev: RuntimeEvent }
   | { type: 'set_connection'; connection: Connection }
   | { type: 'set_canary_meta'; meta: Record<string, unknown> }
+  | { type: 'set_control'; control: Record<string, unknown> }
+  | { type: 'set_control_error'; error: string | null }
+  | { type: 'set_control_busy'; busy: boolean }
 
 const LS_KEY = 'reumani-lab-ui-v1'
 
@@ -83,6 +98,7 @@ function seed(): LabState {
     appliedSeq: -1,
     canaryMeta: null,
     replay: false,
+    ...CONTROL_DEFAULTS,
   }
 }
 
@@ -100,7 +116,7 @@ function apiSeed(runId: string, replay: boolean): LabState {
     runtime: { phase: 'running', elapsedMs: 0 },
     fileSearch: '', taskSearch: '',
     mode: 'api', runStatus: 'running', connection: 'connecting', apiRunId: runId, appliedSeq: -1,
-    canaryMeta: null, replay,
+    canaryMeta: null, replay, ...CONTROL_DEFAULTS,
   }
 }
 
@@ -186,6 +202,18 @@ function reducer(state: LabState, action: Action): LabState {
       return { ...state, connection: action.connection }
     case 'set_canary_meta':
       return { ...state, canaryMeta: action.meta }
+    case 'set_control': {
+      const c = action.control
+      return { ...state,
+        controlState: (c.control_state as string) ?? state.controlState,
+        controlVersion: (c.state_version as number) ?? state.controlVersion,
+        pending: (c.pending as Record<string, unknown> | null) ?? null,
+        controlError: null, controlBusy: false }
+    }
+    case 'set_control_error':
+      return { ...state, controlError: action.error, controlBusy: false }
+    case 'set_control_busy':
+      return { ...state, controlBusy: action.busy }
     case 'apply_event': {
       const ev = action.ev
       if (ev.run_id !== state.apiRunId) return state
@@ -205,10 +233,26 @@ function reducer(state: LabState, action: Action): LabState {
                 group: next.runStatus === 'finished' ? 'completed' as const : 'failed' as const }
             : t)
         : state.tasks
+      // Human-in-the-loop control is event-driven too (refresh replay + multi-browser via SSE).
+      const sp = ev.safe_payload
+      const controlState = (sp.control_state as string) ?? state.controlState
+      const controlVersion = (sp.state_version as number) ?? state.controlVersion
+      let pending = state.pending
+      if (ev.event_type === 'clarification_requested') {
+        pending = { type: 'clarification', request_id: sp.request_id, kind: sp.kind,
+          allow_other: sp.allow_other, reason: sp.reason, allowed_options: sp.allowed_options }
+      } else if (ev.event_type === 'approval_requested') {
+        pending = { type: 'approval', request_id: sp.request_id, action_hash: sp.action_hash,
+          tool_name: sp.tool_name, risk_level: sp.risk_level, action_summary: sp.action_summary,
+          expected_side_effect: sp.expected_side_effect, is_simulation: sp.is_simulation, reason: sp.reason }
+      } else if (ev.event_type === 'clarification_answered' || ev.event_type === 'approval_granted'
+                 || ev.event_type === 'approval_denied') {
+        pending = null
+      }
       return {
         ...state, planSteps: next.planSteps, timeline: next.timeline, trace: next.trace,
         artifacts: next.artifacts, runtime: next.runtime, runStatus: next.runStatus,
-        tasks, appliedSeq: ev.sequence,
+        tasks, appliedSeq: ev.sequence, controlState, controlVersion, pending,
       }
     }
     default:
@@ -223,9 +267,17 @@ export interface LabContextValue {
   currentProject: () => Project | undefined
   currentTask: () => TaskSession | undefined
   requestStop: () => void       // api mode → real stop endpoint; mock mode → local stop
+  // human-in-the-loop control (api mode) — each calls the real backend endpoint
+  answerClarification: (requestId: string, selectedIds: string[], otherText?: string) => void
+  decideApproval: (requestId: string, approve: boolean, actionHash: string) => void
+  pauseRun: () => void
+  resumeRun: () => void
 }
 
-function apiConfig(): { base: string; real: boolean; canaryFake: boolean; fixedRunId?: string } | null {
+let _idem = 0
+const nextIdem = (p: string) => `${p}-${Date.now().toString(36)}-${_idem++}`
+
+function apiConfig(): { base: string; real: boolean; canaryFake: boolean; hitl: boolean; fixedRunId?: string } | null {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
   if (env.VITE_REUMANI_DATA_SOURCE !== 'api') return null
   const canary = env.VITE_REUMANI_CANARY               // 'fake' | 'real' | undefined
@@ -233,6 +285,7 @@ function apiConfig(): { base: string; real: boolean; canaryFake: boolean; fixedR
     base: env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799',
     real: env.VITE_REUMANI_DEMO_REAL === '1',
     canaryFake: canary === 'fake',
+    hitl: env.VITE_REUMANI_HITL === '1',
     fixedRunId: canary === 'real' ? env.VITE_REUMANI_RUN_ID : undefined,   // serve a completed real canary
   }
 }
@@ -290,20 +343,28 @@ export function LabProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const cfg = apiConfig()
     if (!cfg) return
+    // HITL runs must survive refresh: persist the run id and re-subscribe to the SAME run
+    // (interactive, not a replay). Canary "real" mode uses a fixed run id as a read-only replay.
+    const HITL_KEY = `reumani-hitl-run-${cfg.base}`
+    const savedHitl = cfg.hitl ? sessionStorage.getItem(HITL_KEY) || undefined : undefined
+    const fixedRunId = cfg.fixedRunId || savedHitl
+    const isReplay = !!cfg.fixedRunId          // only canary-real is a read-only replay
     const ds = new ApiDataSource(cfg.base, { real: cfg.real, canaryFake: cfg.canaryFake,
-                                             fixedRunId: cfg.fixedRunId })
+                                             hitl: cfg.hitl && !savedHitl, fixedRunId })
     dsRef.current = ds
     let cancelled = false
     void (async () => {
       try {
         const runId = await ds.createRun()
         if (cancelled) return
+        if (cfg.hitl) { try { sessionStorage.setItem(HITL_KEY, runId) } catch { /* ignore */ } }
         runIdRef.current = runId
-        dispatch({ type: 'api_start', runId, replay: !!cfg.fixedRunId })   // fixed run → completed replay
+        dispatch({ type: 'api_start', runId, replay: isReplay })
         await ds.subscribe(runId, {
           onEvent: (ev) => dispatch({ type: 'apply_event', ev }),
           onConnection: (c) => dispatch({ type: 'set_connection', connection: c }),
           onCanary: (meta) => dispatch({ type: 'set_canary_meta', meta }),
+          onControl: (control) => dispatch({ type: 'set_control', control }),
         })
       } catch {
         dispatch({ type: 'set_connection', connection: 'reconnecting' })
@@ -311,6 +372,19 @@ export function LabProvider({ children }: { children: ReactNode }) {
     })()
     return () => { cancelled = true; ds.dispose() }
   }, [])
+
+  // one control write at a time; applies {control} on success or a readable 409 message
+  const runControl = (path: string, body: Record<string, unknown>) => {
+    const ds = dsRef.current, runId = runIdRef.current
+    if (!ds || !runId) return
+    dispatch({ type: 'set_control_busy', busy: true })
+    void ds.control(path, body).then((r) => {
+      if (r.status === 200 && r.control) dispatch({ type: 'set_control', control: r.control })
+      else if (r.status === 409) dispatch({ type: 'set_control_error',
+        error: `操作与最新状态冲突（${r.error ?? 'stale state'}）。请刷新后重试。` })
+      else dispatch({ type: 'set_control_error', error: r.error ?? `请求失败（${r.status}）` })
+    }).catch(() => dispatch({ type: 'set_control_error', error: '网络错误，请重试' }))
+  }
 
   const value = useMemo<LabContextValue>(() => ({
     state, dispatch,
@@ -323,6 +397,22 @@ export function LabProvider({ children }: { children: ReactNode }) {
         dispatch({ type: 'runtime_stop' })
       }
     },
+    answerClarification: (requestId, selectedIds, otherText) => {
+      const body: Record<string, unknown> = { expected_state_version: state.controlVersion,
+        idempotency_key: nextIdem('clr'), selected_option_ids: selectedIds }
+      if (otherText) body.other_text = otherText
+      runControl(`/api/runs/${runIdRef.current}/clarifications/${requestId}/answer`, body)
+    },
+    decideApproval: (requestId, approve, actionHash) => {
+      const verb = approve ? 'approve' : 'deny'
+      runControl(`/api/runs/${runIdRef.current}/approvals/${requestId}/${verb}`, {
+        expected_state_version: state.controlVersion, idempotency_key: nextIdem(verb),
+        action_hash: actionHash })
+    },
+    pauseRun: () => runControl(`/api/runs/${runIdRef.current}/pause`,
+      { idempotency_key: nextIdem('pause'), expected_state_version: state.controlVersion }),
+    resumeRun: () => runControl(`/api/runs/${runIdRef.current}/resume`,
+      { idempotency_key: nextIdem('resume'), expected_state_version: state.controlVersion }),
   }), [state])
 
   return <LabContext.Provider value={value}>{children}</LabContext.Provider>

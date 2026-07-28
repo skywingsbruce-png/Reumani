@@ -4,10 +4,18 @@ import { parseRuntimeEvent, isTerminal, type RuntimeEvent } from './runtimeEvent
 
 export type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed'
 
+export interface ControlResult {
+  status: number
+  control?: Record<string, unknown>
+  error?: string
+  conflict: boolean
+}
+
 export interface ApiHandlers {
   onEvent: (ev: RuntimeEvent) => void
   onConnection: (c: Connection) => void
   onCanary?: (meta: Record<string, unknown>) => void
+  onControl?: (control: Record<string, unknown>) => void
 }
 
 interface EventSourceLike {
@@ -24,6 +32,7 @@ export interface ApiOptions {
   stepDelayMs?: number
   real?: boolean            // true → backend runs the REAL deterministic component chain
   canaryFake?: boolean      // true → POST /api/canary-runs (zero-paid fake model canary)
+  hitl?: boolean            // true → POST /api/hitl-runs (human-in-the-loop control demo)
   fixedRunId?: string       // set → subscribe to an existing (e.g. real canary) run, don't create
 }
 
@@ -34,6 +43,7 @@ export class ApiDataSource {
   private stepDelayMs: number
   private real: boolean
   private canaryFake: boolean
+  private hitl: boolean
   private fixedRunId?: string
   private es: EventSourceLike | null = null
   private disposed = false
@@ -45,13 +55,15 @@ export class ApiDataSource {
     this.stepDelayMs = opts.stepDelayMs ?? 300
     this.real = opts.real ?? false
     this.canaryFake = opts.canaryFake ?? false
+    this.hitl = opts.hitl ?? false
     this.fixedRunId = opts.fixedRunId
   }
 
   /** Create a run (or return the fixed existing run) and return its run_id. */
   async createRun(): Promise<string> {
     if (this.fixedRunId) return this.fixedRunId          // subscribe to an existing (real canary) run
-    const url = this.canaryFake ? `${this.base}/api/canary-runs` : `${this.base}/api/demo-runs`
+    const url = this.hitl ? `${this.base}/api/hitl-runs`
+      : this.canaryFake ? `${this.base}/api/canary-runs` : `${this.base}/api/demo-runs`
     const created = await this.fetchImpl(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ step_delay_ms: this.stepDelayMs, real: this.real }),
@@ -63,9 +75,10 @@ export class ApiDataSource {
   async subscribe(runId: string, h: ApiHandlers): Promise<void> {
     h.onConnection('connecting')
     try {
-      const snapRes = await this.fetchImpl(`${this.base}/api/runs/${runId}`)   // snapshot (canary meta)
+      const snapRes = await this.fetchImpl(`${this.base}/api/runs/${runId}`)   // snapshot (canary meta + control)
       const snap = await snapRes.json()
       if (snap && snap.canary && h.onCanary) h.onCanary(snap.canary as Record<string, unknown>)
+      if (snap && snap.control && h.onControl) h.onControl(snap.control as Record<string, unknown>)
     } catch { /* meta best-effort */ }
     try {
       const evRes = await this.fetchImpl(`${this.base}/api/runs/${runId}/events`)
@@ -94,6 +107,17 @@ export class ApiDataSource {
 
   async stop(runId: string): Promise<void> {
     await this.fetchImpl(`${this.base}/api/runs/${runId}/stop`, { method: 'POST' })
+  }
+
+  /** POST a control action; returns {status, control?, error?}. 409 = stale/conflict (no throw). */
+  async control(path: string, body: Record<string, unknown>): Promise<ControlResult> {
+    const res = await this.fetchImpl(`${this.base}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    let json: Record<string, unknown> = {}
+    try { json = await res.json() } catch { /* empty */ }
+    return { status: res.status, control: json.control as Record<string, unknown> | undefined,
+             error: json.error as string | undefined, conflict: json.conflict === true }
   }
 
   dispose() {
