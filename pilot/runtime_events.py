@@ -26,6 +26,10 @@ EventType = Literal[
     "claim_extraction_started", "claims_extracted",
     "shadow_started", "shadow_completed",
     "claim_graph_completed", "artifact_created",
+    # A.7.5 human-in-the-loop control
+    "clarification_requested", "clarification_answered",
+    "approval_requested", "approval_granted", "approval_denied",
+    "pause_requested", "run_paused", "run_resumed",
     "run_completed", "run_failed", "run_stopped",
 ]
 EVENT_TYPES: frozenset = frozenset(EventType.__args__)  # type: ignore[attr-defined]
@@ -40,6 +44,10 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "provenance_status", "verifier_status", "step_objective", "content_level",
     "reason", "phase", "elapsed_ms", "new_evidence_axes", "identifier_count",
     "shadow_created_new_cards", "step_count", "terminal_steps", "note",
+    # A.7.5 human-in-the-loop control (desensitized only)
+    "request_id", "state_version", "question_hash", "action_hash", "arguments_hash",
+    "allowed_options", "risk_level", "action_summary", "expected_side_effect",
+    "control_state", "is_simulation", "kind", "answer", "allow_other",
 })
 # 明令禁止出现的敏感键子串（即便被误放进白名单外，也在校验层再兜底）
 _FORBIDDEN_SUBSTRINGS = ("prompt", "api_key", "apikey", "authorization", "auth_header",

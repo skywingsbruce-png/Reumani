@@ -120,6 +120,84 @@ def test_fake_canary_run_and_meta(client):
         assert et in types                                         # SSE stage events reach the UI
 
 
+def _hitl_start(client):
+    rid = client.post("/api/hitl-runs").json()["run_id"]
+    ctl = client.get(f"/api/runs/{rid}").json()["control"]
+    return rid, ctl
+
+
+def test_hitl_full_flow(client):
+    rid, ctl = _hitl_start(client)
+    assert rid.startswith("hitl-") and ctl["control_state"] == "awaiting_clarification"
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    r = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                    json={"expected_state_version": v, "idempotency_key": "a1", "selected_option_ids": ["skin"]})
+    ctl = r.json()["control"]
+    assert r.status_code == 200 and ctl["control_state"] == "awaiting_approval"
+    apr, ah, v = ctl["pending"]["request_id"], ctl["pending"]["action_hash"], ctl["state_version"]
+    rp = client.post(f"/api/runs/{rid}/pause", json={"idempotency_key": "p", "expected_state_version": v})
+    v = rp.json()["control"]["state_version"]
+    rr = client.post(f"/api/runs/{rid}/resume", json={"idempotency_key": "r", "expected_state_version": v})
+    v = rr.json()["control"]["state_version"]
+    ra = client.post(f"/api/runs/{rid}/approvals/{apr}/approve",
+                     json={"expected_state_version": v, "idempotency_key": "ap", "action_hash": ah})
+    assert ra.json()["control"]["control_state"] == "completed" and ra.json()["control"]["tool_calls"] == 1
+
+
+def test_hitl_stale_version_returns_409(client):
+    rid, ctl = _hitl_start(client)
+    req = ctl["pending"]["request_id"]
+    r = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                    json={"expected_state_version": 999, "idempotency_key": "x", "selected_option_ids": ["skin"]})
+    assert r.status_code == 409 and r.json()["conflict"] is True
+
+
+def test_hitl_unknown_field_rejected_400(client):
+    rid, ctl = _hitl_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    r = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                    json={"expected_state_version": v, "idempotency_key": "x", "selected_option_ids": ["skin"],
+                          "evil_cmd": "rm -rf /"})
+    assert r.status_code == 400
+
+
+def test_hitl_deny_branch_no_artifact(client):
+    rid, ctl = _hitl_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    ctl = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                      json={"expected_state_version": v, "idempotency_key": "a", "selected_option_ids": ["lung"]}).json()["control"]
+    apr, ah, v = ctl["pending"]["request_id"], ctl["pending"]["action_hash"], ctl["state_version"]
+    rd = client.post(f"/api/runs/{rid}/approvals/{apr}/deny",
+                     json={"expected_state_version": v, "idempotency_key": "d", "action_hash": ah})
+    assert rd.json()["control"]["control_state"] == "stopped" and rd.json()["control"]["tool_calls"] == 0
+    types = [e["event_type"] for e in client.get(f"/api/runs/{rid}/events").json()["events"]]
+    assert "approval_denied" in types and "artifact_created" not in types
+
+
+def test_hitl_idempotent_answer_no_duplicate(client):
+    rid, ctl = _hitl_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    body = {"expected_state_version": v, "idempotency_key": "same", "selected_option_ids": ["skin"]}
+    n1 = client.post(f"/api/runs/{rid}/clarifications/{req}/answer", json=body).json()["control"]["state_version"]
+    before = len(client.get(f"/api/runs/{rid}/events").json()["events"])
+    n2 = client.post(f"/api/runs/{rid}/clarifications/{req}/answer", json=body).json()["control"]["state_version"]
+    after = len(client.get(f"/api/runs/{rid}/events").json()["events"])
+    assert n1 == n2 and before == after                        # idempotent: no duplicate events
+
+
+def test_hitl_stop_after_completed_conflicts(client):
+    rid, ctl = _hitl_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    ctl = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                      json={"expected_state_version": v, "idempotency_key": "a", "selected_option_ids": ["both"]}).json()["control"]
+    apr, ah, v = ctl["pending"]["request_id"], ctl["pending"]["action_hash"], ctl["state_version"]
+    ctl = client.post(f"/api/runs/{rid}/approvals/{apr}/approve",
+                      json={"expected_state_version": v, "idempotency_key": "ap", "action_hash": ah}).json()["control"]
+    rs = client.post(f"/api/runs/{rid}/stop",
+                     json={"idempotency_key": "s", "expected_state_version": ctl["state_version"]})
+    assert rs.status_code == 409                               # completed is immutable
+
+
 def test_cooperative_stop_before_tool_when_delayed():
     # 带步进延迟 → 后台线程；创建后立即 stop → 不授权任何工具
     import time

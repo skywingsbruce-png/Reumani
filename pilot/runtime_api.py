@@ -45,7 +45,23 @@ class RunManager:
         self.store = store or InMemoryEventStore()
         self._handles: dict[str, _Handle] = {}
         self._meta: dict[str, dict] = {}          # run_id -> desensitized canary meta
+        self._hitl: dict[str, object] = {}        # run_id -> HitlRun (human-in-the-loop)
         self._lock = threading.Lock()
+
+    def start_hitl(self) -> str:
+        """创建一个确定性 fake 人机协作运行（跑到第一个澄清点）。"""
+        from pilot.hitl import HitlRun
+        run_id = "hitl-" + uuid.uuid4().hex[:10]
+        with self._lock:
+            self._handles[run_id] = _Handle()
+            run = HitlRun(run_id, self.store.append)
+            self._hitl[run_id] = run
+        run.start()
+        return run_id
+
+    def hitl(self, run_id: str):
+        with self._lock:
+            return self._hitl.get(run_id)
 
     def start_canary_fake(self, step_delay_ms: int = 0) -> str:
         """零付费 fake 金丝雀（含 UI SSE）。真实付费金丝雀永不经 HTTP 触发。"""
@@ -174,16 +190,83 @@ def create_app(store=None, manager=None) -> Starlette:
         run_id = manager.start_canary_fake(step_delay_ms)
         return JSONResponse({"run_id": run_id, "canary": "fake"}, status_code=201)
 
+    async def create_hitl_run(request):
+        run_id = manager.start_hitl()
+        return JSONResponse({"run_id": run_id, "hitl": True}, status_code=201)
+
     async def get_run(request):
         run_id = request.path_params["run_id"]
         if not store.exists(run_id):
             return _bad("run not found", 404)
         events = store.list(run_id)
-        return JSONResponse({"run_id": run_id, "status": manager.status(run_id),
+        hr = manager.hitl(run_id)
+        status = hr.state if hr is not None else manager.status(run_id)
+        return JSONResponse({"run_id": run_id, "status": status,
                              "event_count": len(events),
                              "last_sequence": events[-1].sequence if events else -1,
                              "schema_version": EVENT_SCHEMA,
-                             "canary": manager.meta(run_id) or None})
+                             "canary": manager.meta(run_id) or None,
+                             "control": hr.snapshot() if hr is not None else None})
+
+    # ---- human-in-the-loop write endpoints (strict bodies; 409 on conflict; idempotent) ----
+    async def _hitl_call(request, fn):
+        from pilot.hitl_contracts import (StaleState, IllegalTransition, ContractViolation)
+        from pydantic import ValidationError
+        run_id = request.path_params["run_id"]
+        hr = manager.hitl(run_id)
+        if hr is None:
+            return _bad("hitl run not found", 404)
+        try:
+            body = await request.json()
+        except Exception:                            # noqa: BLE001
+            body = {}
+        if not isinstance(body, dict):
+            return _bad("body must be an object")
+        try:
+            snap = fn(hr, request.path_params, body)
+        except ValidationError:
+            return _bad("invalid request body (unknown/invalid fields)", 400)
+        except (StaleState, IllegalTransition) as e:
+            return JSONResponse({"error": str(e), "conflict": True,
+                                 "control": hr.snapshot()}, status_code=409)
+        except ContractViolation as e:
+            return _bad(str(e), 409)
+        return JSONResponse({"ok": True, "control": snap})
+
+    def _answer(hr, params, body):
+        from pilot.hitl_contracts import ClarificationAnswer
+        ans = ClarificationAnswer.model_validate({**body, "request_id": params["request_id"]})
+        return hr.answer_clarification(ans)
+
+    def _approve(hr, params, body):
+        from pilot.hitl_contracts import ApprovalDecision
+        return hr.approve(ApprovalDecision.model_validate({**body, "request_id": params["request_id"]}))
+
+    def _deny(hr, params, body):
+        from pilot.hitl_contracts import ApprovalDecision
+        return hr.deny(ApprovalDecision.model_validate({**body, "request_id": params["request_id"]}))
+
+    def _control(method):
+        def go(hr, params, body):
+            from pilot.hitl_contracts import ControlAction
+            a = ControlAction.model_validate(body)
+            return getattr(hr, method)(a.idempotency_key, a.expected_state_version)
+        return go
+
+    async def answer_clarification(request):
+        return await _hitl_call(request, _answer)
+
+    async def approve(request):
+        return await _hitl_call(request, _approve)
+
+    async def deny(request):
+        return await _hitl_call(request, _deny)
+
+    async def pause_run(request):
+        return await _hitl_call(request, _control("pause"))
+
+    async def resume_run(request):
+        return await _hitl_call(request, _control("resume"))
 
     async def get_events(request):
         run_id = request.path_params["run_id"]
@@ -229,17 +312,25 @@ def create_app(store=None, manager=None) -> Starlette:
         run_id = request.path_params["run_id"]
         if not store.exists(run_id):
             return _bad("run not found", 404)
-        ok = manager.stop(run_id)
+        if manager.hitl(run_id) is not None:         # HITL run → 契约化控制停止（幂等/版本校验）
+            return await _hitl_call(request, _control("stop"))
+        ok = manager.stop(run_id)                    # demo cooperative stop
         return JSONResponse({"run_id": run_id, "stop_requested": ok})
 
     routes = [
         Route("/api/health", health, methods=["GET"]),
         Route("/api/demo-runs", create_demo_run, methods=["POST"]),
         Route("/api/canary-runs", create_canary_run, methods=["POST"]),
+        Route("/api/hitl-runs", create_hitl_run, methods=["POST"]),
         Route("/api/runs/{run_id}", get_run, methods=["GET"]),
         Route("/api/runs/{run_id}/events", get_events, methods=["GET"]),
         Route("/api/runs/{run_id}/events/stream", stream_events, methods=["GET"]),
         Route("/api/runs/{run_id}/stop", stop_run, methods=["POST"]),
+        Route("/api/runs/{run_id}/pause", pause_run, methods=["POST"]),
+        Route("/api/runs/{run_id}/resume", resume_run, methods=["POST"]),
+        Route("/api/runs/{run_id}/clarifications/{request_id}/answer", answer_clarification, methods=["POST"]),
+        Route("/api/runs/{run_id}/approvals/{request_id}/approve", approve, methods=["POST"]),
+        Route("/api/runs/{run_id}/approvals/{request_id}/deny", deny, methods=["POST"]),
     ]
     middleware = [Middleware(CORSMiddleware, allow_origins=_LOCAL_ORIGINS,
                              allow_methods=["GET", "POST"], allow_headers=["*"])]
