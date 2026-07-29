@@ -225,8 +225,8 @@ def create_app(store=None, manager=None) -> Starlette:
         try:
             hr = manager.hitl(run_id)
         except RecoveryError as e:
-            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True},
-                                status_code=409)
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True,
+                                 "human_review": True}, status_code=409)
         status = hr.state if hr is not None else manager.status(run_id)
         return JSONResponse({"run_id": run_id, "status": status,
                              "event_count": len(events),
@@ -244,8 +244,8 @@ def create_app(store=None, manager=None) -> Starlette:
         try:
             hr = manager.hitl(run_id)                # 不在内存则从持久化日志恢复
         except RecoveryError as e:
-            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True},
-                                status_code=409)
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True,
+                                 "human_review": True}, status_code=409)
         if hr is None:
             return _bad("hitl run not found", 404)
         try:
@@ -348,8 +348,8 @@ def create_app(store=None, manager=None) -> Starlette:
         try:
             is_hitl = manager.hitl(run_id) is not None
         except RecoveryError as e:
-            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True},
-                                status_code=409)
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True,
+                                 "human_review": True}, status_code=409)
         if is_hitl:                                  # HITL run → 契约化控制停止（幂等/版本校验）
             return await _hitl_call(request, _control("stop"))
         ok = manager.stop(run_id)                    # demo cooperative stop

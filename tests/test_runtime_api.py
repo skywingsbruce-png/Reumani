@@ -246,3 +246,39 @@ def test_serve_rejects_multi_worker():
     from pilot.runtime_api import serve
     with pytest.raises(ValueError):
         serve(workers=2)
+
+
+# ---- A.7.5.1.1 §7：同 idempotency_key + 不同 payload → 冲突（不静默返回旧结果） ----
+def test_hitl_same_key_different_payload_conflicts(client):
+    rid, ctl = _hitl_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    r1 = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                     json={"expected_state_version": v, "idempotency_key": "K", "selected_option_ids": ["skin"]})
+    assert r1.status_code == 200
+    n = len(client.get(f"/api/runs/{rid}/events").json()["events"])
+    # 同 key、不同 payload（lung）→ 409 冲突，且不产生新事件（无副作用）
+    r2 = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                     json={"expected_state_version": v, "idempotency_key": "K", "selected_option_ids": ["lung"]})
+    assert r2.status_code == 409
+    assert len(client.get(f"/api/runs/{rid}/events").json()["events"]) == n
+
+
+# ---- A.7.5.1.1 §10：SSE 断线重连（Last-Event-ID / cursor）只补发缺失事件，不重复 ----
+def test_sse_cursor_reconnect_no_duplicate(client):
+    rid, ctl = _hitl_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    ctl = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                      json={"expected_state_version": v, "idempotency_key": "a", "selected_option_ids": ["skin"]}).json()["control"]
+    apr, ah, v = ctl["pending"]["request_id"], ctl["pending"]["action_hash"], ctl["state_version"]
+    client.post(f"/api/runs/{rid}/approvals/{apr}/approve",
+                json={"expected_state_version": v, "idempotency_key": "ap", "action_hash": ah})
+    allev = client.get(f"/api/runs/{rid}/events").json()["events"]
+    mid = allev[len(allev) // 2]["sequence"]
+    # 重连：带 Last-Event-ID=mid → 只补发 seq>mid，直到 terminal 关闭
+    with client.stream("GET", f"/api/runs/{rid}/events/stream",
+                       headers={"last-event-id": str(mid)}) as resp:
+        body = "".join(chunk for chunk in resp.iter_text())
+    ids = [int(l[4:]) for l in body.splitlines() if l.startswith("id: ")]
+    assert ids == sorted(set(ids))                             # 单调、唯一（无重复）
+    assert all(i > mid for i in ids)                           # 只补发缺失事件
+    assert ids[-1] == allev[-1]["sequence"]                    # terminal 收尾，之后无 running

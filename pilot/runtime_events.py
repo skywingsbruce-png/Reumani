@@ -50,6 +50,8 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "control_state", "is_simulation", "kind", "answer", "allow_other",
     # A.7.5.1 durability / concurrency (stable hashes + recovery cursors only)
     "idempotency_hash", "resume_cursor",
+    # A.7.5.1.1 idempotency payload binding (stable request fingerprint hash only)
+    "request_fingerprint",
 })
 # 明令禁止出现的敏感键子串（即便被误放进白名单外，也在校验层再兜底）
 _FORBIDDEN_SUBSTRINGS = ("prompt", "api_key", "apikey", "authorization", "auth_header",

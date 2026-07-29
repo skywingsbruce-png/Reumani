@@ -44,6 +44,14 @@ def idem_hash(key: str) -> str:
     return compute_hash({"idem": str(key)})
 
 
+def request_fingerprint(kind: str, payload: dict) -> str:
+    """请求指纹（稳定 hash）：把 idempotency_key 绑定到具体请求内容。
+
+    同 key + 同 payload → 同指纹 → 幂等 replay；同 key + 不同 payload → 指纹不符 → 冲突（fail-closed）。
+    """
+    return compute_hash({"kind": kind, "payload": payload})
+
+
 class HitlRun:
     """单个人机协作运行的权威状态机（内存态投影 + append-only 事件为单一真相）。"""
 
@@ -69,8 +77,11 @@ class HitlRun:
         self.completed_steps: set = set()
 
         self._idem: dict[str, dict] = {}             # idem_hash -> 响应快照（幂等）
+        self._idem_fp: dict[str, str] = {}           # idem_hash -> 请求指纹（同 key 不同 payload → 冲突）
         self._buffer: Optional[list] = None          # 当前事务的事件缓冲
         self._cur_idem: Optional[str] = None         # 当前事务的 idem_hash（打进事件）
+        self._cur_fp: Optional[str] = None           # 当前事务的 request_fingerprint（打进事件）
+        self.needs_human_review = False              # 崩溃于 pausing 等不确定态 → 需人工审查
 
         # 执行中 Pause 相关
         self._exec_cursor = _STAGE_DONE              # 无审批时不执行
@@ -88,6 +99,8 @@ class HitlRun:
         sp.setdefault("state_version", self.state_version)
         if self._cur_idem is not None:
             sp.setdefault("idempotency_hash", self._cur_idem)
+        if self._cur_fp is not None:
+            sp.setdefault("request_fingerprint", self._cur_fp)
         ev = make_event(run_id=self.run_id, sequence=self._seq, event_type=event_type,
                         event_id=f"{self.run_id}-{self._seq:04d}", status=status, summary=summary,
                         step_id=step_id, safe_payload=sp, artifact_ids=artifact_ids or [],
@@ -120,12 +133,13 @@ class HitlRun:
         self.completed_steps = set(snap["completed_steps"])
 
     @contextmanager
-    def _txn(self, idem_h: Optional[str] = None):
+    def _txn(self, idem_h: Optional[str] = None, fp: Optional[str] = None):
         """原子事务：缓冲事件 → append_batch 落盘；任何异常（含落盘失败）回滚内存快照。"""
         with self._lock:
             before = self._snapshot_mutable()
             self._buffer = []
             self._cur_idem = idem_h
+            self._cur_fp = fp
             try:
                 yield
                 self._store.append_batch(self._buffer)   # 全有或全无
@@ -135,6 +149,7 @@ class HitlRun:
             finally:
                 self._buffer = None
                 self._cur_idem = None
+                self._cur_fp = None
 
     # ============================ 启动 ============================
     def start(self):
@@ -167,7 +182,9 @@ class HitlRun:
     def answer_clarification(self, ans: HC.ClarificationAnswer) -> dict:
         with self._lock:
             h = idem_hash(ans.idempotency_key)
-            cached = self._idem.get(h)
+            fp = request_fingerprint("answer", {"selected": sorted(ans.selected_option_ids),
+                                                "other": ans.other_text or ""})
+            cached = self._idem_get(h, fp)
             if cached is not None:
                 return cached
             req = self._require_pending("clarification", ans.request_id, ans.expected_state_version)
@@ -194,7 +211,7 @@ class HitlRun:
                 self.pending = None
                 self._pending_obj = None
                 self._request_approval()                 # 推进到审批点（同一事务原子）
-            return self._cache(h)
+            return self._cache(h, fp)
 
     # ---------- 请求审批（具体动作），在澄清事务内调用 ----------
     def _request_approval(self):
@@ -227,14 +244,15 @@ class HitlRun:
     def approve(self, dec: HC.ApprovalDecision) -> dict:
         with self._lock:
             h = idem_hash(dec.idempotency_key)
-            cached = self._idem.get(h)
+            fp = request_fingerprint("approve", {"action_hash": dec.action_hash})
+            cached = self._idem_get(h, fp)
             if cached is not None:
                 return cached
             req = self._require_pending("approval", dec.request_id, dec.expected_state_version)
             if dec.action_hash != req.action_hash:       # 仅完全一致才有效
                 raise HC.ContractViolation("action_hash 不匹配（动作/参数已变化，旧批准失效，请重新申请）")
             async_mode = self._async_exec()
-            with self._txn(h):
+            with self._txn(h, fp):
                 req.status = "granted"
                 self._to("running")
                 self._emit("approval_granted", step_id=2, status="running", summary="动作已批准",
@@ -247,7 +265,7 @@ class HitlRun:
             if async_mode:
                 self._exec_active = True                 # 后台 worker 驱动，approve 立即返回 running
                 self._start_worker()
-            return self._cache(h)
+            return self._cache(h, fp)
 
     def _async_exec(self) -> bool:
         return self._exec_gate is not None or self._exec_delay_ms > 0
@@ -377,13 +395,14 @@ class HitlRun:
     def deny(self, dec: HC.ApprovalDecision) -> dict:
         with self._lock:
             h = idem_hash(dec.idempotency_key)
-            cached = self._idem.get(h)
+            fp = request_fingerprint("deny", {"action_hash": dec.action_hash})
+            cached = self._idem_get(h, fp)
             if cached is not None:
                 return cached
             req = self._require_pending("approval", dec.request_id, dec.expected_state_version)
             if dec.action_hash != req.action_hash:
                 raise HC.ContractViolation("action_hash 不匹配")
-            with self._txn(h):
+            with self._txn(h, fp):
                 req.status = "denied"
                 self._emit("approval_denied", step_id=2, status="denied", summary="动作被拒绝（不执行）",
                            safe_payload={"request_id": req.request_id, "action_hash": req.action_hash,
@@ -393,31 +412,34 @@ class HitlRun:
                 self._to("stopped")                          # 安全终态：不执行、不产 artifact
                 self._emit("run_stopped", status="stopped", summary="approval denied → safe terminal",
                            safe_payload={"reason": "approval_denied"})
-            return self._cache(h)
+            return self._cache(h, fp)
 
     # ============================ Pause / Resume / Stop ============================
     def pause(self, idem_key: str, expected_version: int) -> dict:
         with self._lock:
             h = idem_hash(idem_key)
-            cached = self._idem.get(h)
+            fp = request_fingerprint("pause", {})
+            cached = self._idem_get(h, fp)
             if cached is not None:
                 return cached
             self._require_version(expected_version)
             if HC.is_terminal(self.state):
                 raise HC.IllegalTransition(f"终态不可暂停：{self.state}")
             if self._exec_active and self.state == "running":
-                # 执行中：先进入 pausing，不杀在途调用；worker 在边界完成后再进入 paused
-                with self._txn(h):
+                # 执行中：先进入 pausing，不杀在途调用；worker 在边界完成后再进入 paused。
+                # 关键：先 _to("pausing") 再 emit，使持久化事件携带 control_state=pausing——
+                # 否则崩溃后恢复会误判为 running（看似在跑实则无 worker）。
+                with self._txn(h, fp):
                     self._resume_target = "running"
+                    self._to("pausing")
                     self._emit("pause_requested", status="pausing",
                                summary="cooperative pause requested (in-flight)",
                                safe_payload={"phase": "running"})
-                    self._to("pausing")
                     self._pause_requested = True
-                return self._cache(h)
+                return self._cache(h, fp)
             # 等待态 / 无在途执行：合作式进入 paused
             pre = self.state
-            with self._txn(h):
+            with self._txn(h, fp):
                 self._resume_target = pre
                 self._emit("pause_requested", status="pausing", summary="cooperative pause requested",
                            safe_payload={"phase": pre})
@@ -426,12 +448,13 @@ class HitlRun:
                 self._to("paused")
                 self._emit("run_paused", status="paused", summary="run paused",
                            safe_payload={"phase": self._resume_target})
-            return self._cache(h)
+            return self._cache(h, fp)
 
     def resume(self, idem_key: str, expected_version: int) -> dict:
         with self._lock:
             h = idem_hash(idem_key)
-            cached = self._idem.get(h)
+            fp = request_fingerprint("resume", {})
+            cached = self._idem_get(h, fp)
             if cached is not None:
                 return cached
             self._require_version(expected_version)
@@ -439,7 +462,7 @@ class HitlRun:
                 raise HC.IllegalTransition(f"只有 paused 可 resume，当前 {self.state}")
             target = self._resume_target or "running"
             resumes_exec = (target == "running" and self._exec_cursor < _STAGE_DONE)
-            with self._txn(h):
+            with self._txn(h, fp):
                 self._to(target)                             # 还原到暂停前状态（含待处理请求）
                 self._resume_target = None
                 self._emit("run_resumed", status=self.state, summary="run resumed",
@@ -449,24 +472,25 @@ class HitlRun:
             if resumes_exec and self._async_exec():
                 self._exec_active = True
                 self._start_worker()                         # 从 self._exec_cursor 继续，不重复已完成阶段
-            return self._cache(h)
+            return self._cache(h, fp)
 
     def stop(self, idem_key: str, expected_version: int) -> dict:
         with self._lock:
             h = idem_hash(idem_key)
-            cached = self._idem.get(h)
+            fp = request_fingerprint("stop", {})
+            cached = self._idem_get(h, fp)
             if cached is not None:
                 return cached
             self._require_version(expected_version)
             if HC.is_terminal(self.state):
                 raise HC.IllegalTransition(f"终态不可再操作：{self.state}")
-            with self._txn(h):
+            with self._txn(h, fp):
                 self._to("stopped")
                 self.pending = None
                 self._pending_obj = None
                 self._pause_requested = False
                 self._emit("run_stopped", status="stopped", summary="user stopped")
-            return self._cache(h)
+            return self._cache(h, fp)
 
     # ============================ 校验 / 幂等 ============================
     def _require_version(self, expected):
@@ -481,45 +505,83 @@ class HitlRun:
             raise HC.ContractViolation("request_id 与当前待处理请求不符")
         return self._pending_obj
 
-    def _cache(self, idem_h):
+    def _idem_get(self, idem_h, fp):
+        """幂等查表：命中且指纹一致 → 返回缓存；命中但指纹不符 → 冲突（同 key 不同 payload）。"""
+        if idem_h in self._idem:
+            if self._idem_fp.get(idem_h) != fp:
+                raise HC.ContractViolation("idempotency_key 复用于不同请求（payload 不一致）→ 冲突")
+            return self._idem[idem_h]
+        return None
+
+    def _cache(self, idem_h, fp=None):
         snap = self.snapshot()
         self._idem[idem_h] = snap
+        self._idem_fp[idem_h] = fp
         return snap
 
     def snapshot(self) -> dict:
         return {"run_id": self.run_id, "control_state": self.state,
                 "state_version": self.state_version, "pending": self.pending,
                 "tool_calls": self.tool_calls, "artifact_count": len(self.artifacts),
-                "open_reservations": self._open_reservations, "lifecycle": dict(self.lifecycle)}
+                "open_reservations": self._open_reservations, "lifecycle": dict(self.lifecycle),
+                "needs_human_review": self.needs_human_review}
 
     # ============================ 从持久化事件恢复（§2） ============================
     @classmethod
     def recover(cls, run_id: str, event_store, *, clock=now,
                 exec_delay_ms: int = 0, exec_gate: Optional[threading.Event] = None) -> "HitlRun":
-        """用**新对象**仅凭 append-only 事件重建完整控制状态（新进程/新 RunManager 可用）。"""
-        events = event_store.list(run_id)
+        """用**新对象**仅凭 append-only 事件重建完整控制状态（新进程/新 RunManager 可用）。
+
+        任何损坏都 fail-closed（RecoveryError）：截断 JSON、content_hash 不一致、未知 schema、
+        sequence 断裂/重复、state_version 回退、终态后追加事件、恢复期非法转换。不自动重放、
+        不自动 resume、不启动 worker、不执行工具、不改写原日志。
+        """
+        from json import JSONDecodeError
+        from pydantic import ValidationError
+        try:
+            events = event_store.list(run_id)        # 读取即校验 content_hash / schema_version
+        except (ValidationError, ValueError, JSONDecodeError) as e:
+            raise RecoveryError(f"事件日志损坏/截断/未知 schema（human_review）：{str(e)[:120]}") from e
         if not events:
             raise RecoveryError(f"无事件可恢复：{run_id}")
         r = cls(run_id, event_store, clock=clock, exec_delay_ms=exec_delay_ms, exec_gate=exec_gate)
         expected_seq = 0
+        prev_version = -1
+        terminal_seen = False
         idem_last: dict[str, int] = {}               # idem_hash -> 该组最后一个事件的 index
+        idem_fp: dict[str, str] = {}                 # idem_hash -> request_fingerprint（重启后冲突检测）
         for i, e in enumerate(events):
-            if e.sequence != expected_seq:           # 缺事件 / 乱序 → fail-closed
+            if e.sequence != expected_seq:           # 缺事件 / 重复 / 乱序 → fail-closed
                 raise RecoveryError(f"事件 sequence 断裂：得到 {e.sequence}，应为 {expected_seq}")
             expected_seq += 1
-            try:                                     # content_hash 已在 RuntimeEvent 校验；此处再兜底
+            if terminal_seen:                        # 终态后仍有事件 → 篡改/损坏
+                raise RecoveryError(f"终态之后仍有事件（human_review）：seq={e.sequence} {e.event_type}")
+            sv = e.safe_payload.get("state_version")
+            if sv is not None:
+                if int(sv) < prev_version:           # state_version 单调不减
+                    raise RecoveryError(f"state_version 回退（human_review）：{sv} < {prev_version}")
+                prev_version = int(sv)
+            try:                                     # content_hash 已在 RuntimeEvent 校验；此处兜底转换
                 r._apply_recovered(e)
             except HC.IllegalTransition as ex:
-                raise RecoveryError(f"恢复期非法状态转换：{ex}") from ex
+                raise RecoveryError(f"恢复期非法状态转换（human_review）：{ex}") from ex
+            if e.event_type in ("run_completed", "run_failed", "run_stopped"):
+                terminal_seen = True
             ih = e.safe_payload.get("idempotency_hash")
             if ih:
                 idem_last[ih] = i
+                fpv = e.safe_payload.get("request_fingerprint")
+                if fpv is not None:
+                    idem_fp[ih] = fpv                # 重建请求指纹 → 重启后同 key 不同 payload 仍冲突
         r._seq = expected_seq
+        if r.state == "pausing":                     # 崩溃于 pausing：在途调用外部副作用未知 → 人工审查
+            r.needs_human_review = True              # 不自动 resume 成 running（resume 从 pausing 本就非法）
         # 用每个 idem 组"最后一个事件后的投影"作为原响应摘要（hash + 摘要都可复现）
         for ih, _idx in idem_last.items():
             r._idem[ih] = {**r.snapshot(), "recovered": True,
                            "result_digest": compute_hash({"idem": ih, "state": r.state,
                                                            "version": r.state_version})}
+            r._idem_fp[ih] = idem_fp.get(ih)
         # 若恢复时停在执行中暂停点 → 重建可继续的阶段游标（stages 确定性，无需持久化 stage 体）
         return r
 
@@ -641,4 +703,5 @@ def rebuild_state_from_events(events) -> dict:
     return {"control_state": state, "state_version": version, "pending": pending}
 
 
-__all__ = ["HitlRun", "DEMO_QUESTION", "rebuild_state_from_events", "RecoveryError", "idem_hash"]
+__all__ = ["HitlRun", "DEMO_QUESTION", "rebuild_state_from_events", "RecoveryError",
+           "idem_hash", "request_fingerprint"]

@@ -187,11 +187,12 @@ def test_idempotent_answer_no_double_transition():
 
 def test_idempotent_approve_executes_once():
     store, r = _run(); _answer(r)
+    ah = r.pending["action_hash"]                             # 幂等重试用相同 payload（action_hash）
     r.approve(_decision(r, "apX"))
     calls, arts = r.tool_calls, len(r.artifacts)
-    # second approve with same idempotency_key → cached (no second execution)
+    # second approve with same idempotency_key + same payload → cached (no second execution)
     r.approve(HC.ApprovalDecision(request_id="apr-r", expected_state_version=r.state_version,
-        idempotency_key="apX", action_hash=r._pending_obj.action_hash if r._pending_obj else "x"))
+        idempotency_key="apX", action_hash=ah))
     assert r.tool_calls == calls == 1 and len(r.artifacts) == arts == 1
 
 
@@ -361,14 +362,15 @@ def test_recover_stopped_is_immutable(tmp_path):
 
 
 def test_recover_replay_old_idem_no_duplicate(tmp_path):
-    r = HitlRun("hitl-d", _fresh(tmp_path)); r.start(); _answer(r, key="ans1"); r.approve(_decision(r, "apr1"))
+    r = HitlRun("hitl-d", _fresh(tmp_path)); r.start(); _answer(r, key="ans1")
+    ah = r.pending["action_hash"]; r.approve(_decision(r, "apr1"))
     store2 = _fresh(tmp_path)
     n, calls, arts = len(store2.list("hitl-d")), 1, 1
     r2 = HitlRun.recover("hitl-d", store2)
     assert r2.tool_calls == calls and len(r2.artifacts) == arts
-    # 重启后重放旧 idempotency_key → 识别为重复，不产生新事件/工具/artifact
+    # 重启后重放旧 idempotency_key + 同 payload → 识别为重复，不产生新事件/工具/artifact
     r2.approve(HC.ApprovalDecision(request_id="apr-hitl-d", expected_state_version=r2.state_version,
-        idempotency_key="apr1", action_hash="whatever"))
+        idempotency_key="apr1", action_hash=ah))
     assert len(store2.list("hitl-d")) == n and r2.tool_calls == calls and len(r2.artifacts) == arts
 
 

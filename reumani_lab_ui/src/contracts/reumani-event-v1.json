@@ -74,6 +74,7 @@
     "record_count",
     "remaining_budget",
     "remaining_gaps",
+    "request_fingerprint",
     "request_id",
     "reservation_id",
     "resume_cursor",
