@@ -335,12 +335,16 @@ def test_workers_gt_1_rejected_config_level_only():
     已知缺口（架构级，本阶段只报告不修复）：两个服务进程若使用不同端口指向同一 durable 目录，
     双方都能启动并写入同一事件目录；进程内 RLock 不跨进程，因此**不保证**多进程互斥。
     """
-    from pilot.runtime_api import serve
+    pytest.importorskip("starlette")             # runtime_api 依赖 starlette（CI 精简 unit 环境未装）
+    try:
+        from pilot.runtime_api import serve
+        from pilot import runtime_api
+    except ImportError:                          # 精简环境缺 starlette/uvicorn → 跳过（不放宽任何规则）
+        pytest.skip("runtime_api unavailable (no starlette/uvicorn in this environment)")
     with pytest.raises(ValueError):
         serve(workers=2)
     # 明确记录：不存在跨进程互斥原语（无文件锁/租约）。若未来实现，应在此处断言其存在。
     import inspect
-    from pilot import runtime_api
     src = inspect.getsource(runtime_api.serve)
     assert "workers" in src and "!= 1" in src.replace(" ", "") or "int(workers) != 1" in src
     assert "flock" not in src and "msvcrt" not in src and "lockfile" not in src.lower(), \
