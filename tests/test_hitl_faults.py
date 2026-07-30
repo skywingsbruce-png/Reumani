@@ -328,6 +328,25 @@ def test_inflight_pause_then_resume_no_double_exec_50():
         assert r.state == "completed" and r.tool_calls == 1 and len(r.artifacts) == 1
 
 
+# ============================ §11 单进程边界（负向测试，记录已知缺口） ============================
+def test_workers_gt_1_rejected_config_level_only():
+    """workers!=1 被显式拒绝——但这只是**配置级检查**，不是操作系统级单实例锁。
+
+    已知缺口（架构级，本阶段只报告不修复）：两个服务进程若使用不同端口指向同一 durable 目录，
+    双方都能启动并写入同一事件目录；进程内 RLock 不跨进程，因此**不保证**多进程互斥。
+    """
+    from pilot.runtime_api import serve
+    with pytest.raises(ValueError):
+        serve(workers=2)
+    # 明确记录：不存在跨进程互斥原语（无文件锁/租约）。若未来实现，应在此处断言其存在。
+    import inspect
+    from pilot import runtime_api
+    src = inspect.getsource(runtime_api.serve)
+    assert "workers" in src and "!= 1" in src.replace(" ", "") or "int(workers) != 1" in src
+    assert "flock" not in src and "msvcrt" not in src and "lockfile" not in src.lower(), \
+        "若已引入跨进程锁，请更新本测试与报告中的单进程边界声明"
+
+
 def test_pausing_crash_recovery_needs_human_review_no_auto_resume(tmp_path):
     # run 处于 pausing 时"进程消失" → 新实例从事件恢复，不得自动 running，需人工审查
     store = JsonlEventStore(str(tmp_path)); gate = threading.Event()
