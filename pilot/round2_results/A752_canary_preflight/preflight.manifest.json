@@ -1,0 +1,144 @@
+{
+  "stage": "A752_canary_preflight",
+  "schema_version": "reumani-canary-preflight-v1",
+  "result": "PREFLIGHT_FAILED",
+  "canary_started": false,
+  "real_paid_model_calls": 0,
+  "human_review": true,
+  "production_code_modified": false,
+  "note": "Read-only preflight per A.7.5.2 §7. Stopped before any provider call. No code changed, no network evidence fetched, no second canary attempted.",
+
+  "baseline": {
+    "dev_head": "e54efb3",
+    "public_head": "988b016",
+    "expected_after_a7511": {"dev": "e54efb3", "public": "988b016"},
+    "heads_match": true,
+    "worktree_clean_except_preexisting_untracked": true,
+    "preexisting_untracked": [
+      "pilot/round2_results/A1_rerun3_run_local.json",
+      "pilot/round2_results/A1_verifier_replay_local.json",
+      "pilot/round2_results/B1_run_local.json",
+      "pilot/round2_results/stage1_metrics_1784757844.json"
+    ],
+    "ci_run": 72,
+    "ci_conclusion": "success",
+    "ci_jobs_total": 11,
+    "ci_jobs_success": 11,
+    "python_tests": {"tests": 936, "failures": 0, "errors": 0},
+    "ui_tests": {"tests": 44, "failures": 0, "lint_errors": 0, "lint_warnings_preexisting": 7}
+  },
+
+  "frozen_integrity_sha256_prefix16": {
+    "SHADOW_PILOT_ROUND2_PROTOCOL_V2.md": "C76F589485E4EBFD",
+    "SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_1.md": "DE3AFCDD2131BA17",
+    "SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_2.md": "B3646D346C1E18FA",
+    "SHADOW_PILOT_ROUND2_PROTOCOL_V2_ADDENDUM_3.md": "49486A3A80004163",
+    "A747_canary/budget.ledger.jsonl": "63A812C2E0BC1A54",
+    "A747_canary/manifest.desensitized.json": "D0D3BA58E614EF8E",
+    "A747_canary/events/canary-real-01.jsonl": "8875574F43C93FE8",
+    "screenshots/hitl-approval-1920x1080.png": "9D7BAB306100DE95",
+    "screenshots/hitl-completed-1920x1080.png": "90BD2918A378A6EF",
+    "screenshots/hitl-denied-1920x1080.png": "77F7C5D65358AD81",
+    "screenshots/hitl-2browser-both-1600x1000.png": "258C10C691275319",
+    "screenshots/hitl-inflight-paused-1600x1000.png": "01146C2550A88ACA"
+  },
+  "historical_ledger": {
+    "path": "pilot/round2_results/A747_canary/budget.ledger.jsonl",
+    "size_bytes": 1756,
+    "reserved": 3,
+    "reconciled": 3,
+    "open_reservations": 0,
+    "unchanged_by_this_phase": true
+  },
+
+  "budget_preflight": {
+    "verdict": "PASS",
+    "cap_usd": 0.15,
+    "worst_case_total_usd": 0.07992,
+    "per_role_worst_case_usd": {
+      "synthesizer": {"model": "claude-opus-4-8", "max_tokens": 1500, "worst_case_usd": 0.04350},
+      "verifier": {"model": "claude-opus-4-8", "max_tokens": 1200, "worst_case_usd": 0.03600},
+      "claim_extractor": {"model": "deepseek-v4-flash", "max_tokens": 1200, "worst_case_usd": 0.00042}
+    },
+    "role_quota": {"synthesizer": 1, "verifier": 1, "claim_extractor": 1},
+    "comment": "Budget was NOT the blocker; recorded for completeness."
+  },
+
+  "blockers": [
+    {
+      "id": "B1",
+      "severity": "decisive",
+      "spec_refs": ["A.7.5.2 §8", "A.7.5.2 §14"],
+      "title": "No HITL -> real-model execution path exists",
+      "evidence": {
+        "hitl_module_references_to_model_stack": 0,
+        "hitl_grep_terms": ["canary", "GatedModel", "hard_gate", "OpenTaskRuntime", "real_runtime", "synthesizer", "claim_extract", "paid", "anthropic", "deepseek"],
+        "model_stack_references_to_hitl": 0,
+        "model_stack_files": ["pilot/canary_a747.py", "pilot/open_task_runtime.py", "pilot/real_runtime.py"],
+        "hitl_constructor": "HitlRun(run_id, event_store, *, clock, exec_delay_ms, exec_gate)",
+        "hitl_post_approval_action": "_execute_fake_action -> hardcoded fake tool 'simulate_wetlab_package' (0 model calls)",
+        "hitl_question": "hardcoded IL-6 wet-lab experiment design; clarification is hardcoded tissue-source (skin/lung/both)",
+        "api_creation_path": "runtime_api.start_hitl(exec_delay_ms) -> HitlRun(...) (no real/model flag)"
+      },
+      "why_blocking": "A.7.5.2 §8 requires the three paid calls to occur after Approval inside the HITL state chain and explicitly forbids bypassing HITL by calling the models directly. The HITL runtime has no injection point for the question, clarification options, approval-card content, or a real executor. Building that bridge is new production code, which §14 forbids this round."
+    },
+    {
+      "id": "B2",
+      "severity": "decisive",
+      "spec_refs": ["A.7.5.2 §4", "A.7.5.2 §7.25", "A.7.5.2 §7.26"],
+      "title": "No valid frozen cGAS-STING EvidenceCard input",
+      "evidence": {
+        "frozen_real_fixture_items": 1,
+        "frozen_real_fixture_topic": "Plasma Hsp90 in systemic sclerosis (PMID 33414495, 2021)",
+        "frozen_fixture_mentions_cgas_sting": false,
+        "only_cgas_sting_record_in_repo": {
+          "path": "tests/fixtures/mini_corpus.jsonl",
+          "pmid_field_value": "1002",
+          "pmid_is_real": false,
+          "comment": "synthetic unit-test row; real PMIDs are 7-8 digits",
+          "available_fields": ["abstract", "journal", "pmid", "title", "year"],
+          "missing_required_fields": ["evidence_id", "doi", "study_design", "species", "content_level", "supporting_excerpt_hash", "provenance_source", "content_hash", "hash_algorithm", "schema_version"]
+        }
+      },
+      "why_blocking": "§4 requires a frozen, desensitized, structurally validated cGAS-STING EvidenceCard input with full provenance, forbids network supplementation, and forbids the model inventing PMIDs/DOIs/years/designs. No such input exists. Running the causal question over a synthetic PMID would make any causal verdict scientifically meaningless and would present test fixtures as real evidence. §4: if no lawful input can be formed, preflight fails and we stop."
+    },
+    {
+      "id": "B3",
+      "severity": "operational",
+      "spec_refs": ["A.7.5.2 §7.8"],
+      "title": "No provider credentials present in the environment",
+      "evidence": {
+        "env_ANTHROPIC_API_KEY_present": false,
+        "env_DEEPSEEK_API_KEY_present": false,
+        "repo_dotenv_file_exists": true,
+        "dotenv_contents_read": false,
+        "note": "Existence check only; no key material was read, printed, or logged. A previously reported leaked DeepSeek key rotation status was not verified."
+      },
+      "why_blocking": "Real calls could not be authenticated as the environment currently stands. Listed as operational rather than decisive because it is resolvable by configuration, unlike B1/B2."
+    }
+  ],
+
+  "checks_passed": [
+    "dev/public HEAD match A.7.5.1.1 final commits",
+    "CI #72 = 11/11 success",
+    "worktree clean (only pre-existing untracked round2 leftovers)",
+    "full Python suite 936 pass / 0 fail",
+    "UI 44 pass, typecheck+build OK, 0 lint errors",
+    "frozen protocol + appendices hashes unchanged",
+    "A.7.4.7 ledger/manifest/events hashes unchanged",
+    "A.7.5 + A.7.5.1 screenshots hashes unchanged",
+    "historical ledger reserved=3 reconciled=3 open=0",
+    "worst-case cost $0.07992 <= $0.15 cap",
+    "role quotas 1/1/1, total cap 3"
+  ],
+
+  "actions_not_taken": [
+    "no provider/model call of any kind",
+    "no production code modified",
+    "no network evidence retrieval",
+    "no synthetic PMID used as if real evidence",
+    "no HITL bypass (direct 3-model invocation)",
+    "no rerun, no second canary",
+    "no A1/B1, no Planner/ReAct/Executor, no device, no Commit B, no Biomni migration"
+  ]
+}
