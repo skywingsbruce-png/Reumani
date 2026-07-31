@@ -43,6 +43,8 @@ interface LabState {
   controlState: string | null           // running / awaiting_clarification / awaiting_approval / paused / ...
   controlVersion: number                // expected_state_version for the next write
   pending: Record<string, unknown> | null   // pending clarification/approval card
+  runType: string | null                // 'demo' | 'research' (A.7.5.3)
+  research: Record<string, unknown> | null  // stages, current stage, verdicts, executor id
   controlError: string | null           // last 409/stale-state message (readable)
   controlBusy: boolean                  // a control write is in flight (buttons disabled)
 }
@@ -51,6 +53,8 @@ const CONTROL_DEFAULTS = {
   controlState: null as string | null, controlVersion: 0,
   pending: null as Record<string, unknown> | null, controlError: null as string | null,
   controlBusy: false,
+  runType: null as string | null,                       // 'demo' | 'research'
+  research: null as Record<string, unknown> | null,     // stages / verdicts / executor (A.7.5.3)
 }
 
 type Action =
@@ -208,6 +212,8 @@ function reducer(state: LabState, action: Action): LabState {
         controlState: (c.control_state as string) ?? state.controlState,
         controlVersion: (c.state_version as number) ?? state.controlVersion,
         pending: (c.pending as Record<string, unknown> | null) ?? null,
+        runType: (c.run_type as string) ?? state.runType,
+        research: (c.research as Record<string, unknown> | null) ?? state.research,
         controlError: null, controlBusy: false }
     }
     case 'set_control_error':
@@ -238,21 +244,54 @@ function reducer(state: LabState, action: Action): LabState {
       const controlState = (sp.control_state as string) ?? state.controlState
       const controlVersion = (sp.state_version as number) ?? state.controlVersion
       let pending = state.pending
+      // Keep any richer fields the snapshot already supplied for the SAME request (e.g. research
+      // prompt/recommended/policy), so an SSE replay never downgrades an already-rendered card.
+      const keep = (rid: unknown) =>
+        state.pending && state.pending.request_id === rid ? state.pending : {}
       if (ev.event_type === 'clarification_requested') {
-        pending = { type: 'clarification', request_id: sp.request_id, kind: sp.kind,
-          allow_other: sp.allow_other, reason: sp.reason, allowed_options: sp.allowed_options }
+        pending = { ...keep(sp.request_id),
+          type: 'clarification', request_id: sp.request_id, kind: sp.kind,
+          allow_other: sp.allow_other, reason: sp.reason, allowed_options: sp.allowed_options,
+          ...(sp.note ? { prompt: sp.note } : {}) }
       } else if (ev.event_type === 'approval_requested') {
-        pending = { type: 'approval', request_id: sp.request_id, action_hash: sp.action_hash,
+        pending = { ...keep(sp.request_id),
+          type: 'approval', request_id: sp.request_id, action_hash: sp.action_hash,
           tool_name: sp.tool_name, risk_level: sp.risk_level, action_summary: sp.action_summary,
-          expected_side_effect: sp.expected_side_effect, is_simulation: sp.is_simulation, reason: sp.reason }
+          expected_side_effect: sp.expected_side_effect, is_simulation: sp.is_simulation,
+          reason: sp.reason,
+          ...(sp.run_type ? { run_type: sp.run_type } : {}),
+          ...(sp.executor_id ? { executor_id: sp.executor_id } : {}),
+          ...(sp.evidence_count !== undefined ? { evidence_count: sp.evidence_count } : {}),
+          ...(sp.policy_hash ? { policy_hash: sp.policy_hash } : {}) }
       } else if (ev.event_type === 'clarification_answered' || ev.event_type === 'approval_granted'
                  || ev.event_type === 'approval_denied') {
         pending = null
       }
+      // Research runs (A.7.5.3): stage timeline + verdicts derived from SSE, same as control state.
+      const runType = (sp.run_type as string) ?? state.runType
+      let research = state.research
+      if (sp.run_type === 'research' || sp.stage || sp.executor_id) {
+        const prev = (research ?? {}) as Record<string, unknown>
+        const done = Array.isArray(prev.stages_done) ? [...(prev.stages_done as string[])] : []
+        if (ev.event_type === 'research_stage_completed' && sp.stage
+            && !done.includes(sp.stage as string)) done.push(sp.stage as string)
+        research = { ...prev,
+          executor_id: sp.executor_id ?? prev.executor_id,
+          stage_count: sp.stage_count ?? prev.stage_count,
+          stages_done: done,
+          current_stage: ev.event_type === 'research_stage_started' ? sp.stage
+            : ev.event_type === 'research_stage_completed' ? null : prev.current_stage,
+          verifier_verdict: sp.verifier_verdict ?? prev.verifier_verdict,
+          shadow_verdict: sp.shadow_verdict ?? prev.shadow_verdict,
+          causal_tier: sp.causal_tier ?? prev.causal_tier,
+          claim_count: sp.claim_count ?? prev.claim_count,
+          evidence_count: sp.evidence_count ?? prev.evidence_count,
+          fixture: sp.fixture ?? prev.fixture }
+      }
       return {
         ...state, planSteps: next.planSteps, timeline: next.timeline, trace: next.trace,
         artifacts: next.artifacts, runtime: next.runtime, runStatus: next.runStatus,
-        tasks, appliedSeq: ev.sequence, controlState, controlVersion, pending,
+        tasks, appliedSeq: ev.sequence, controlState, controlVersion, pending, runType, research,
       }
     }
     default:
@@ -277,15 +316,18 @@ export interface LabContextValue {
 let _idem = 0
 const nextIdem = (p: string) => `${p}-${Date.now().toString(36)}-${_idem++}`
 
-function apiConfig(): { base: string; real: boolean; canaryFake: boolean; hitl: boolean; fixedRunId?: string } | null {
+function apiConfig(): { base: string; real: boolean; canaryFake: boolean; hitl: boolean;
+                        research?: string; fixedRunId?: string } | null {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}
   if (env.VITE_REUMANI_DATA_SOURCE !== 'api') return null
   const canary = env.VITE_REUMANI_CANARY               // 'fake' | 'real' | undefined
+  const research = env.VITE_REUMANI_RESEARCH_EXECUTOR  // executor id → parameterized research run
   return {
     base: env.VITE_REUMANI_API_BASE || 'http://127.0.0.1:8799',
     real: env.VITE_REUMANI_DEMO_REAL === '1',
     canaryFake: canary === 'fake',
-    hitl: env.VITE_REUMANI_HITL === '1',
+    hitl: env.VITE_REUMANI_HITL === '1' || !!research,
+    research: research || undefined,
     fixedRunId: canary === 'real' ? env.VITE_REUMANI_RUN_ID : undefined,   // serve a completed real canary
   }
 }
@@ -354,7 +396,8 @@ export function LabProvider({ children }: { children: ReactNode }) {
     const fixedRunId = cfg.fixedRunId || savedHitl
     const isReplay = !!cfg.fixedRunId          // only canary-real is a read-only replay
     const ds = new ApiDataSource(cfg.base, { real: cfg.real, canaryFake: cfg.canaryFake,
-                                             hitl: cfg.hitl && !savedHitl, fixedRunId })
+                                             hitl: cfg.hitl && !savedHitl, fixedRunId,
+                                             researchExecutor: savedHitl ? undefined : cfg.research })
     dsRef.current = ds
     let cancelled = false
     void (async () => {

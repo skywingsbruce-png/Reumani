@@ -29,13 +29,19 @@ function ClarificationCard({ pending }: { pending: Record<string, unknown> }) {
         <strong>需要你的澄清</strong>
         <span className="badge b-warn"><span className="g" aria-hidden>⏸</span>等待澄清</span>
       </div>
+      {pending.prompt ? (
+        <p className="clar-prompt" data-testid="clar-prompt">{String(pending.prompt)}</p>
+      ) : null}
       <p className="clar-q">{String(pending.reason ?? '请补充信息')}</p>
       <div className="clar-opts" role={multi ? 'group' : 'radiogroup'}>
         {options.map((o) => (
           <label key={o.id} className={`opt ${sel.includes(o.id) && !useOther ? 'sel' : ''}`}>
             <input type={multi ? 'checkbox' : 'radio'} name={`clar-${requestId}`}
               checked={sel.includes(o.id) && !useOther} onChange={() => toggle(o.id)} disabled={busy} />
-            <span className="opt-body"><span className="opt-label">{o.label}</span></span>
+            <span className="opt-body"><span className="opt-label">{o.label}</span>
+              {pending.recommended === o.id
+                ? <span className="badge b-ok rec-badge">推荐</span> : null}
+            </span>
           </label>
         ))}
         {allowOther && (
@@ -68,6 +74,9 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
   const actionHash = String(pending.action_hash)
   const risk = String(pending.risk_level ?? 'medium')
   const busy = state.controlBusy
+  const research = pending.run_type === 'research'
+  const policy = (pending.policy ?? {}) as Record<string, unknown>
+  const stages = (Array.isArray(pending.stages) ? pending.stages : []) as string[]
   return (
     <section className="section hitl-card approval-card" aria-label="审批请求" data-testid="hitl-approval">
       <div className="clar-head">
@@ -78,11 +87,34 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
       </div>
       <p className="clar-q">{String(pending.action_summary ?? '批准该动作')}</p>
       <dl className="approval-meta">
-        <div><dt>工具</dt><dd className="mono">{String(pending.tool_name)}</dd></div>
+        {research ? (
+          <>
+            <div><dt>研究问题</dt><dd data-testid="apr-question">{String(pending.question ?? '')}</dd></div>
+            <div><dt>澄清答复</dt><dd className="mono" data-testid="apr-answer">{String(pending.clarification_answer ?? '')}</dd></div>
+            <div><dt>证据数量</dt><dd className="mono" data-testid="apr-evidence">{String(pending.evidence_count ?? 0)} 条（测试夹具）</dd></div>
+            <div><dt>执行器</dt><dd className="mono" data-testid="apr-executor">{String(pending.executor_id ?? '')}</dd></div>
+            <div><dt>执行阶段</dt><dd className="mono" data-testid="apr-stages">{stages.length} 阶段</dd></div>
+            <div><dt>权限边界</dt><dd className="mono" data-testid="apr-policy">
+              网络 {policy.allow_network ? '允许' : '禁止'} · 代码 {policy.allow_code_execution ? '允许' : '禁止'} ·
+              设备 {policy.allow_device_control ? '允许' : '禁止'} · Planner {policy.allow_planner ? '允许' : '禁止'}
+            </dd></div>
+            <div><dt>调用上限</dt><dd className="mono">
+              总计 {String(policy.max_model_calls ?? 0)} · 角色各 1（不可互借）
+            </dd></div>
+            <div><dt>预期产物</dt><dd className="mono">{(pending.expected_outputs as string[] ?? []).join(', ')}</dd></div>
+            <div><dt>策略指纹</dt><dd className="mono">{String(pending.policy_hash ?? '').slice(0, 16)}…</dd></div>
+          </>
+        ) : (
+          <div><dt>工具</dt><dd className="mono">{String(pending.tool_name)}</dd></div>
+        )}
         <div><dt>预期副作用</dt><dd>{String(pending.expected_side_effect)}</dd></div>
         <div><dt>动作指纹</dt><dd className="mono">{actionHash.slice(0, 16)}…</dd></div>
       </dl>
-      <p className="approval-note">仅在动作/参数完全一致时有效；更改后需重新申请。此为仿真，不连接真实设备。</p>
+      <p className="approval-note">
+        仅在动作/参数完全一致时有效；更改后需重新申请。
+        {research ? '批准后将冻结问题、证据、策略与执行器；此为零付费测试夹具，不调用真实模型。'
+                  : '此为仿真，不连接真实设备。'}
+      </p>
       <div className="clar-actions">
         <button className="btn primary" data-testid="approve-btn" disabled={busy}
           onClick={() => decideApproval(requestId, true, actionHash)}>{busy ? '处理中…' : '批准'}</button>

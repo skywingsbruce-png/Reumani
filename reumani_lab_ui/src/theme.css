@@ -321,3 +321,20 @@ h1, h2, h3 { margin: 0; }
     transform: translateX(-110%); transition: transform 0.2s ease; box-shadow: 4px 0 24px rgba(0,0,0,0.14); }
   .sidebar-wrap.open { transform: translateX(0); }
 }
+
+/* ---- A.7.5.3 research run: stage timeline + verdicts ---- */
+.research-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.research-head .section-title { margin: 0; }
+.stage-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.stage { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: 12px; background: var(--surface); }
+.stage.done { border-color: var(--st-ok); color: var(--st-ok); background: var(--st-ok-bg); }
+.stage.cur { border-color: var(--st-warn); color: var(--st-warn); background: var(--st-warn-bg); }
+.stage.todo { opacity: .62; }
+.stage-ic { font-weight: 700; }
+.verdicts { margin: 12px 0 0; display: grid; gap: 6px; }
+.verdicts > div { display: grid; grid-template-columns: 190px 1fr; gap: 10px; align-items: baseline; }
+.verdicts dt { color: var(--text-dim); font-size: 12px; }
+.verdicts dd { margin: 0; font-size: 13px; }
+.clar-prompt { font-weight: 600; margin: 0 0 4px; }
+.rec-badge { margin-left: 8px; }

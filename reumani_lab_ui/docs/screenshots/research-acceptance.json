@@ -1,0 +1,68 @@
+{
+  "scenario": "A.7.5.3 research run acceptance",
+  "paid_model_calls": 0,
+  "steps": {
+    "1_create": {
+      "status": 201,
+      "run_type": "research"
+    },
+    "2_clarification": {
+      "shown_in_both_contexts": true,
+      "prompt": "你希望结论采用哪种证据标准？"
+    },
+    "3_before_answer": {
+      "tool_calls": 0
+    },
+    "4_approval_shown": {
+      "tool_calls_before_approval": 0,
+      "evidence_count": 3,
+      "executor_id": "fake-research-v1",
+      "policy": {
+        "allow_network": false,
+        "allow_code_execution": false,
+        "allow_device_control": false,
+        "allow_planner": false,
+        "max_model_calls": 3,
+        "max_cost_usd": "0.00",
+        "role_limits": {
+          "synthesizer": 1,
+          "verifier": 1,
+          "claim_extractor": 1
+        },
+        "require_approval": true
+      },
+      "stages": 8
+    },
+    "5_paused": {
+      "stages_done": 3,
+      "stage_count": 8,
+      "artifacts": 0,
+      "open_reservations": 0
+    },
+    "6_completed": {
+      "stages_done": 8,
+      "verifier_verdict": "insufficient_evidence",
+      "shadow_verdict": "agrees_with_verifier",
+      "causal_tier": "insufficient_for_direct_causality",
+      "claim_count": 2,
+      "artifacts": 1,
+      "artifact_fixture": true,
+      "tool_calls": 3,
+      "open_reservations": 0
+    },
+    "7_two_context_sync": {
+      "verifier_A": "insufficient_evidence",
+      "verifier_B": "insufficient_evidence",
+      "shadow_A": "agrees_with_verifier",
+      "consistent": true
+    },
+    "8_integrity": {
+      "stage_completed_events": 8,
+      "artifact_created_events": 1,
+      "run_completed_events": 1,
+      "sequence_contiguous_unique": true,
+      "total_events": 31
+    }
+  },
+  "success": true
+}

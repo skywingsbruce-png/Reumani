@@ -33,6 +33,7 @@ export interface ApiOptions {
   real?: boolean            // true → backend runs the REAL deterministic component chain
   canaryFake?: boolean      // true → POST /api/canary-runs (zero-paid fake model canary)
   hitl?: boolean            // true → POST /api/hitl-runs (human-in-the-loop control demo)
+  researchExecutor?: string // set → POST /api/research-runs with this registered executor id
   fixedRunId?: string       // set → subscribe to an existing (e.g. real canary) run, don't create
 }
 
@@ -44,6 +45,7 @@ export class ApiDataSource {
   private real: boolean
   private canaryFake: boolean
   private hitl: boolean
+  private researchExecutor?: string
   private fixedRunId?: string
   private es: EventSourceLike | null = null
   private disposed = false
@@ -56,12 +58,20 @@ export class ApiDataSource {
     this.real = opts.real ?? false
     this.canaryFake = opts.canaryFake ?? false
     this.hitl = opts.hitl ?? false
+    this.researchExecutor = opts.researchExecutor
     this.fixedRunId = opts.fixedRunId
   }
 
   /** Create a run (or return the fixed existing run) and return its run_id. */
   async createRun(): Promise<string> {
     if (this.fixedRunId) return this.fixedRunId          // subscribe to an existing (real canary) run
+    if (this.researchExecutor) {                         // parameterized research run (A.7.5.3)
+      const res = await this.fetchImpl(`${this.base}/api/research-runs`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ executor_id: this.researchExecutor }),
+      })
+      return (await res.json()).run_id as string
+    }
     const url = this.hitl ? `${this.base}/api/hitl-runs`
       : this.canaryFake ? `${this.base}/api/canary-runs` : `${this.base}/api/demo-runs`
     const created = await this.fetchImpl(url, {

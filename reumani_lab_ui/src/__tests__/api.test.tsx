@@ -271,6 +271,84 @@ describe('HITL control UI', () => {
   })
 })
 
+// ---------------------------- A.7.5.3 research run UI ----------------------------
+describe('research run UI (A.7.5.3)', () => {
+  it('renders the spec-provided question and recommended option (not hardcoded)', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'awaiting_clarification',
+      state_version: 1, run_type: 'research',
+      pending: { type: 'clarification', request_id: 'clr-r', kind: 'single_or_other', allow_other: true,
+        prompt: '你希望结论采用哪种证据标准？', recommended: 'strict_causal',
+        reason: '证据标准会实质改变结论表述', allowed_options: [
+          { id: 'strict_causal', label: '严格因果标准（推荐）' },
+          { id: 'association_only', label: '仅总结相关性' }] } } }) })
+    expect(screen.getByTestId('clar-prompt').textContent).toContain('证据标准')
+    expect(screen.getByText('严格因果标准（推荐）')).toBeInTheDocument()
+    expect(screen.queryByText('皮肤成纤维细胞')).toBeNull()      // 不再是写死的 demo 问题
+    expect(screen.getByText('推荐')).toBeInTheDocument()
+  })
+
+  it('approval card shows evidence count, executor and permission bounds', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'awaiting_approval',
+      state_version: 2, run_type: 'research',
+      pending: { type: 'approval', request_id: 'apr-r', action_hash: 'a'.repeat(32), run_type: 'research',
+        risk_level: 'high', is_simulation: true, action_summary: '运行 fake 三角色科研链',
+        expected_side_effect: '仅生成结构化测试产物', question: '测试研究问题',
+        clarification_answer: 'strict_causal', evidence_count: 3, executor_id: 'fake-research-v1',
+        stages: ['validate_evidence', 'synthesizer', 'verifier'], policy_hash: 'p'.repeat(32),
+        expected_outputs: ['research_artifact'],
+        policy: { allow_network: false, allow_code_execution: false, allow_device_control: false,
+                  allow_planner: false, max_model_calls: 3 } } } }) })
+    expect(screen.getByTestId('apr-evidence').textContent).toContain('3')
+    expect(screen.getByTestId('apr-executor').textContent).toBe('fake-research-v1')
+    const pol = screen.getByTestId('apr-policy').textContent ?? ''
+    expect(pol).toContain('网络 禁止'); expect(pol).toContain('Planner 禁止')
+    expect(screen.getByTestId('apr-question').textContent).toContain('测试研究问题')
+  })
+
+  it('stage timeline and verdicts update from SSE events', () => {
+    bootApi()
+    act(() => {
+      ctx.dispatch({ type: 'apply_event', ev: mk(0, 'run_created', {
+        safe_payload: { control_state: 'running', state_version: 1, run_type: 'research',
+          executor_id: 'fake-research-v1', evidence_count: 3, fixture: true } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(1, 'research_stage_completed', {
+        safe_payload: { control_state: 'running', state_version: 1, stage: 'validate_evidence',
+          stage_index: 0, stage_count: 8 } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(2, 'research_stage_completed', {
+        safe_payload: { control_state: 'running', state_version: 1, stage: 'verifier', stage_index: 3,
+          stage_count: 8, verifier_verdict: 'insufficient_evidence',
+          causal_tier: 'insufficient_for_direct_causality' } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(3, 'research_stage_completed', {
+        safe_payload: { control_state: 'running', state_version: 1, stage: 'shadow', stage_index: 6,
+          stage_count: 8, shadow_verdict: 'agrees_with_verifier' } }) })
+    })
+    expect(screen.getByTestId('research-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('stage-validate_evidence').getAttribute('data-state')).toBe('done')
+    expect(screen.getByTestId('stage-claim_graph').getAttribute('data-state')).toBe('todo')
+    expect(screen.getByTestId('verifier-verdict').textContent).toBe('insufficient_evidence')
+    expect(screen.getByTestId('shadow-verdict').textContent).toBe('agrees_with_verifier')
+    expect(screen.getByTestId('causal-tier').textContent).toBe('insufficient_for_direct_causality')
+    expect(screen.getByTestId('research-fixture')).toBeInTheDocument()   // fixture 标记可见
+  })
+
+  it('does not render the research panel for demo runs', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'running',
+      state_version: 1, run_type: 'demo', pending: null } }) })
+    expect(screen.queryByTestId('research-panel')).toBeNull()
+  })
+
+  it('never offers a model selector or API-key entry', () => {
+    const comps = import.meta.glob('../components/*.tsx', { query: '?raw', eager: true, import: 'default' })
+    for (const [path, src] of Object.entries(comps)) {
+      expect(String(src), path).not.toMatch(/api[_-]?key/i)
+      expect(String(src), path).not.toMatch(/anthropic|deepseek|openai/i)
+    }
+  })
+})
+
 // ---------------------------- no scattered fetch ----------------------------
 describe('data access discipline', () => {
   it('no component calls fetch/EventSource directly (only the data layer does)', () => {

@@ -6,6 +6,7 @@ import { PlanStepList } from './PlanStepList'
 import { Timeline } from './Timeline'
 import { ClarificationCard } from './ClarificationCard'
 import { HitlPanel } from './HitlPanel'
+import { ResearchPanel } from './ResearchPanel'
 import { Composer } from './Composer'
 import { TodoPanel } from './TodoPanel'
 import { ArtifactPanel } from './ArtifactPanel'
@@ -28,6 +29,7 @@ export function AppShell() {
         <div className="center-scroll">
           <PlanStepList />
           <HitlPanel />
+          <ResearchPanel />
           <ClarificationCard />
           <Timeline />
         </div>
