@@ -195,13 +195,14 @@ def test_role_limits_cannot_exceed_one():
 
 # ============================ §12.3 冻结与篡改 ============================
 def test_post_approval_question_change_rejected():
-    store, ex, spec, r = _mk(gates={"synthesizer": threading.Event()})
+    gate = threading.Event()
+    store, ex, spec, r = _mk(gates={"synthesizer": gate})
     _answer(r); _approve(r)
-    assert _wait(lambda: r._open_reservations == 1)
+    idx = STAGES.index("synthesizer")
+    assert _wait(lambda: r._exec_cursor == idx and r._open_reservations == 1, timeout=20)
     object.__setattr__(r._spec, "question", "被篡改的问题")     # 批准后改问题
-    r._stage_gates = None
-    ex._stage_gates["synthesizer"].set()
-    r.join_worker(5)
+    gate.set()
+    r.join_worker(10)
     assert r.state != "completed"                                # 拒绝执行，不得完成
     assert len(r.artifacts) == 0
 
@@ -425,10 +426,14 @@ def test_legacy_events_without_run_type_stay_demo(tmp_path):
 
 # ============================ §12.6 Pause / Resume / Stop ============================
 def _gated(stage, rid="hitl-research-g"):
+    """跑到**指定阶段**正在在途阻塞时返回（不是任意阶段），避免慢机器上的竞态。"""
     gate = threading.Event()
+    idx = STAGES.index(stage)
     store, ex, spec, r = _mk(rid, gates={stage: gate})
     _answer(r); _approve(r)
-    assert _wait(lambda: r._open_reservations == 1)
+    # 门控阶段会一直阻塞 → 游标停在 idx 且预留为 1；据此判定"正好卡在该阶段"
+    assert _wait(lambda: r._exec_cursor == idx and r._open_reservations == 1, timeout=20), \
+        f"worker 未在 {stage} 阶段就位（cursor={r._exec_cursor}）"
     return store, ex, r, gate
 
 
@@ -471,12 +476,18 @@ def test_pausing_crash_recovery_needs_human_review(tmp_path):
     gate = threading.Event()
     store, ex, spec, r = _mk("hitl-research-pc", gates={"synthesizer": gate}, store=_fresh(tmp_path))
     _answer(r); _approve(r)
-    assert _wait(lambda: r._open_reservations == 1)
+    idx = STAGES.index("synthesizer")
+    assert _wait(lambda: r._exec_cursor == idx and r._open_reservations == 1, timeout=20)
     r.pause("p", r.state_version)
     assert r.state == "pausing"
     r2 = HitlRun.recover("hitl-research-pc", _fresh(tmp_path), spec=spec, executor=FakeResearchExecutor())
     assert r2.state == "pausing" and r2.needs_human_review is True   # 不自动重放、不自动 running
+    # 收尾：先终止原 run（迟到阶段会被 stale-worker 守卫丢弃、不再写盘），再放行并 join，
+    # 否则 worker 可能在测试结束后写入已删除的 tmp_path（Windows 上会导致清理失败）。
+    r.stop("s", r.state_version)
     gate.set()
+    r.join_worker(10)
+    assert r.state == "stopped" and len(r.artifacts) == 0
 
 
 # ============================ §12.8 安全 ============================
