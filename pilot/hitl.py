@@ -56,7 +56,13 @@ class HitlRun:
     """单个人机协作运行的权威状态机（内存态投影 + append-only 事件为单一真相）。"""
 
     def __init__(self, run_id: str, event_store, *, clock=now,
-                 exec_delay_ms: int = 0, exec_gate: Optional[threading.Event] = None):
+                 exec_delay_ms: int = 0, exec_gate: Optional[threading.Event] = None,
+                 spec=None, executor=None):
+        """spec/executor 同时给出 → research run（参数化）；都不给 → 原有 demo run（行为不变）。
+
+        `executor` 只能是服务端 registry 注入的 ResearchExecutor 实现；HitlRun 不 import
+        任何模型客户端，也不会在事件里持久化执行器对象。
+        """
         self.run_id = run_id
         self._store = event_store                    # 需提供 append_batch(list) 与 list(run_id)
         self._clock = clock
@@ -64,13 +70,31 @@ class HitlRun:
         self._exec_gate = exec_gate                  # 注入的可控 blocking（测试/演示）
         self._lock = threading.RLock()
 
+        # ---- research run 接线（demo run 时全部为 None/空，语义与 A.7.5 完全一致） ----
+        if (spec is None) != (executor is None):
+            raise HC.ContractViolation("research run 必须同时提供 spec 与 executor（不做任何回退）")
+        self._spec = spec
+        self._executor = executor
+        self.run_type = "research" if spec is not None else "demo"
+        if spec is not None:
+            spec.execution_policy.assert_zero_paid_stage()      # 本阶段权限位必须全 False
+            if getattr(executor, "executor_id", None) != spec.executor_id:
+                raise HC.ContractViolation("executor_id 与 spec 不一致（fail-closed）")
+        self._research_stages = tuple(getattr(executor, "stages", ()) or ())
+        self._research_state: dict = {}
+        self._stages_done: list = []
+        self._frozen_plan: Optional[dict] = None      # Approval 时冻结的执行计划
+        self._spec_missing = False                    # 恢复出的 research run 缺 spec/executor → 不得执行
+        self._recovered_plan: Optional[dict] = None   # 恢复期从 approval_requested 还原的冻结计划
+
         self.state: str = "running"
         self.state_version: int = 0
         self._seq = 0
         self.pending: Optional[dict] = None          # 当前待处理请求（脱敏 dict，供 UI）
         self._pending_obj = None                     # ClarificationRequest | ApprovalRequest（typed）
         self._resume_target: Optional[str] = None
-        self._answer = None                          # 已选组织来源（id）
+        self._answer = None                          # 澄清答案（demo：组织来源；research：证据标准）
+        self._answer_hash: Optional[str] = None
         self.tool_calls = 0
         self.artifacts: list = []
         self.lifecycle = {"requested": 0, "executed": 0, "tool_returned": 0, "observed": 0}
@@ -115,14 +139,16 @@ class HitlRun:
         self.state_version += 1
 
     _MUTABLE = ("state", "state_version", "_seq", "pending", "_pending_obj", "_resume_target",
-                "_answer", "tool_calls", "_exec_cursor", "_pause_requested", "_exec_active",
-                "_open_reservations")
+                "_answer", "_answer_hash", "tool_calls", "_exec_cursor", "_pause_requested",
+                "_exec_active", "_open_reservations", "_frozen_plan")
 
     def _snapshot_mutable(self) -> dict:
         snap = {k: getattr(self, k) for k in self._MUTABLE}
         snap["artifacts"] = list(self.artifacts)
         snap["lifecycle"] = dict(self.lifecycle)
         snap["completed_steps"] = set(self.completed_steps)
+        snap["_research_state"] = dict(self._research_state)
+        snap["_stages_done"] = list(self._stages_done)
         return snap
 
     def _restore_mutable(self, snap: dict) -> None:
@@ -131,6 +157,8 @@ class HitlRun:
         self.artifacts = list(snap["artifacts"])
         self.lifecycle = dict(snap["lifecycle"])
         self.completed_steps = set(snap["completed_steps"])
+        self._research_state = dict(snap["_research_state"])
+        self._stages_done = list(snap["_stages_done"])
 
     @contextmanager
     def _txn(self, idem_h: Optional[str] = None, fp: Optional[str] = None):
@@ -153,6 +181,8 @@ class HitlRun:
 
     # ============================ 启动 ============================
     def start(self):
+        if self.run_type == "research":
+            return self._start_research()
         with self._txn(None):
             self._emit("run_created", summary="hitl run created",
                        safe_payload={"note": "deterministic fake HITL"})
@@ -198,19 +228,24 @@ class HitlRun:
                 answer_id = ans.other_text
             else:
                 raise HC.ContractViolation("澄清答案无有效选项且无 other_text")
+            research = self.run_type == "research"
             with self._txn(h):
                 req.status = "answered"
                 self._answer = answer_id
+                self._answer_hash = compute_hash({"answer": answer_label})
                 self._to("running")
                 self._emit("clarification_answered", step_id=1, status="running", summary="澄清已回答",
-                           safe_payload={"request_id": req.request_id, "answer": answer_label[:120]})
+                           safe_payload={"request_id": req.request_id, "answer": answer_label[:120],
+                                         "answer_hash": self._answer_hash})
                 self._emit("step_satisfied", step_id=1, status="satisfied",
-                           summary=f"实验设计已确定组织来源：{answer_label[:40]}",
+                           summary=(f"证据标准已确定：{answer_label[:40]}" if research
+                                    else f"实验设计已确定组织来源：{answer_label[:40]}"),
                            safe_payload={"answer": answer_label[:120], "remaining_gaps": []})
                 self.completed_steps.add(1)
                 self.pending = None
                 self._pending_obj = None
-                self._request_approval()                 # 推进到审批点（同一事务原子）
+                # 推进到审批点（同一事务原子）
+                self._request_research_approval() if research else self._request_approval()
             return self._cache(h, fp)
 
     # ---------- 请求审批（具体动作），在澄清事务内调用 ----------
@@ -240,6 +275,221 @@ class HitlRun:
                                  "expected_side_effect": req.expected_side_effect, "is_simulation": True,
                                  "reason": req.reason})
 
+    # ==================== research run：参数化启动 / 审批 / 分阶段执行 ====================
+    def _start_research(self):
+        """research run 启动：问题、澄清、选项全部来自 ResearchRunSpec（不再写死）。"""
+        spec = self._spec
+        pub = spec.public_view()
+        with self._txn(None):
+            self._emit("run_created", summary="research run created",
+                       safe_payload={"run_type": "research", "executor_id": spec.executor_id,
+                                     "question_hash": pub["question_hash"],
+                                     "evidence_count": pub["evidence_count"],
+                                     "policy_hash": pub["policy_hash"], "fixture": pub["fixture_evidence"],
+                                     "note": spec.question[:200]})
+            self._emit("plan_ready", summary="研究计划已就绪（澄清 → 审批 → 执行）",
+                       safe_payload={"step_count": 2, "stage_count": len(self._research_stages)})
+            self._emit("step_started", step_id=1, status="running", summary="确认证据标准",
+                       safe_payload={"step_objective": spec.question[:200]})
+            c = spec.clarification
+            qh = c.question_hash()
+            rid = f"clr-{self.run_id}"
+            self._to("awaiting_clarification")
+            req = HC.ClarificationRequest(
+                request_id=rid, run_id=self.run_id, state_version=self.state_version,
+                created_at=self._clock(), reason=c.reason, requesting_step_id=1, kind=c.kind,
+                question_hash=qh, allow_other=c.allow_other,
+                allowed_options=[HC.ClarificationOption(id=o.id, label=o.label) for o in c.options])
+            self._pending_obj = req
+            self.pending = {**_clar_public(req), "prompt": c.question[:400],
+                            "recommended": next((o.id for o in c.options if o.recommended), None)}
+            self._emit("clarification_requested", step_id=1, status="awaiting_clarification",
+                       summary=f"需要澄清：{c.question[:60]}",
+                       safe_payload={"request_id": rid, "question_hash": qh, "kind": c.kind,
+                                     "allow_other": c.allow_other, "reason": c.reason,
+                                     "note": c.question[:200],      # 澄清提问本体（供刷新/恢复后渲染）
+                                     "allowed_options": [{"id": o.id, "label": o.label} for o in c.options]})
+        return self
+
+    def _request_research_approval(self):
+        """审批卡内容来自 spec；批准时**冻结执行计划**（question/evidence/policy/executor）。"""
+        spec = self._spec
+        pub = spec.public_view()
+        a = spec.approval
+        self._emit("step_started", step_id=2, status="running", summary=a.action_summary[:120],
+                   safe_payload={"step_objective": "run fake research chain",
+                                 "stage_count": len(self._research_stages)})
+        # action_hash 绑定完整执行计划：任一项改变 → 旧批准失效
+        args = {"plan_hash": spec.plan_hash(), "answer_hash": self._answer_hash}
+        ah = HC.action_hash(spec.executor_id, args, a.risk_level)
+        rid = f"apr-{self.run_id}"
+        self._to("awaiting_approval")
+        req = HC.ApprovalRequest(
+            request_id=rid, run_id=self.run_id, state_version=self.state_version,
+            created_at=self._clock(), reason=a.reason, requesting_step_id=2,
+            tool_name=spec.executor_id, arguments_hash=HC.normalized_arguments_hash(args),
+            risk_level=a.risk_level, action_summary=a.action_summary,
+            expected_side_effect=a.expected_side_effect, action_hash=ah,
+            is_simulation=a.is_simulation)
+        self._pending_obj = req
+        self.pending = {**_apr_public(req), "run_type": "research",
+                        "question": pub["question"], "clarification_answer": self._answer,
+                        "evidence_count": pub["evidence_count"], "evidence_ids": pub["evidence_ids"],
+                        "executor_id": pub["executor_id"], "policy": pub["policy"],
+                        "policy_hash": pub["policy_hash"], "evidence_hash": pub["evidence_hash"],
+                        "plan_hash": pub["plan_hash"], "stages": list(self._research_stages),
+                        "expected_outputs": pub["expected_outputs"], "fixture": pub["fixture_evidence"]}
+        self._emit("approval_requested", step_id=2, status="awaiting_approval",
+                   summary=f"需要审批：{a.action_summary[:60]}",
+                   safe_payload={"request_id": rid, "action_hash": ah, "tool_name": spec.executor_id,
+                                 "arguments_hash": req.arguments_hash, "risk_level": a.risk_level,
+                                 "action_summary": a.action_summary,
+                                 "expected_side_effect": a.expected_side_effect,
+                                 "is_simulation": a.is_simulation, "reason": a.reason,
+                                 "executor_id": spec.executor_id, "policy_hash": pub["policy_hash"],
+                                 "evidence_count": pub["evidence_count"],
+                                 "question_hash": pub["question_hash"], "run_type": "research",
+                                 "stage_count": len(self._research_stages),
+                                 "fixture": pub["fixture_evidence"]})
+
+    def _freeze_plan(self):
+        """批准瞬间冻结执行计划；执行前逐项复核，任何漂移 → fail-closed。"""
+        spec = self._spec
+        return {"question_hash": spec.question_hash(), "evidence_hash": spec.evidence_hash(),
+                "policy_hash": spec.policy_hash(), "executor_id": spec.executor_id,
+                "plan_hash": spec.plan_hash(), "answer_hash": self._answer_hash}
+
+    def _assert_plan_unchanged(self):
+        if self._frozen_plan is None:
+            raise HC.ContractViolation("执行计划未冻结（未经批准不得执行）")
+        cur = self._freeze_plan()
+        for k, v in self._frozen_plan.items():
+            if cur.get(k) != v:
+                raise HC.ContractViolation(
+                    f"批准后执行计划被修改（{k}）→ 旧批准失效，拒绝执行")
+        if getattr(self._executor, "executor_id", None) != self._frozen_plan["executor_id"]:
+            raise HC.ContractViolation("executor 身份与批准时不一致 → 拒绝执行")
+
+    def _research_ctx(self):
+        from pilot.research_contracts import ResearchRunContext
+        spec = self._spec
+        return ResearchRunContext(
+            run_id=self.run_id, question=spec.question, question_hash=spec.question_hash(),
+            clarification_answer=self._answer, answer_hash=self._answer_hash,
+            evidence_refs=list(spec.evidence_refs), policy=spec.execution_policy)
+
+    def _run_research_stage(self, idx: int):
+        """执行第 idx 个阶段并原子记录（持锁调用）。阶段之间即 pause/stop 的 safe boundary。"""
+        stage = self._research_stages[idx]
+        with self._lock:
+            self._assert_plan_unchanged()
+            ctx = self._research_ctx()
+        # 阶段本体在**锁外**执行（可阻塞），期间 pause/stop 可并发到达。
+        # 先应用 run 级门控/延迟（供 UI 演示与竞态测试），再执行阶段本体。
+        self._block_inflight()
+        delta = self._executor.run_stage(stage=stage, ctx=ctx, state=dict(self._research_state), emit=None)
+        with self._lock:
+            # stale worker 防护：迟到的阶段完成不得改写终态，也不得越过已推进的游标
+            if HC.is_terminal(self.state) or self._exec_cursor != idx:
+                return False
+            self._assert_plan_unchanged()                  # 冻结计划在记录前再复核一次
+        with self._txn(None):
+            self._emit("research_stage_started", step_id=2, status="running", summary=f"stage: {stage}",
+                       safe_payload={"stage": stage, "stage_index": idx,
+                                     "stage_count": len(self._research_stages)})
+            self._research_state.update(delta or {})
+            self._stages_done.append(stage)
+            if stage in ("synthesizer", "verifier", "claim_extractor"):
+                self.tool_calls += 1                       # fake 角色调用计数（零付费）
+                self.lifecycle["requested"] += 1
+                self.lifecycle["executed"] += 1
+                self.lifecycle["tool_returned"] += 1
+            sp = {"stage": stage, "stage_index": idx, "stage_count": len(self._research_stages)}
+            if stage == "evidence_accumulator":
+                sp["evidence_count"] = self._research_state.get("evidence_count", 0)
+                self.lifecycle["observed"] += 1
+            if stage == "verifier":
+                sp["verifier_verdict"] = self._research_state.get("verifier_verdict")
+                sp["causal_tier"] = self._research_state.get("causal_tier")
+            if stage == "claim_extractor":
+                sp["claim_count"] = len(self._research_state.get("claims", []))
+            if stage == "shadow":
+                sp["shadow_verdict"] = self._research_state.get("shadow_verdict")
+            self._emit("research_stage_completed", step_id=2, status="ok",
+                       summary=f"stage done: {stage}", safe_payload=sp)
+            self._exec_cursor = idx + 1
+        return True
+
+    def _finish_research(self):
+        """所有阶段完成 → 生成唯一 Artifact + completed（持锁、原子）。"""
+        self._assert_plan_unchanged()
+        art = self._executor.build_artifact(ctx=self._research_ctx(), state=self._research_state)
+        with self._txn(None):
+            rec = {"artifact_id": f"art-{self.run_id}", "name": "research_artifact.json",
+                   "kind": "json", "size_bytes": len(art.model_dump_json()),
+                   "hash_short": art.content_hash[:8] + "…", "provenance_status": "verified",
+                   "verifier_status": art.verifier_verdict, "fixture": art.fixture}
+            self.artifacts.append(rec)
+            self._emit("artifact_created", step_id=2, summary=rec["name"],
+                       artifact_ids=[rec["artifact_id"]],
+                       safe_payload={"artifact_name": rec["name"], "artifact_kind": "json",
+                                     "size_bytes": rec["size_bytes"], "hash_short": rec["hash_short"],
+                                     "provenance_status": "verified",
+                                     "verifier_status": art.verifier_verdict,
+                                     "shadow_verdict": art.shadow_verdict,
+                                     "causal_tier": art.causal_tier,
+                                     "claim_count": len(art.claims), "fixture": art.fixture,
+                                     "is_simulation": True})
+            self._emit("step_satisfied", step_id=2, status="satisfied", summary="研究链执行完成",
+                       safe_payload={"remaining_gaps": []})
+            self.completed_steps.add(2)
+            self._to("completed")
+            self._emit("run_completed", status="completed", summary="research run completed",
+                       artifact_ids=[rec["artifact_id"]],
+                       safe_payload={"verifier_verdict": art.verifier_verdict,
+                                     "shadow_verdict": art.shadow_verdict,
+                                     "causal_tier": art.causal_tier, "fixture": art.fixture})
+
+    def _run_research_inline(self):
+        """同线程逐阶段跑完（无门控路径）。RLock 可重入，故无死锁；仍逐阶段原子记录。"""
+        while self._exec_cursor < len(self._research_stages):
+            if HC.is_terminal(self.state) or self._pause_requested:
+                return
+            if not self._run_research_stage(self._exec_cursor):
+                return
+        if not HC.is_terminal(self.state):
+            self._finish_research()
+
+    def _research_worker(self):
+        """逐阶段推进；每个阶段之间检查 pause/stop（合作式，不强杀已开始阶段）。"""
+        while True:
+            with self._lock:
+                if HC.is_terminal(self.state):
+                    self._exec_active = False
+                    return
+                if self._pause_requested and self.state in ("running", "pausing"):
+                    self._commit_paused_from_exec()
+                    self._exec_active = False
+                    return
+                idx = self._exec_cursor
+                done = idx >= len(self._research_stages)
+            if done:
+                with self._lock:
+                    if HC.is_terminal(self.state):
+                        self._exec_active = False
+                        return
+                    self._finish_research()
+                    self._exec_active = False
+                    return
+            # 阶段本体可阻塞（Event 门控）；执行后在锁内原子记录
+            with self._lock:
+                self._open_reservations = 1
+            try:
+                self._run_research_stage(idx)
+            finally:
+                with self._lock:
+                    self._open_reservations = 0
+
     # ============================ 审批：批准 ============================
     def approve(self, dec: HC.ApprovalDecision) -> dict:
         with self._lock:
@@ -251,6 +501,10 @@ class HitlRun:
             req = self._require_pending("approval", dec.request_id, dec.expected_state_version)
             if dec.action_hash != req.action_hash:       # 仅完全一致才有效
                 raise HC.ContractViolation("action_hash 不匹配（动作/参数已变化，旧批准失效，请重新申请）")
+            research = self.run_type == "research"
+            if research and (self._spec_missing or self._spec is None or self._executor is None):
+                # 恢复出的 research run 缺 spec/executor → fail-closed（不回退 demo，不回退真实模型）
+                raise HC.ContractViolation("research run 缺少 spec/executor，拒绝执行（需重新注入后再批准）")
             async_mode = self._async_exec()
             with self._txn(h, fp):
                 req.status = "granted"
@@ -259,16 +513,25 @@ class HitlRun:
                            safe_payload={"request_id": req.request_id, "action_hash": req.action_hash})
                 self.pending = None
                 self._pending_obj = None
-                self._exec_cursor = _STAGE_TOOL
-                if not async_mode:
+                self._exec_cursor = 0 if research else _STAGE_TOOL
+                if research:
+                    self._frozen_plan = self._freeze_plan()   # 批准瞬间冻结执行计划
+                if not research and not async_mode:
                     self._run_stages_inline()            # 同步：所有阶段 → completed（同一原子批）
-            if async_mode:
+            if research and async_mode:
+                self._exec_active = True                 # 有门控 → 后台 worker 分阶段推进（可暂停）
+                self._start_worker(research=True)
+            elif research:
+                self._run_research_inline()              # 无门控 → 同线程跑完（确定性，无 join 死锁）
+            elif async_mode:
                 self._exec_active = True                 # 后台 worker 驱动，approve 立即返回 running
                 self._start_worker()
             return self._cache(h, fp)
 
     def _async_exec(self) -> bool:
-        return self._exec_gate is not None or self._exec_delay_ms > 0
+        """是否需要后台 worker：本身有门控/延迟，或 executor 声明了阻塞阶段（research）。"""
+        return (self._exec_gate is not None or self._exec_delay_ms > 0
+                or bool(getattr(self._executor, "has_blocking_stages", False)))
 
     # ---------- fake 动作阶段（每段只发生一次；游标推进保证不重复） ----------
     def _emit_tool_events(self):
@@ -318,8 +581,9 @@ class HitlRun:
         self._emit_complete()
 
     # ---------- 后台 worker：执行中协作式 pause ----------
-    def _start_worker(self):
-        self._worker = threading.Thread(target=self._worker_loop, name=f"hitl-{self.run_id}", daemon=True)
+    def _start_worker(self, research: bool = False):
+        target = self._research_worker if research else self._worker_loop
+        self._worker = threading.Thread(target=target, name=f"hitl-{self.run_id}", daemon=True)
         self._worker.start()
 
     def _block_inflight(self):
@@ -461,15 +725,24 @@ class HitlRun:
             if self.state != "paused":
                 raise HC.IllegalTransition(f"只有 paused 可 resume，当前 {self.state}")
             target = self._resume_target or "running"
-            resumes_exec = (target == "running" and self._exec_cursor < _STAGE_DONE)
+            research = self.run_type == "research"
+            limit = len(self._research_stages) if research else _STAGE_DONE
+            resumes_exec = (target == "running" and self._exec_cursor < limit)
             with self._txn(h, fp):
                 self._to(target)                             # 还原到暂停前状态（含待处理请求）
                 self._resume_target = None
+                self._pause_requested = False                # resume 只恢复一次
                 self._emit("run_resumed", status=self.state, summary="run resumed",
                            safe_payload={"phase": self.state, "resume_cursor": self._exec_cursor})
-                if resumes_exec and not self._async_exec():
+                if resumes_exec and not research and not self._async_exec():
                     self._run_stages_inline()                # 恢复后（无 gate）同步跑完剩余阶段
-            if resumes_exec and self._async_exec():
+            if resumes_exec and research:
+                if self._async_exec():
+                    self._exec_active = True
+                    self._start_worker(research=True)        # 从游标继续，不重复已完成阶段
+                else:
+                    self._run_research_inline()
+            elif resumes_exec and self._async_exec():
                 self._exec_active = True
                 self._start_worker()                         # 从 self._exec_cursor 继续，不重复已完成阶段
             return self._cache(h, fp)
@@ -520,16 +793,36 @@ class HitlRun:
         return snap
 
     def snapshot(self) -> dict:
-        return {"run_id": self.run_id, "control_state": self.state,
+        snap = {"run_id": self.run_id, "control_state": self.state,
                 "state_version": self.state_version, "pending": self.pending,
                 "tool_calls": self.tool_calls, "artifact_count": len(self.artifacts),
                 "open_reservations": self._open_reservations, "lifecycle": dict(self.lifecycle),
-                "needs_human_review": self.needs_human_review}
+                "needs_human_review": self.needs_human_review, "run_type": self.run_type}
+        if self.run_type == "research":
+            stages = list(self._research_stages)
+            idx = int(self._exec_cursor)
+            snap["research"] = {
+                "executor_id": (self._frozen_plan or {}).get("executor_id")
+                               or (self._spec.executor_id if self._spec else None),
+                "stages": stages, "stages_done": list(self._stages_done),
+                "current_stage": stages[idx] if 0 <= idx < len(stages) else None,
+                "stage_index": idx, "stage_count": len(stages),
+                "question_hash": (self._frozen_plan or {}).get("question_hash"),
+                "policy_hash": (self._frozen_plan or {}).get("policy_hash"),
+                "plan_frozen": self._frozen_plan is not None,
+                "answer": self._answer, "answer_hash": self._answer_hash,
+                "verifier_verdict": self._research_state.get("verifier_verdict"),
+                "shadow_verdict": self._research_state.get("shadow_verdict"),
+                "causal_tier": self._research_state.get("causal_tier"),
+                "claim_count": len(self._research_state.get("claims", [])),
+                "fixture": True}
+        return snap
 
     # ============================ 从持久化事件恢复（§2） ============================
     @classmethod
     def recover(cls, run_id: str, event_store, *, clock=now,
-                exec_delay_ms: int = 0, exec_gate: Optional[threading.Event] = None) -> "HitlRun":
+                exec_delay_ms: int = 0, exec_gate: Optional[threading.Event] = None,
+                spec=None, executor=None) -> "HitlRun":
         """用**新对象**仅凭 append-only 事件重建完整控制状态（新进程/新 RunManager 可用）。
 
         任何损坏都 fail-closed（RecoveryError）：截断 JSON、content_hash 不一致、未知 schema、
@@ -544,7 +837,15 @@ class HitlRun:
             raise RecoveryError(f"事件日志损坏/截断/未知 schema（human_review）：{str(e)[:120]}") from e
         if not events:
             raise RecoveryError(f"无事件可恢复：{run_id}")
-        r = cls(run_id, event_store, clock=clock, exec_delay_ms=exec_delay_ms, exec_gate=exec_gate)
+        r = cls(run_id, event_store, clock=clock, exec_delay_ms=exec_delay_ms, exec_gate=exec_gate,
+                spec=spec, executor=executor)
+        # 旧事件没有 run_type → 按既有 demo/legacy 安全处理（绝不擅自升级为 research）
+        first_sp = events[0].safe_payload if events else {}
+        if first_sp.get("run_type") == "research":
+            r.run_type = "research"
+            if executor is not None:
+                r._research_stages = tuple(getattr(executor, "stages", ()) or ())
+            r._spec_missing = spec is None or executor is None   # 缺 spec → 只恢复状态，不得继续执行
         expected_seq = 0
         prev_version = -1
         terminal_seen = False
@@ -604,13 +905,21 @@ class HitlRun:
                 allow_other=bool(sp.get("allow_other", False)))
             self._pending_obj = req
             self.pending = _clar_public(req)
+            if sp.get("note"):                       # research：恢复澄清提问本体
+                self.pending["prompt"] = sp["note"]
         elif et == "clarification_answered":
             ans = str(sp.get("answer", ""))
             self._answer = ans.split(",")[0] if ans and not ans.startswith("其他：") else \
                 ans.replace("其他：", "") or self._answer
+            self._answer_hash = sp.get("answer_hash") or self._answer_hash
             self.pending = None
             self._pending_obj = None
         elif et == "approval_requested":
+            if sp.get("executor_id"):        # research：记录批准时的冻结计划，供恢复后复核
+                self._recovered_plan = {"executor_id": sp.get("executor_id"),
+                                        "policy_hash": sp.get("policy_hash"),
+                                        "question_hash": sp.get("question_hash"),
+                                        "answer_hash": self._answer_hash}
             req = HC.ApprovalRequest(
                 request_id=sp.get("request_id"), run_id=self.run_id,
                 state_version=int(sp.get("state_version", self.state_version)),
@@ -624,9 +933,30 @@ class HitlRun:
             self.pending = _apr_public(req)
         elif et in ("approval_granted", "approval_denied"):
             if et == "approval_granted":
-                self._exec_cursor = _STAGE_TOOL
+                # research 从阶段 0 开始；demo 保持原 _STAGE_TOOL 语义
+                self._exec_cursor = 0 if self.run_type == "research" else _STAGE_TOOL
+                if self.run_type == "research" and self._frozen_plan is None:
+                    self._frozen_plan = dict(self._recovered_plan or {})   # 恢复冻结计划
             self.pending = None
             self._pending_obj = None
+        elif et == "research_stage_completed":
+            stage = sp.get("stage")
+            if stage:
+                self._stages_done.append(stage)
+            if sp.get("stage_index") is not None:
+                self._exec_cursor = int(sp["stage_index"]) + 1
+            for k in ("verifier_verdict", "causal_tier", "shadow_verdict", "evidence_count"):
+                if sp.get(k) is not None:
+                    self._research_state[k] = sp[k]
+            if sp.get("claim_count") is not None:
+                self._research_state["claim_count"] = sp["claim_count"]
+            if stage in ("synthesizer", "verifier", "claim_extractor"):
+                self.tool_calls += 1
+                self.lifecycle["requested"] += 1
+                self.lifecycle["executed"] += 1
+                self.lifecycle["tool_returned"] += 1
+            if stage == "evidence_accumulator":
+                self.lifecycle["observed"] += 1
         elif et == "tool_started":
             self.tool_calls += 1
             self.lifecycle["requested"] += 1

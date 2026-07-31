@@ -38,6 +38,14 @@ class _Handle:
         self.thread = None
 
 
+def _register_builtin_executors():
+    """服务端注册内置（零付费 fake）研究执行器。客户端只能按 ID 选择，不能注入对象。"""
+    from pilot.research_contracts import register_executor, registered_executor_ids
+    from pilot.fake_research_executor import FakeResearchExecutor, EXECUTOR_ID
+    if EXECUTOR_ID not in registered_executor_ids():
+        register_executor(FakeResearchExecutor())
+
+
 class RunManager:
     """管理离线 demo run 的执行与协作式停止（后台线程仅在 step_delay>0 时创建）。"""
 
@@ -46,7 +54,9 @@ class RunManager:
         self._handles: dict[str, _Handle] = {}
         self._meta: dict[str, dict] = {}          # run_id -> desensitized canary meta
         self._hitl: dict[str, object] = {}        # run_id -> HitlRun (human-in-the-loop)
+        self._specs: dict[str, tuple] = {}        # run_id -> (ResearchRunSpec, executor)：仅内存，不入事件
         self._lock = threading.Lock()
+        _register_builtin_executors()
 
     def start_hitl(self, exec_delay_ms: int = 0) -> str:
         """创建一个确定性 fake 人机协作运行（跑到第一个澄清点）。
@@ -63,15 +73,38 @@ class RunManager:
         run.start()
         return run_id
 
+    def start_research(self, executor_id: str, *, question: str = None, exec_delay_ms: int = 0) -> str:
+        """创建 research run：客户端只能提交**已注册的 executor ID**（未注册 → fail-closed）。
+
+        spec 由服务端按 executor 构造；客户端不能注入执行器对象、模型对象或 worker generation。
+        """
+        from pilot.hitl import HitlRun
+        from pilot.research_contracts import get_executor
+        from pilot.fake_research_executor import build_default_spec
+        executor = get_executor(executor_id)              # 未注册 → ExecutorNotRegistered
+        spec = build_default_spec(question=question, executor_id=executor_id)
+        run_id = "hitl-research-" + uuid.uuid4().hex[:8]
+        with self._lock:
+            self._handles[run_id] = _Handle()
+            run = HitlRun(run_id, self.store, spec=spec, executor=executor,
+                          exec_delay_ms=exec_delay_ms)
+            self._hitl[run_id] = run
+            self._specs[run_id] = (spec, executor)        # 供重启后重新注入（不写入事件）
+        run.start()
+        return run_id
+
     def hitl(self, run_id: str):
         """返回内存中的 HITL run；若不在内存但持久化日志存在 → 用新对象**恢复**（新进程/新 RunManager）。"""
         with self._lock:
             hr = self._hitl.get(run_id)
             if hr is not None:
                 return hr
+            spec_pair = self._specs.get(run_id)
         if str(run_id).startswith("hitl-") and self.store.exists(run_id):
             from pilot.hitl import HitlRun
-            recovered = HitlRun.recover(run_id, self.store)   # 损坏/断裂 → RecoveryError（调用方转 409）
+            spec, executor = spec_pair if spec_pair else (None, None)
+            # 损坏/断裂 → RecoveryError（调用方转 409）；缺 spec 的 research run 只恢复状态、不得执行
+            recovered = HitlRun.recover(run_id, self.store, spec=spec, executor=executor)
             with self._lock:
                 self._hitl.setdefault(run_id, recovered)
                 return self._hitl[run_id]
@@ -215,6 +248,55 @@ def create_app(store=None, manager=None) -> Starlette:
         exec_delay_ms = max(0, min(exec_delay_ms, 5000))   # 上限，防滥用
         run_id = manager.start_hitl(exec_delay_ms=exec_delay_ms)
         return JSONResponse({"run_id": run_id, "hitl": True}, status_code=201)
+
+    async def list_executors(request):
+        from pilot.research_contracts import registered_executor_ids
+        return JSONResponse({"executors": registered_executor_ids()})
+
+    async def create_research_run(request):
+        """只接受契约字段：executor_id（必须已注册）+ 可选 question / exec_delay_ms。"""
+        from pilot.research_contracts import ExecutorNotRegistered, ResearchContractError
+        try:
+            body = await request.json()
+        except Exception:                            # noqa: BLE001
+            body = {}
+        if not isinstance(body, dict):
+            return _bad("body must be an object")
+        allowed = {"executor_id", "question", "exec_delay_ms"}
+        unknown = set(body) - allowed
+        if unknown:                                  # 未知字段（含注入内部对象的尝试）→ fail-closed
+            return _bad(f"unknown fields: {sorted(unknown)}", 400)
+        executor_id = body.get("executor_id")
+        if not isinstance(executor_id, str) or not executor_id:
+            return _bad("executor_id is required (string)", 400)
+        question = body.get("question")
+        if question is not None and not isinstance(question, str):
+            return _bad("question must be a string", 400)
+        try:
+            delay = max(0, min(int(body.get("exec_delay_ms", 0) or 0), 5000))
+        except (TypeError, ValueError):
+            return _bad("exec_delay_ms must be an integer", 400)
+        try:
+            run_id = manager.start_research(executor_id, question=question, exec_delay_ms=delay)
+        except ExecutorNotRegistered as e:
+            return _bad(str(e), 400)                 # 未注册 executor → 不启动，不回退
+        except (ResearchContractError, ValueError) as e:
+            return _bad(f"invalid research spec: {str(e)[:200]}", 400)
+        return JSONResponse({"run_id": run_id, "hitl": True, "run_type": "research",
+                             "executor_id": executor_id}, status_code=201)
+
+    async def list_artifacts(request):
+        from pilot.hitl import RecoveryError
+        run_id = request.path_params["run_id"]
+        if not store.exists(run_id):
+            return _bad("run not found", 404)
+        try:
+            hr = manager.hitl(run_id)
+        except RecoveryError as e:
+            return JSONResponse({"error": f"恢复失败，需人工审查：{e}", "conflict": True,
+                                 "human_review": True}, status_code=409)
+        arts = list(getattr(hr, "artifacts", [])) if hr is not None else []
+        return JSONResponse({"run_id": run_id, "artifacts": arts, "count": len(arts)})
 
     async def get_run(request):
         from pilot.hitl import RecoveryError
@@ -360,6 +442,9 @@ def create_app(store=None, manager=None) -> Starlette:
         Route("/api/demo-runs", create_demo_run, methods=["POST"]),
         Route("/api/canary-runs", create_canary_run, methods=["POST"]),
         Route("/api/hitl-runs", create_hitl_run, methods=["POST"]),
+        Route("/api/research-executors", list_executors, methods=["GET"]),
+        Route("/api/research-runs", create_research_run, methods=["POST"]),
+        Route("/api/runs/{run_id}/artifacts", list_artifacts, methods=["GET"]),
         Route("/api/runs/{run_id}", get_run, methods=["GET"]),
         Route("/api/runs/{run_id}/events", get_events, methods=["GET"]),
         Route("/api/runs/{run_id}/events/stream", stream_events, methods=["GET"]),

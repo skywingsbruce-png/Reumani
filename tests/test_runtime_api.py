@@ -241,6 +241,77 @@ def test_hitl_api_recovers_across_restart(tmp_path):
     assert len(c2.get(f"/api/runs/{rid}/events").json()["events"]) == n
 
 
+# ---- A.7.5.3 §11：research run API（共用同一控制核心，不复制状态机） ----
+def _research_start(client, **body):
+    body.setdefault("executor_id", "fake-research-v1")
+    r = client.post("/api/research-runs", json=body)
+    assert r.status_code == 201, r.text
+    rid = r.json()["run_id"]
+    return rid, client.get(f"/api/runs/{rid}").json()["control"]
+
+
+def test_research_executors_listed(client):
+    ex = client.get("/api/research-executors").json()["executors"]
+    assert "fake-research-v1" in ex
+
+
+def test_research_run_full_flow_zero_calls_before_approval(client):
+    rid, ctl = _research_start(client)
+    assert ctl["run_type"] == "research" and ctl["control_state"] == "awaiting_clarification"
+    assert ctl["tool_calls"] == 0
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    ctl = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                      json={"expected_state_version": v, "idempotency_key": "a",
+                            "selected_option_ids": ["strict_causal"]}).json()["control"]
+    assert ctl["control_state"] == "awaiting_approval" and ctl["tool_calls"] == 0   # 批准前 0 调用
+    p = ctl["pending"]
+    assert p["executor_id"] == "fake-research-v1" and p["evidence_count"] == 3
+    assert p["policy"]["allow_network"] is False and p["policy"]["allow_planner"] is False
+    ra = client.post(f"/api/runs/{rid}/approvals/{p['request_id']}/approve",
+                     json={"expected_state_version": ctl["state_version"], "idempotency_key": "ap",
+                           "action_hash": p["action_hash"]})
+    c = ra.json()["control"]
+    assert c["control_state"] == "completed"
+    assert c["research"]["stages_done"] == list(c["research"]["stages"])
+    assert c["research"]["verifier_verdict"] == "insufficient_evidence"
+    assert c["research"]["causal_tier"] == "insufficient_for_direct_causality"
+    arts = client.get(f"/api/runs/{rid}/artifacts").json()
+    assert arts["count"] == 1 and arts["artifacts"][0]["fixture"] is True
+    types = [e["event_type"] for e in client.get(f"/api/runs/{rid}/events").json()["events"]]
+    assert types.count("research_stage_completed") == 8 and types.count("artifact_created") == 1
+
+
+def test_research_unknown_executor_rejected(client):
+    r = client.post("/api/research-runs", json={"executor_id": "totally-unknown"})
+    assert r.status_code == 400 and "未注册" in r.json()["error"]
+
+
+def test_research_unknown_field_rejected(client):
+    r = client.post("/api/research-runs", json={"executor_id": "fake-research-v1",
+                                                "model_client": {"provider": "anthropic"}})
+    assert r.status_code == 400                       # 客户端不得注入内部对象
+
+
+def test_research_oversized_question_rejected(client):
+    r = client.post("/api/research-runs", json={"executor_id": "fake-research-v1",
+                                                "question": "x" * 5000})
+    assert r.status_code == 400
+
+
+def test_research_deny_produces_no_artifact(client):
+    rid, ctl = _research_start(client)
+    req, v = ctl["pending"]["request_id"], ctl["state_version"]
+    ctl = client.post(f"/api/runs/{rid}/clarifications/{req}/answer",
+                      json={"expected_state_version": v, "idempotency_key": "a",
+                            "selected_option_ids": ["association_only"]}).json()["control"]
+    p = ctl["pending"]
+    c = client.post(f"/api/runs/{rid}/approvals/{p['request_id']}/deny",
+                    json={"expected_state_version": ctl["state_version"], "idempotency_key": "d",
+                          "action_hash": p["action_hash"]}).json()["control"]
+    assert c["control_state"] == "stopped" and c["tool_calls"] == 0
+    assert client.get(f"/api/runs/{rid}/artifacts").json()["count"] == 0
+
+
 def test_serve_rejects_multi_worker():
     # 单进程单 worker 边界：多 worker 显式拒绝（内存锁不跨进程，不伪装跨进程原子）
     from pilot.runtime_api import serve

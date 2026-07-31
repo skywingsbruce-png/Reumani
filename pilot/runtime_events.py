@@ -30,6 +30,8 @@ EventType = Literal[
     "clarification_requested", "clarification_answered",
     "approval_requested", "approval_granted", "approval_denied",
     "pause_requested", "run_paused", "run_resumed",
+    # A.7.5.3 parameterized research-run stages
+    "research_stage_started", "research_stage_completed",
     "run_completed", "run_failed", "run_stopped",
 ]
 EVENT_TYPES: frozenset = frozenset(EventType.__args__)  # type: ignore[attr-defined]
@@ -52,6 +54,10 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "idempotency_hash", "resume_cursor",
     # A.7.5.1.1 idempotency payload binding (stable request fingerprint hash only)
     "request_fingerprint",
+    # A.7.5.3 research-run bridge (desensitized metadata + stable hashes only)
+    "run_type", "stage", "stage_index", "stage_count", "executor_id", "policy_hash",
+    "evidence_count", "answer_hash", "causal_tier", "verifier_verdict", "shadow_verdict",
+    "claim_count", "fixture",
 })
 # 明令禁止出现的敏感键子串（即便被误放进白名单外，也在校验层再兜底）
 _FORBIDDEN_SUBSTRINGS = ("prompt", "api_key", "apikey", "authorization", "auth_header",
