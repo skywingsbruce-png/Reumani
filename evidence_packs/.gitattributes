@@ -1,0 +1,4 @@
+# Evidence-pack artifacts are hash-verified byte-for-byte (SHA-256 over file bytes).
+# Any end-of-line conversion on checkout would change those bytes and break verification
+# on some platforms while passing on others. Keep every file here exactly as committed.
+* -text
