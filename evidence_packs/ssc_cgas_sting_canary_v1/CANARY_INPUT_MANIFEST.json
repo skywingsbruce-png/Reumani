@@ -1,0 +1,53 @@
+{
+  "schema_version": "canary-input-manifest-v1",
+  "source_pack_id": "ssc_cgas_sting_v1",
+  "source_pack_hash": "9df9ac40181cb25b9018448154f8b4502845337ee678d1dd39abf0cdd26676f5",
+  "protocol_hash": "24ad37a634b094cc82dc54dd7f69e376a39f777a79b1c658b3f510f4dec5a7a0",
+  "audit_date": "2026-08-01",
+  "selected_card_ids": [
+    "SSCCGAS-40374521",
+    "SSCCGAS-36400785",
+    "SSCCGAS-39827047",
+    "SSCCGAS-38474239",
+    "SSCCGAS-41888792",
+    "SSCCGAS-38026177"
+  ],
+  "selected_card_hashes": {
+    "SSCCGAS-40374521": "9499e72a7bb01fffa13c29ca0a800392a95dc9a9f1fed2376c6bbaf59a8e8561",
+    "SSCCGAS-36400785": "2817e435090cba4bd59a32d2a682551a5dfcd8dc5d69def2214df6c4bfdb5cc1",
+    "SSCCGAS-39827047": "750214c5c9bb7ada5658dd1f1801a1b31a876849b45c1bedbbd883dcec75649e",
+    "SSCCGAS-38474239": "32ddfef44121117b74401f39e7286d62ef98d04b4101f5d6f6884057ecedd015",
+    "SSCCGAS-41888792": "9e18878ce9eddd9977fab0a40d8b2c99c65b7157d978dbe8ee58e8e5fc457e8b",
+    "SSCCGAS-38026177": "10651a7cf27998e80263f14fe3309e8d2d055bd0b900ef6b11471b28cf81ce81"
+  },
+  "counts_by_scope": {
+    "systemic_sclerosis_direct": 3,
+    "non_ssc_mechanistic_transfer": 3
+  },
+  "counts_by_causal_tier": {
+    "C1": 2,
+    "C3": 2,
+    "C4": 2
+  },
+  "support_count": 4,
+  "contradiction_or_limitation_count": 6,
+  "downgraded_count": 2,
+  "preprint_count": 0,
+  "context_only_count": 2,
+  "manual_review_excluded_count": 12,
+  "direct_human_causal_count": 0,
+  "evidence_gap": {
+    "c5_human_interventional": 0,
+    "longitudinal_ssc_direct": 0,
+    "note": "No C5 human-interventional and no longitudinal SSc-direct record was found by the frozen queries. This is a GAP, not proof that such evidence does not exist."
+  },
+  "declarations": [
+    "All selected evidence is ABSTRACT-LEVEL; this is not full-text verification.",
+    "Absence of a C5 record does NOT prove such evidence does not exist.",
+    "Non-SSc mechanistic evidence can NEVER be extrapolated to SSc direct causality.",
+    "Reviews are context-only, are not primary results, and do not affect any causal tier.",
+    "The final scientific conclusion is decided by the downstream Verifier, not by this subset."
+  ],
+  "paid_llm_calls": 0,
+  "subset_hash": "7430fcbd4c3d1e8f1eb5f37b11f0b3ec0ea146eb6fe020f0e9812f57d9375312"
+}

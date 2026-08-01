@@ -1,0 +1,9 @@
+{
+  "schema_version": "canary-source-reference-v1",
+  "source_pack_id": "ssc_cgas_sting_v1",
+  "source_pack_path": "evidence_packs/ssc_cgas_sting_v1",
+  "source_pack_hash": "9df9ac40181cb25b9018448154f8b4502845337ee678d1dd39abf0cdd26676f5",
+  "protocol_hash": "24ad37a634b094cc82dc54dd7f69e376a39f777a79b1c658b3f510f4dec5a7a0",
+  "queries_hash": "15c1955805a70c7e198c168c7d6b1a55cd877304c9e58f97880c4f7cc5fddb78",
+  "note": "This subset REFERENCES the v1 cards by evidence_id + content_hash and adds an audit overlay. Original cards are never copied-and-edited or overwritten."
+}
