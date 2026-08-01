@@ -20,6 +20,7 @@ A.7.5.1 加固（只修控制层，不新增科研功能）：
 
 from __future__ import annotations
 
+import re
 import threading
 from contextlib import contextmanager
 from typing import Optional
@@ -42,6 +43,29 @@ class RecoveryError(RuntimeError):
 def idem_hash(key: str) -> str:
     """idempotency_key 的稳定 hash（事件只存此 hash，不存原始 key）。"""
     return compute_hash({"idem": str(key)})
+
+
+ERROR_SUMMARY_MAX = 200
+
+
+# 机密样式（异常正文里可能夹带 key/token/凭据）→ 一律打码后才允许进入持久化事件
+_SECRET_PATTERNS = (
+    r"(?i)\b(?:sk|pk|rk|ghp|gho|xox[baprs])-[A-Za-z0-9_\-]{4,}",          # 常见 key 前缀
+    r"(?i)\bbearer\s+[A-Za-z0-9._\-]{4,}",                                # Authorization: Bearer
+    r"(?i)\b(?:api[_-]?key|apikey|token|secret|password|passwd|pwd|credential)"
+    r"\s*[:=]\s*\"?'?[^\s\"']{3,}",                                       # k=v 形式
+    r"\b[A-Za-z0-9+/]{32,}={0,2}\b",                                      # 长 base64 样式串
+)
+
+
+def _safe_error(err: BaseException) -> str:
+    """脱敏错误摘要：单行、有限长；**不含** traceback / 路径 / key / Prompt / 模型正文。"""
+    msg = " ".join(str(err).split())
+    # 绝对路径片段（Windows 盘符 / POSIX 家目录）
+    msg = re.sub(r"[A-Za-z]:\\[^\s]*|/(?:home|Users)/[^\s]*", "<path>", msg)
+    for pat in _SECRET_PATTERNS:                       # 机密样式打码
+        msg = re.sub(pat, "<redacted>", msg)
+    return msg[:ERROR_SUMMARY_MAX]
 
 
 def request_fingerprint(kind: str, payload: dict) -> str:
@@ -86,6 +110,12 @@ class HitlRun:
         self._frozen_plan: Optional[dict] = None      # Approval 时冻结的执行计划
         self._spec_missing = False                    # 恢复出的 research run 缺 spec/executor → 不得执行
         self._recovered_plan: Optional[dict] = None   # 恢复期从 approval_requested 还原的冻结计划
+        self._worker_generation = 0                   # 服务端产生的 worker 代次（客户端不可指定）
+        self.primary_failure: Optional[dict] = None   # 首个失败（脱敏），不被次级失败覆盖
+        self.secondary_failure: Optional[dict] = None # 记录失败但绝不覆盖 primary
+        self.failure_manifest: Optional[dict] = None  # research-failure-v1 诊断产物（claims=[]）
+        self._inflight_stage: Optional[str] = None    # 恢复期：已 started 未收敛的阶段
+        self.interrupted_stage: Optional[str] = None  # 恢复出的"不确定在途阶段"（需人工审查）
 
         self.state: str = "running"
         self.state_version: int = 0
@@ -378,25 +408,49 @@ class HitlRun:
             clarification_answer=self._answer, answer_hash=self._answer_hash,
             evidence_refs=list(spec.evidence_refs), policy=spec.execution_policy)
 
-    def _run_research_stage(self, idx: int):
-        """执行第 idx 个阶段并原子记录（持锁调用）。阶段之间即 pause/stop 的 safe boundary。"""
+    # ---------- 统一阶段边界：锁内校验+落 started → 锁外执行 → 锁内收敛 ----------
+    def _run_research_stage(self, idx: int, generation: int):
+        """执行第 idx 个阶段。返回 'ok' / 'discarded' / 'paused' / 'failed'。
+
+        锁内先持久化 `research_stage_started`（供恢复期识别"不确定的在途阶段"），
+        阶段本体在锁外执行（Pause/Stop 可并发到达），返回后再在锁内收敛。
+        """
         stage = self._research_stages[idx]
         with self._lock:
+            if not self._worker_valid(generation) or self._exec_cursor != idx:
+                return "discarded"
             self._assert_plan_unchanged()
             ctx = self._research_ctx()
-        # 阶段本体在**锁外**执行（可阻塞），期间 pause/stop 可并发到达。
-        # 先应用 run 级门控/延迟（供 UI 演示与竞态测试），再执行阶段本体。
-        self._block_inflight()
-        delta = self._executor.run_stage(stage=stage, ctx=ctx, state=dict(self._research_state), emit=None)
+            snapshot_state = dict(self._research_state)
+            with self._txn(None):
+                self._emit("research_stage_started", step_id=2, status="running",
+                           summary=f"stage: {stage}",
+                           safe_payload={"stage": stage, "stage_index": idx,
+                                         "stage_count": len(self._research_stages),
+                                         "worker_generation": generation})
+        # ---------- 锁外执行阶段本体；异常不得逃逸成未处理线程异常 ----------
+        try:
+            delta = self._executor.run_stage(stage=stage, ctx=ctx, state=snapshot_state, emit=None)
+            err = None
+        except BaseException as e:                      # noqa: BLE001 — 一律收敛为 fail-closed
+            delta, err = None, e
         with self._lock:
-            # stale worker 防护：迟到的阶段完成不得改写终态，也不得越过已推进的游标
-            if HC.is_terminal(self.state) or self._exec_cursor != idx:
-                return False
-            self._assert_plan_unchanged()                  # 冻结计划在记录前再复核一次
+            # stale worker / 终态防护：迟到结果不得改写已提交的终态
+            if not self._worker_valid(generation) or self._exec_cursor != idx:
+                return "discarded"
+            if err is not None:
+                self._commit_stage_failure(stage, idx, err, generation)
+                return "failed"
+            self._assert_plan_unchanged()               # 冻结计划在记录前再复核一次
+            self._commit_stage_success(stage, idx, delta, generation)
+            if self._pause_requested and self.state in ("running", "pausing"):
+                self._commit_paused_from_exec()         # 当前阶段已安全提交后才进入 paused
+                return "paused"
+        return "ok"
+
+    def _commit_stage_success(self, stage, idx, delta, generation):
+        """持锁：原子记录阶段成功并推进游标（每阶段只发生一次）。"""
         with self._txn(None):
-            self._emit("research_stage_started", step_id=2, status="running", summary=f"stage: {stage}",
-                       safe_payload={"stage": stage, "stage_index": idx,
-                                     "stage_count": len(self._research_stages)})
             self._research_state.update(delta or {})
             self._stages_done.append(stage)
             if stage in ("synthesizer", "verifier", "claim_extractor"):
@@ -404,7 +458,8 @@ class HitlRun:
                 self.lifecycle["requested"] += 1
                 self.lifecycle["executed"] += 1
                 self.lifecycle["tool_returned"] += 1
-            sp = {"stage": stage, "stage_index": idx, "stage_count": len(self._research_stages)}
+            sp = {"stage": stage, "stage_index": idx, "stage_count": len(self._research_stages),
+                  "worker_generation": generation}
             if stage == "evidence_accumulator":
                 sp["evidence_count"] = self._research_state.get("evidence_count", 0)
                 self.lifecycle["observed"] += 1
@@ -418,7 +473,54 @@ class HitlRun:
             self._emit("research_stage_completed", step_id=2, status="ok",
                        summary=f"stage done: {stage}", safe_payload=sp)
             self._exec_cursor = idx + 1
-        return True
+
+    def _commit_stage_failure(self, stage, idx, err, generation):
+        """持锁：阶段异常 → research_stage_failed + run_failed（fail-closed，不产成功产物）。"""
+        self.primary_failure = {"failed_stage": stage, "stage_index": idx,
+                                "error_type": type(err).__name__,
+                                "error_summary": _safe_error(err),
+                                "worker_generation": generation,
+                                "completed_stages": list(self._stages_done)}
+        sp = {"stage": stage, "stage_index": idx, "stage_count": len(self._research_stages),
+              "failed_stage": stage, "error_type": type(err).__name__,
+              "error_summary": _safe_error(err), "worker_generation": generation,
+              "completed_stage_count": len(self._stages_done), "human_review": True}
+        try:
+            with self._txn(None):
+                self._emit("research_stage_failed", step_id=2, status="failed",
+                           summary=f"stage failed: {stage}", safe_payload=sp)
+                self.needs_human_review = True
+                self.pending = None
+                self._pending_obj = None
+                self._to("failed")
+                self._emit("run_failed", status="failed", summary="research run failed",
+                           safe_payload={"failed_stage": stage, "error_type": type(err).__name__,
+                                         "error_summary": _safe_error(err), "human_review": True,
+                                         "completed_stage_count": len(self._stages_done)})
+        except BaseException as sink_err:                # noqa: BLE001 — 次级失败不得覆盖 primary
+            self.secondary_failure = {"where": "persist_failure_events",
+                                      "error_type": type(sink_err).__name__,
+                                      "error_summary": _safe_error(sink_err)}
+            self.needs_human_review = True
+        self._build_failure_manifest()                   # 诊断产物；写失败只作为 secondary
+
+    def _build_failure_manifest(self):
+        """失败诊断 Manifest（claims=[]，不新增证据，绝不冒充科研成功产物）。"""
+        try:
+            from pilot.research_contracts import ResearchFailureManifest
+            pf = self.primary_failure or {}
+            m = ResearchFailureManifest(
+                run_id=self.run_id, failed_stage=pf.get("failed_stage", "unknown"),
+                error_type=pf.get("error_type", "unknown"),
+                error_summary=pf.get("error_summary", ""),
+                completed_stages=list(pf.get("completed_stages", [])),
+                evidence_count=len(self._spec.evidence_refs) if self._spec else 0,
+                worker_generation=int(pf.get("worker_generation", 0))).finalize()
+            self.failure_manifest = m.model_dump(mode="json")
+        except BaseException as e:                       # noqa: BLE001
+            self.secondary_failure = self.secondary_failure or {
+                "where": "failure_manifest", "error_type": type(e).__name__,
+                "error_summary": _safe_error(e)}
 
     def _finish_research(self):
         """所有阶段完成 → 生成唯一 Artifact + completed（持锁、原子）。"""
@@ -450,45 +552,48 @@ class HitlRun:
                                      "shadow_verdict": art.shadow_verdict,
                                      "causal_tier": art.causal_tier, "fixture": art.fixture})
 
-    def _run_research_inline(self):
-        """同线程逐阶段跑完（无门控路径）。RLock 可重入，故无死锁；仍逐阶段原子记录。"""
-        while self._exec_cursor < len(self._research_stages):
-            if HC.is_terminal(self.state) or self._pause_requested:
-                return
-            if not self._run_research_stage(self._exec_cursor):
-                return
-        if not HC.is_terminal(self.state):
-            self._finish_research()
+    def _worker_valid(self, generation: int) -> bool:
+        """持锁调用：该 worker 是否仍是唯一有效的执行者（generation 未被取代且未进入终态）。"""
+        return generation == self._worker_generation and not HC.is_terminal(self.state)
 
-    def _research_worker(self):
-        """逐阶段推进；每个阶段之间检查 pause/stop（合作式，不强杀已开始阶段）。"""
-        while True:
-            with self._lock:
-                if HC.is_terminal(self.state):
-                    self._exec_active = False
-                    return
-                if self._pause_requested and self.state in ("running", "pausing"):
-                    self._commit_paused_from_exec()
-                    self._exec_active = False
-                    return
-                idx = self._exec_cursor
-                done = idx >= len(self._research_stages)
-            if done:
+    def _research_worker(self, generation: int):
+        """逐阶段推进；每阶段之间是 pause/stop 的安全边界。异常一律收敛，不逃逸出线程。"""
+        try:
+            while True:
                 with self._lock:
-                    if HC.is_terminal(self.state):
-                        self._exec_active = False
+                    if not self._worker_valid(generation):
                         return
-                    self._finish_research()
-                    self._exec_active = False
+                    if self._pause_requested and self.state in ("running", "pausing"):
+                        self._commit_paused_from_exec()
+                        return
+                    idx = self._exec_cursor
+                    if idx >= len(self._research_stages):
+                        try:
+                            self._finish_research()
+                        except BaseException as e:       # noqa: BLE001 — 收尾失败同样 fail-closed
+                            self._commit_stage_failure("artifact_builder",
+                                                       len(self._research_stages) - 1, e, generation)
+                        return
+                    self._open_reservations = 1
+                try:
+                    outcome = self._run_research_stage(idx, generation)
+                finally:
+                    with self._lock:
+                        self._open_reservations = 0
+                if outcome in ("failed", "paused", "discarded"):
                     return
-            # 阶段本体可阻塞（Event 门控）；执行后在锁内原子记录
-            with self._lock:
-                self._open_reservations = 1
+        except BaseException as e:                       # noqa: BLE001 — 最后兜底，绝不产生未处理线程异常
             try:
-                self._run_research_stage(idx)
-            finally:
                 with self._lock:
-                    self._open_reservations = 0
+                    if self._worker_valid(generation):
+                        self._commit_stage_failure("worker", self._exec_cursor, e, generation)
+            except BaseException:                        # noqa: BLE001
+                pass
+        finally:
+            with self._lock:
+                if generation == self._worker_generation:
+                    self._exec_active = False
+                    self._worker = None                  # 清理引用，不留悬挂 worker
 
     # ============================ 审批：批准 ============================
     def approve(self, dec: HC.ApprovalDecision) -> dict:
@@ -518,11 +623,10 @@ class HitlRun:
                     self._frozen_plan = self._freeze_plan()   # 批准瞬间冻结执行计划
                 if not research and not async_mode:
                     self._run_stages_inline()            # 同步：所有阶段 → completed（同一原子批）
-            if research and async_mode:
-                self._exec_active = True                 # 有门控 → 后台 worker 分阶段推进（可暂停）
-                self._start_worker(research=True)
-            elif research:
-                self._run_research_inline()              # 无门控 → 同线程跑完（确定性，无 join 死锁）
+            if research:
+                # A.7.5.3.1：research run **始终异步**——与 gate / delay / executor 声明无关。
+                # approve() 在此立即返回 running，8 个阶段由后台 worker 顺序推进。
+                self._start_research_worker()
             elif async_mode:
                 self._exec_active = True                 # 后台 worker 驱动，approve 立即返回 running
                 self._start_worker()
@@ -582,9 +686,31 @@ class HitlRun:
 
     # ---------- 后台 worker：执行中协作式 pause ----------
     def _start_worker(self, research: bool = False):
-        target = self._research_worker if research else self._worker_loop
-        self._worker = threading.Thread(target=target, name=f"hitl-{self.run_id}", daemon=True)
+        if research:
+            return self._start_research_worker()
+        self._worker = threading.Thread(target=self._worker_loop, name=f"hitl-{self.run_id}", daemon=True)
         self._worker.start()
+
+    def _start_research_worker(self):
+        """持锁调用：启动**唯一**后台 research worker（generation 由服务端产生，客户端不可指定）。
+
+        终态不启动；每次启动都递增 generation，因此旧 worker 的迟到结果一律被判定为 stale。
+        """
+        if HC.is_terminal(self.state):
+            return None
+        self._worker_generation += 1
+        gen = self._worker_generation
+        self._exec_active = True
+        frag = "".join(ch for ch in self.run_id if ch.isalnum() or ch in "-_")
+        for pre in ("hitl-research-", "hitl-"):        # 避免与线程名前缀重复
+            if frag.startswith(pre):
+                frag = frag[len(pre):]
+                break
+        t = threading.Thread(target=self._research_worker, args=(gen,),
+                             name=f"hitl-research-{frag[-24:]}-g{gen}", daemon=True)
+        self._worker = t
+        t.start()
+        return gen
 
     def _block_inflight(self):
         """模拟"已开始的调用"在途阻塞（fake / 仿真；零付费）。在锁外执行，pause 可并发到达。"""
@@ -737,11 +863,7 @@ class HitlRun:
                 if resumes_exec and not research and not self._async_exec():
                     self._run_stages_inline()                # 恢复后（无 gate）同步跑完剩余阶段
             if resumes_exec and research:
-                if self._async_exec():
-                    self._exec_active = True
-                    self._start_worker(research=True)        # 从游标继续，不重复已完成阶段
-                else:
-                    self._run_research_inline()
+                self._start_research_worker()                # 始终异步；从游标继续，不重复已完成阶段
             elif resumes_exec and self._async_exec():
                 self._exec_active = True
                 self._start_worker()                         # 从 self._exec_cursor 继续，不重复已完成阶段
@@ -815,7 +937,15 @@ class HitlRun:
                 "shadow_verdict": self._research_state.get("shadow_verdict"),
                 "causal_tier": self._research_state.get("causal_tier"),
                 "claim_count": len(self._research_state.get("claims", [])),
-                "fixture": True}
+                "fixture": True,
+                "worker_generation": self._worker_generation,
+                "worker_active": self._exec_active,
+                "interrupted_stage": self.interrupted_stage,
+                "failed_stage": (self.primary_failure or {}).get("failed_stage"),
+                "error_type": (self.primary_failure or {}).get("error_type"),
+                "error_summary": (self.primary_failure or {}).get("error_summary"),
+                "secondary_failure": self.secondary_failure,
+                "failure_manifest": self.failure_manifest}
         return snap
 
     # ============================ 从持久化事件恢复（§2） ============================
@@ -877,6 +1007,11 @@ class HitlRun:
         r._seq = expected_seq
         if r.state == "pausing":                     # 崩溃于 pausing：在途调用外部副作用未知 → 人工审查
             r.needs_human_review = True              # 不自动 resume 成 running（resume 从 pausing 本就非法）
+        if r._inflight_stage is not None:
+            # stage_started 之后没有 completed/failed → 该阶段执行结果不确定（可能已产生外部副作用）。
+            # 不自动重放、不自动推进、不产成功产物；要求人工审查。
+            r.needs_human_review = True
+            r.interrupted_stage = r._inflight_stage
         # 用每个 idem 组"最后一个事件后的投影"作为原响应摘要（hash + 摘要都可复现）
         for ih, _idx in idem_last.items():
             r._idem[ih] = {**r.snapshot(), "recovered": True,
@@ -939,7 +1074,20 @@ class HitlRun:
                     self._frozen_plan = dict(self._recovered_plan or {})   # 恢复冻结计划
             self.pending = None
             self._pending_obj = None
+        elif et == "research_stage_started":
+            # 记录"已开始但尚未收敛"的阶段；若日志到此为止 → 不确定执行，恢复后需人工审查
+            self._inflight_stage = sp.get("stage")
+        elif et == "research_stage_failed":
+            self._inflight_stage = None
+            self.primary_failure = {"failed_stage": sp.get("failed_stage") or sp.get("stage"),
+                                    "stage_index": sp.get("stage_index"),
+                                    "error_type": sp.get("error_type"),
+                                    "error_summary": sp.get("error_summary"),
+                                    "worker_generation": sp.get("worker_generation"),
+                                    "completed_stages": list(self._stages_done)}
+            self.needs_human_review = True
         elif et == "research_stage_completed":
+            self._inflight_stage = None
             stage = sp.get("stage")
             if stage:
                 self._stages_done.append(stage)

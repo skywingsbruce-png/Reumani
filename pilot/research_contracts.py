@@ -261,6 +261,47 @@ class ResearchArtifact(_Strict):
                 raise ResearchContractError(f"Claim {c.claim_id} 引用了不存在的 evidence_id：{sorted(unknown)}")
 
 
+class ResearchFailureManifest(_Strict):
+    """失败诊断产物（research-failure-v1）。**绝不冒充科研成功结论**：claims 恒为空、无成功产物。"""
+    schema_version: Literal["research-failure-v1"] = "research-failure-v1"
+    run_id: str
+    failed_stage: str
+    error_type: str
+    error_summary: str = ""            # 脱敏单行摘要；不含 traceback / 路径 / key / Prompt
+    completed_stages: list[str] = Field(default_factory=list)
+    evidence_count: int = 0
+    claims: list = Field(default_factory=list)      # 恒为空
+    research_artifact_created: bool = False         # 恒为 False
+    human_review: bool = True
+    worker_generation: int = 0
+    content_hash: str = ""
+    hash_algorithm: Literal["sha256"] = "sha256"
+
+    @field_validator("claims")
+    @classmethod
+    def _no_claims(cls, v):
+        if v:
+            raise ValueError("失败 Manifest 不得包含 claims（不得伪装成科研结论）")
+        return []
+
+    @field_validator("research_artifact_created")
+    @classmethod
+    def _no_artifact(cls, v):
+        if v:
+            raise ValueError("失败 Manifest 不得声称已生成成功产物")
+        return False
+
+    @field_validator("error_summary")
+    @classmethod
+    def _bounded(cls, v):
+        return " ".join(str(v or "").split())[:400]
+
+    def finalize(self) -> "ResearchFailureManifest":
+        d = self.model_dump(mode="json")
+        d.pop("content_hash", None)
+        return self.model_copy(update={"content_hash": compute_hash(d)})
+
+
 @runtime_checkable
 class ResearchExecutor(Protocol):
     """研究执行器接口。HitlRun 只依赖本 Protocol，不依赖任何具体模型客户端。
@@ -309,6 +350,6 @@ __all__ = [
     "ResearchContractError", "ExecutorNotRegistered",
     "EvidenceReference", "ResearchExecutionPolicy", "ResearchOption",
     "ResearchClarificationSpec", "ResearchApprovalSpec", "ResearchRunSpec",
-    "ResearchRunContext", "ResearchArtifact", "ResearchExecutor",
+    "ResearchRunContext", "ResearchArtifact", "ResearchFailureManifest", "ResearchExecutor",
     "register_executor", "get_executor", "registered_executor_ids",
 ]

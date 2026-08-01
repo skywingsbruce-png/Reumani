@@ -32,6 +32,8 @@ EventType = Literal[
     "pause_requested", "run_paused", "run_resumed",
     # A.7.5.3 parameterized research-run stages
     "research_stage_started", "research_stage_completed",
+    # A.7.5.3.1 fail-closed stage errors
+    "research_stage_failed",
     "run_completed", "run_failed", "run_stopped",
 ]
 EVENT_TYPES: frozenset = frozenset(EventType.__args__)  # type: ignore[attr-defined]
@@ -58,6 +60,10 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "run_type", "stage", "stage_index", "stage_count", "executor_id", "policy_hash",
     "evidence_count", "answer_hash", "causal_tier", "verifier_verdict", "shadow_verdict",
     "claim_count", "fixture",
+    # A.7.5.3.1 async worker + fail-closed stage errors (desensitized diagnostics only;
+    # never traceback / prompt / key / path / model body)
+    "worker_generation", "failed_stage", "error_type", "error_summary",
+    "completed_stage_count", "human_review",
 })
 # 明令禁止出现的敏感键子串（即便被误放进白名单外，也在校验层再兜底）
 _FORBIDDEN_SUBSTRINGS = ("prompt", "api_key", "apikey", "authorization", "auth_header",

@@ -36,9 +36,16 @@ def _answer(r, opt="strict_causal", key="a"):
 
 
 def _approve(r, key="ap", action_hash=None):
+    """A.7.5.3.1：approve 立即返回 running；阶段由后台 worker 推进。"""
     return r.approve(HC.ApprovalDecision(
         request_id=r.pending["request_id"], expected_state_version=r.state_version,
         idempotency_key=key, action_hash=action_hash or r.pending["action_hash"]))
+
+
+def _settle(r, timeout=20):
+    """等待后台 research worker 结束（异步语义下断言终态前必须调用）。"""
+    r.join_worker(timeout)
+    return r
 
 
 def _wait(pred, timeout=5.0):
@@ -88,7 +95,7 @@ def test_zero_executor_calls_before_approval():
 
 def test_approve_runs_executor_once_and_completes():
     store, ex, spec, r = _mk()
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     assert r.state == "completed"
     assert ex.stage_counts() == {s: 1 for s in STAGES}
     assert ex.artifacts_built == 1 and len(r.artifacts) == 1
@@ -144,7 +151,7 @@ def test_demo_run_behaviour_unchanged():
 # ============================ §12.2 三角色链 ============================
 def test_three_roles_called_once_each_in_order():
     store, ex, spec, r = _mk()
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     assert ex.role_counts() == {"synthesizer": 1, "verifier": 1, "claim_extractor": 1}
     done = [e.safe_payload["stage"] for e in store.list("hitl-research-t")
             if e.event_type == "research_stage_completed"]
@@ -153,7 +160,7 @@ def test_three_roles_called_once_each_in_order():
 
 def test_no_planner_react_network_code_device():
     store, ex, spec, r = _mk()
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     assert ex.forbidden_counts() == {"planner": 0, "react_executor": 0, "network": 0,
                                      "code_execution": 0, "device": 0}
 
@@ -162,7 +169,7 @@ def test_claims_only_cite_existing_evidence_ids():
     store, ex, spec, r = _mk()
     _answer(r)
     art_ids = {e.evidence_id for e in spec.evidence_refs}
-    _approve(r)
+    _approve(r); _settle(r)
     art = ex.build_artifact.__self__  # noqa: F841 - executor kept for clarity
     claims = r._research_state["claims"]
     for c in claims:
@@ -172,7 +179,7 @@ def test_claims_only_cite_existing_evidence_ids():
 
 def test_shadow_creates_no_evidence_and_does_not_override_verifier():
     store, ex, spec, r = _mk()
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     st = r._research_state
     assert st["shadow_created_evidence"] == 0
     assert st["shadow_overrode_verifier"] is False
@@ -261,12 +268,16 @@ def test_oversized_question_rejected():
 
 
 def test_evidence_tamper_detected_by_executor():
+    """A.7.5.3.1：篡改证据 → validate_evidence 阶段失败 → fail-closed 终态 failed（异步收敛）。"""
     store, ex, spec, r = _mk()
     spec.evidence_refs[0].content_hash = "tampered"
-    _answer(r)
-    with pytest.raises(Exception):
-        _approve(r)
+    _answer(r); _approve(r); _settle(r)
+    assert r.state == "failed" and r.needs_human_review is True
     assert len(r.artifacts) == 0
+    t = _types(store, "hitl-research-t")
+    assert t.count("research_stage_failed") == 1 and t.count("run_failed") == 1
+    assert "artifact_created" not in t and "run_completed" not in t
+    assert r.primary_failure["failed_stage"] == "validate_evidence"
 
 
 # ============================ §12.4 幂等与并发 ============================
@@ -289,6 +300,7 @@ def test_concurrent_approve_only_one_succeeds():
             t.start()
         for t in ts:
             t.join(10)
+        _settle(r)
         assert len([x for x in res if x[0] == "ok"]) == 1
         assert ex.artifacts_built == 1 and len(r.artifacts) == 1
         assert ex.role_counts() == {"synthesizer": 1, "verifier": 1, "claim_extractor": 1}
@@ -299,7 +311,7 @@ def test_same_idem_key_same_payload_no_double_execution():
     store, ex, spec, r = _mk()
     _answer(r)
     ah = r.pending["action_hash"]
-    _approve(r, key="k", action_hash=ah)
+    _approve(r, key="k", action_hash=ah); _settle(r)
     n = len(store.list("hitl-research-t"))
     r.approve(HC.ApprovalDecision(request_id=f"apr-hitl-research-t", expected_state_version=r.state_version,
                                   idempotency_key="k", action_hash=ah))
@@ -321,7 +333,7 @@ def test_artifact_and_version_increment_once():
     store, ex, spec, r = _mk()
     _answer(r)
     v = r.state_version
-    _approve(r)
+    _approve(r); _settle(r)
     assert len([t for t in _types(store, "hitl-research-t") if t == "artifact_created"]) == 1
     assert r.state_version > v and _seq_ok(store, "hitl-research-t")
 
@@ -343,6 +355,7 @@ def test_two_research_runs_not_serialized_by_global_lock():
         t.start()
     for t in ts:
         t.join(10)
+    _settle(r1); _settle(r2)
     assert all(o[0] == "ok" for o in out)
     assert r1.state == "completed" and r2.state == "completed"
 
@@ -367,13 +380,13 @@ def test_recover_awaiting_approval_and_can_approve(tmp_path):
     assert r2.state == "awaiting_approval" and r2.pending["type"] == "approval"
     snap = r2.snapshot()["research"]
     assert snap["executor_id"] == EXECUTOR_ID
-    _approve(r2)
+    _approve(r2); _settle(r2)
     assert r2.state == "completed" and ex2.artifacts_built == 1
 
 
 def test_recover_completed_is_immutable(tmp_path):
     store, ex, spec, r = _mk("hitl-research-r3", store=_fresh(tmp_path))
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     r2 = HitlRun.recover("hitl-research-r3", _fresh(tmp_path), spec=spec, executor=FakeResearchExecutor())
     assert r2.state == "completed"
     snap = r2.snapshot()["research"]
@@ -386,7 +399,7 @@ def test_recover_replay_old_idem_no_duplicate(tmp_path):
     store, ex, spec, r = _mk("hitl-research-r4", store=_fresh(tmp_path))
     _answer(r)
     ah = r.pending["action_hash"]
-    _approve(r, key="apK", action_hash=ah)
+    _approve(r, key="apK", action_hash=ah); _settle(r)
     st2 = _fresh(tmp_path)
     n = len(st2.list("hitl-research-r4"))
     ex2 = FakeResearchExecutor()
@@ -493,7 +506,7 @@ def test_pausing_crash_recovery_needs_human_review(tmp_path):
 # ============================ §12.8 安全 ============================
 def test_events_contain_no_secrets_or_paths():
     store, ex, spec, r = _mk()
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     blob = "\n".join(e.model_dump_json() for e in store.list("hitl-research-t")).lower()
     for bad in ("api_key", "authorization", "cookie", "bearer", "patient", ".env",
                 "c:\\users", "/home/", "sk-"):
@@ -514,7 +527,7 @@ def test_fixture_evidence_clearly_marked_not_real():
 
 def test_artifact_marked_fixture_and_claims_validated():
     store, ex, spec, r = _mk()
-    _answer(r); _approve(r)
+    _answer(r); _approve(r); _settle(r)
     art = ex.build_artifact(ctx=r._research_ctx(), state=r._research_state)
     assert art.fixture is True and art.schema_version == "research-artifact-v1"
     art.assert_claims_cite_known_evidence()

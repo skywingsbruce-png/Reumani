@@ -1,0 +1,42 @@
+{
+  "scenario": "A.7.5.3.1 async + fail-closed",
+  "paid_model_calls": 0,
+  "steps": {
+    "31_approval_returns": {
+      "http_status": 200,
+      "control_state": "running",
+      "stages_done_at_return": 0,
+      "worker_generation": 1,
+      "ms": 7
+    },
+    "32_progressive": {
+      "intermediate_stages_done": 1
+    },
+    "33_pause": {
+      "state": "paused",
+      "stages_done": 2,
+      "artifacts": 0
+    },
+    "37_two_context": {
+      "stages_done": 8,
+      "artifacts": 1,
+      "both_converged": true
+    },
+    "34_35_failure": {
+      "failed_stage": "verifier",
+      "control_state": "failed",
+      "artifacts_api": 0,
+      "artifact_nodes_in_ui": 0,
+      "needs_human_review": true
+    },
+    "38_refresh": {
+      "failed_stage_after_refresh": "verifier",
+      "stage_failed_events": 1,
+      "run_failed_events": 1,
+      "run_completed_events": 0,
+      "artifact_created_events": 0,
+      "seq_ok": true
+    }
+  },
+  "success": true
+}

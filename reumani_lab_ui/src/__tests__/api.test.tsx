@@ -340,6 +340,32 @@ describe('research run UI (A.7.5.3)', () => {
     expect(screen.queryByTestId('research-panel')).toBeNull()
   })
 
+  it('shows the failed stage and no success artifact when a stage fails (A.7.5.3.1)', () => {
+    bootApi()
+    act(() => {
+      ctx.dispatch({ type: 'apply_event', ev: mk(0, 'run_created', {
+        safe_payload: { control_state: 'running', state_version: 1, run_type: 'research',
+          executor_id: 'fake-research-v1', stage_count: 8 } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(1, 'research_stage_completed', {
+        safe_payload: { control_state: 'running', state_version: 1, stage: 'validate_evidence',
+          stage_index: 0, stage_count: 8 } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(2, 'research_stage_failed', {
+        safe_payload: { control_state: 'running', state_version: 1, stage: 'verifier',
+          stage_index: 3, stage_count: 8, failed_stage: 'verifier', error_type: 'RuntimeError',
+          error_summary: 'injected failure', human_review: true, worker_generation: 1 } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(3, 'run_failed', {
+        safe_payload: { control_state: 'failed', state_version: 2, failed_stage: 'verifier',
+          error_type: 'RuntimeError', error_summary: 'injected failure', human_review: true } }) })
+    })
+    expect(screen.getByTestId('research-failure')).toBeInTheDocument()
+    expect(screen.getByTestId('failed-stage').textContent).toBe('verifier')
+    expect(screen.getByTestId('failure-type').textContent).toBe('RuntimeError')
+    expect(screen.getByTestId('stage-verifier').getAttribute('data-state')).toBe('failed')
+    expect(screen.getByTestId('stage-validate_evidence').getAttribute('data-state')).toBe('done')
+    expect(screen.queryAllByRole('button', { name: /预览/ })).toHaveLength(0)   // 无成功产物
+    expect(screen.getByTestId('control-state').textContent).toContain('失败')
+  })
+
   it('never offers a model selector or API-key entry', () => {
     const comps = import.meta.glob('../components/*.tsx', { query: '?raw', eager: true, import: 'default' })
     for (const [path, src] of Object.entries(comps)) {

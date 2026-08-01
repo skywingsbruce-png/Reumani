@@ -250,6 +250,18 @@ def _research_start(client, **body):
     return rid, client.get(f"/api/runs/{rid}").json()["control"]
 
 
+def _await_terminal(client, rid, timeout=20.0):
+    """research run 异步执行：轮询到终态（不使用固定 sleep 断言时序）。"""
+    import time as _t
+    end = _t.time() + timeout
+    while _t.time() < end:
+        c = client.get(f"/api/runs/{rid}").json()["control"]
+        if c["control_state"] in ("completed", "failed", "stopped"):
+            return c
+        _t.sleep(0.01)
+    raise AssertionError(f"run {rid} did not reach a terminal state; last={c}")
+
+
 def test_research_executors_listed(client):
     ex = client.get("/api/research-executors").json()["executors"]
     assert "fake-research-v1" in ex
@@ -270,7 +282,9 @@ def test_research_run_full_flow_zero_calls_before_approval(client):
     ra = client.post(f"/api/runs/{rid}/approvals/{p['request_id']}/approve",
                      json={"expected_state_version": ctl["state_version"], "idempotency_key": "ap",
                            "action_hash": p["action_hash"]})
-    c = ra.json()["control"]
+    # A.7.5.3.1：Approval 立即返回 running，不等待 8 个阶段
+    assert ra.json()["control"]["control_state"] == "running"
+    c = _await_terminal(client, rid)
     assert c["control_state"] == "completed"
     assert c["research"]["stages_done"] == list(c["research"]["stages"])
     assert c["research"]["verifier_verdict"] == "insufficient_evidence"

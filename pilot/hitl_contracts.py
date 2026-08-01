@@ -26,7 +26,7 @@ LEGAL_TRANSITIONS: dict = {
                 "completed", "failed", "stopped"},
     "awaiting_clarification": {"running", "pausing", "paused", "stopped"},
     "awaiting_approval": {"running", "pausing", "paused", "stopped"},
-    "pausing": {"paused", "stopped"},
+    "pausing": {"paused", "stopped", "failed"},   # A.7.5.3.1：pausing 期间阶段异常 → failed（不停在 paused）
     "paused": {"running", "awaiting_clarification", "awaiting_approval", "stopped"},
     "completed": set(),
     "failed": set(),

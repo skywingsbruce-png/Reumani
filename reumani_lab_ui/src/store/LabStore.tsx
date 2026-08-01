@@ -270,7 +270,7 @@ function reducer(state: LabState, action: Action): LabState {
       // Research runs (A.7.5.3): stage timeline + verdicts derived from SSE, same as control state.
       const runType = (sp.run_type as string) ?? state.runType
       let research = state.research
-      if (sp.run_type === 'research' || sp.stage || sp.executor_id) {
+      if (sp.run_type === 'research' || sp.stage || sp.executor_id || sp.failed_stage) {
         const prev = (research ?? {}) as Record<string, unknown>
         const done = Array.isArray(prev.stages_done) ? [...(prev.stages_done as string[])] : []
         if (ev.event_type === 'research_stage_completed' && sp.stage
@@ -286,7 +286,12 @@ function reducer(state: LabState, action: Action): LabState {
           causal_tier: sp.causal_tier ?? prev.causal_tier,
           claim_count: sp.claim_count ?? prev.claim_count,
           evidence_count: sp.evidence_count ?? prev.evidence_count,
-          fixture: sp.fixture ?? prev.fixture }
+          fixture: sp.fixture ?? prev.fixture,
+          // A.7.5.3.1: fail-closed stage errors surface in the UI (desensitized fields only)
+          failed_stage: sp.failed_stage ?? prev.failed_stage,
+          error_type: sp.error_type ?? prev.error_type,
+          error_summary: sp.error_summary ?? prev.error_summary,
+          worker_generation: sp.worker_generation ?? prev.worker_generation }
       }
       return {
         ...state, planSteps: next.planSteps, timeline: next.timeline, trace: next.trace,

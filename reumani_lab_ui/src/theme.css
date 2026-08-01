@@ -338,3 +338,11 @@ h1, h2, h3 { margin: 0; }
 .verdicts dd { margin: 0; font-size: 13px; }
 .clar-prompt { font-weight: 600; margin: 0 0 4px; }
 .rec-badge { margin-left: 8px; }
+
+/* ---- A.7.5.3.1 research failure (fail-closed) ---- */
+.stage.failed { border-color: var(--st-fail); color: var(--st-fail); background: var(--st-fail-bg); }
+.research-failed { margin-top: 12px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--st-fail); background: var(--st-fail-bg); display: grid; gap: 6px; }
+.research-failed strong { color: var(--st-fail); }
+.research-failed .mono { font-size: 12px; color: var(--text-dim); }
+.failure-summary { margin: 0; font-size: 13px; word-break: break-word; }

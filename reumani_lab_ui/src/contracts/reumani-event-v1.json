@@ -43,6 +43,7 @@
     "run_resumed",
     "research_stage_completed",
     "research_stage_started",
+    "research_stage_failed",
     "run_completed",
     "run_failed",
     "run_stopped"
@@ -66,17 +67,22 @@
     "causal_strength",
     "causal_tier",
     "claim_count",
+    "completed_stage_count",
     "content_level",
     "control_state",
     "denial_reason",
     "duration_ms",
     "elapsed_ms",
+    "error_summary",
+    "error_type",
     "evidence_count",
     "executor_id",
     "expected_side_effect",
+    "failed_stage",
     "fixture",
     "graph_verdicts",
     "hash_short",
+    "human_review",
     "idempotency_hash",
     "identifier_count",
     "is_simulation",
@@ -115,6 +121,7 @@
     "tool_name",
     "verdict_status",
     "verifier_status",
-    "verifier_verdict"
+    "verifier_verdict",
+    "worker_generation"
   ]
 }

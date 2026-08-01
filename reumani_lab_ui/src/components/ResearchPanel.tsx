@@ -24,6 +24,10 @@ export function ResearchPanel() {
   const verifier = r.verifier_verdict as string | undefined
   const shadow = r.shadow_verdict as string | undefined
   const tier = r.causal_tier as string | undefined
+  const failedStage = r.failed_stage as string | undefined
+  const errorType = r.error_type as string | undefined
+  const errorSummary = r.error_summary as string | undefined
+  const interrupted = r.interrupted_stage as string | undefined
 
   return (
     <section className="section research-sec" aria-label="研究阶段" data-testid="research-panel">
@@ -40,16 +44,35 @@ export function ResearchPanel() {
       <ol className="stage-list">
         {stages.map((s) => {
           const isDone = done.includes(s)
-          const isCur = current === s && !isDone
+          const isFail = failedStage === s
+          const isCur = current === s && !isDone && !isFail
+          const st = isFail ? 'failed' : isDone ? 'done' : isCur ? 'running' : 'todo'
           return (
-            <li key={s} className={`stage ${isDone ? 'done' : isCur ? 'cur' : 'todo'}`}
-                data-testid={`stage-${s}`} data-state={isDone ? 'done' : isCur ? 'running' : 'todo'}>
-              <span className="stage-ic" aria-hidden>{isDone ? '✓' : isCur ? '▶' : '○'}</span>
+            <li key={s} className={`stage ${st}`} data-testid={`stage-${s}`} data-state={st}>
+              <span className="stage-ic" aria-hidden>
+                {isFail ? '✕' : isDone ? '✓' : isCur ? '▶' : '○'}
+              </span>
               <span className="stage-name">{STAGE_LABEL[s] ?? s}</span>
             </li>
           )
         })}
       </ol>
+
+      {failedStage && (
+        <div className="research-failed" role="alert" data-testid="research-failure">
+          <strong>执行失败：{STAGE_LABEL[failedStage] ?? failedStage}</strong>
+          <span className="mono" data-testid="failed-stage">{failedStage}</span>
+          {errorType && <span className="mono" data-testid="failure-type">{errorType}</span>}
+          {errorSummary && <p className="failure-summary">{errorSummary}</p>}
+          <p className="approval-note">未生成科研产物；需人工审查（human review）。</p>
+        </div>
+      )}
+      {!failedStage && interrupted && (
+        <div className="research-failed" role="alert" data-testid="research-interrupted">
+          <strong>阶段执行结果不确定：{STAGE_LABEL[interrupted] ?? interrupted}</strong>
+          <p className="approval-note">重启后未自动重放；需人工审查后决定。</p>
+        </div>
+      )}
 
       {(verifier || shadow) && (
         <dl className="verdicts">
