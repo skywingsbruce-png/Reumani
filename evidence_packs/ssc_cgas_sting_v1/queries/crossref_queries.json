@@ -1,0 +1,12 @@
+{
+  "schema_version": "evidence-queries-v1",
+  "database": "crossref",
+  "endpoint": "https://api.crossref.org/works/{doi}",
+  "frozen": true,
+  "usage": "EXACT DOI RESOLUTION ONLY - never used for discovery ranking or as a search engine",
+  "verification_fields": ["DOI", "title", "container-title", "issued", "author", "type", "publisher"],
+  "cross_check": ["title_normalized", "year", "journal_normalized"],
+  "mailto": "skywingsbruce@gmail.com",
+  "rate_limit_sleep_s": 0.4,
+  "network_fault_policy": "timeout/429/5xx -> source_error or manual_needed; NEVER not_found"
+}

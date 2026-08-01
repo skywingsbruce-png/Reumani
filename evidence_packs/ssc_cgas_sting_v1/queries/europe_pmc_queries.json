@@ -1,0 +1,22 @@
+{
+  "schema_version": "evidence-queries-v1",
+  "database": "europe_pmc",
+  "endpoint": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+  "frozen": true,
+  "term_groups": {
+    "disease": "(\"systemic sclerosis\" OR \"systemic scleroderma\" OR scleroderma)",
+    "cgas_sting": "(\"cyclic GMP-AMP synthase\" OR cGAS OR MB21D1 OR STING OR TMEM173 OR \"stimulator of interferon genes\" OR cGAMP OR \"DNA sensing\" OR \"cytosolic DNA\")",
+    "fibrosis": "(fibrosis OR fibroblast OR myofibroblast OR collagen OR \"extracellular matrix\" OR \"TGF-beta\" OR senescence OR \"DNA damage\" OR micronuclei OR \"chromosomal instability\")"
+  },
+  "layers": [
+    { "layer": "A", "purpose": "SSc direct evidence", "term": "{disease} AND {cgas_sting}" },
+    { "layer": "B", "purpose": "SSc + fibrosis", "term": "{disease} AND {cgas_sting} AND {fibrosis}" },
+    { "layer": "D", "purpose": "non-SSc fibrosis mechanism (indirect only)",
+      "term": "{cgas_sting} AND {fibrosis} NOT {disease}",
+      "tier_policy": "INDIRECT MECHANISTIC TIER ONLY" }
+  ],
+  "page_size": 100,
+  "result_type": "core",
+  "format": "json",
+  "rate_limit_sleep_s": 0.3
+}

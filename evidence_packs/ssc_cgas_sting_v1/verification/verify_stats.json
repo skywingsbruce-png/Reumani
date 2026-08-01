@@ -1,0 +1,15 @@
+{
+  "unique_candidates": 530,
+  "duplicates": 216,
+  "raw_rows": 746,
+  "verified_batch": 144,
+  "network": {
+    "calls": 278,
+    "failures": 0,
+    "retries": 0,
+    "by_source": {
+      "pubmed": 136,
+      "crossref": 142
+    }
+  }
+}

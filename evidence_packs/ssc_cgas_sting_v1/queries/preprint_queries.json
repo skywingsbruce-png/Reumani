@@ -1,0 +1,24 @@
+{
+  "schema_version": "evidence-queries-v1",
+  "database": "europe_pmc_preprint_channel",
+  "endpoint": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+  "frozen": true,
+  "note": "Europe PMC indexes bioRxiv/medRxiv preprints; searched separately so preprints are never silently merged with peer-reviewed evidence.",
+  "layers": [
+    {
+      "layer": "P",
+      "purpose": "preprint discovery",
+      "term": "(\"systemic sclerosis\" OR scleroderma) AND (cGAS OR STING OR TMEM173 OR MB21D1 OR \"stimulator of interferon genes\") AND (SRC:PPR)"
+    }
+  ],
+  "page_size": 100,
+  "result_type": "core",
+  "format": "json",
+  "policy": {
+    "publication_status": "preprint",
+    "peer_reviewed": false,
+    "may_support_direct_causal_claim": false,
+    "dedup": "if a peer-reviewed version exists, keep the published record and link the preprint as previous_version; never double count"
+  },
+  "rate_limit_sleep_s": 0.3
+}

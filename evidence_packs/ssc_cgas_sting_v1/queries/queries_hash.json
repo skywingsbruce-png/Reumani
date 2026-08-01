@@ -1,0 +1,10 @@
+{
+  "files": {
+    "crossref_queries.json": "b54a0806be43717e5869b503e49d821105cbeebabfe692e23bc50a0e0ea6a9ce",
+    "europe_pmc_queries.json": "399def26eb30f0f90821da2db0dbcaed34db8f1caf0d07592a113cd0bd8d34c6",
+    "preprint_queries.json": "baff5a6a3e908fffa42f5abc0eeff69dff5cca438e1f0ba8587e3ebe26b3202c",
+    "pubmed_queries.json": "206d225ee7f4ab6be9eaf64eb31968c3f105043d6dbbdcac2268078ef4da5ff9"
+  },
+  "queries_hash": "15c1955805a70c7e198c168c7d6b1a55cd877304c9e58f97880c4f7cc5fddb78",
+  "schema_version": "evidence-queries-hash-v1"
+}

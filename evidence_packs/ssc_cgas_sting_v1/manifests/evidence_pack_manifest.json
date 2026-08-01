@@ -1,0 +1,114 @@
+{
+  "pack_id": "ssc_cgas_sting_v1",
+  "schema_version": "evidence-pack-manifest-v1",
+  "protocol_hash": "24ad37a634b094cc82dc54dd7f69e376a39f777a79b1c658b3f510f4dec5a7a0",
+  "queries_hash": "15c1955805a70c7e198c168c7d6b1a55cd877304c9e58f97880c4f7cc5fddb78",
+  "cutoff_date": "2026-08-01",
+  "research_question": "Does current evidence support that cGAS-STING activation directly causes sustained fibroblast activation in systemic sclerosis?",
+  "sources": [
+    "pubmed",
+    "europe_pmc",
+    "crossref",
+    "doi.org",
+    "europe_pmc_preprint_channel"
+  ],
+  "candidate_count_raw_rows": 746,
+  "candidate_count_unique": 530,
+  "verified_count": 135,
+  "verification_status_breakdown": {
+    "mismatch": 7,
+    "verified": 135,
+    "manual_needed": 2
+  },
+  "duplicate_count": 217,
+  "excluded_count": 476,
+  "exclusion_reasons": {
+    "mismatch": 7,
+    "no_cgas_sting_content": 78,
+    "metadata_only_no_abstract": 4,
+    "sting_ordinary_word_sense": 1,
+    "not_exactly_verified_in_this_pack_version": 386
+  },
+  "manual_review_count": 12,
+  "evidence_card_count": 41,
+  "counts_by_relevance_tier": {
+    "S1": 2,
+    "S2": 1,
+    "S5": 5,
+    "S6": 1,
+    "S7": 30,
+    "S8": 1,
+    "unknown": 1
+  },
+  "counts_by_causal_tier": {
+    "C1": 2,
+    "C3": 4,
+    "C4": 5,
+    "not_applicable": 30
+  },
+  "counts_by_content_level": {
+    "abstract": 41
+  },
+  "counts_by_disease_scope": {
+    "non_ssc_mechanistic_transfer": 7,
+    "review_navigation": 30,
+    "systemic_sclerosis_direct": 4
+  },
+  "direct_ssc_evidence_count": 4,
+  "indirect_mechanistic_count": 7,
+  "review_navigation_count": 30,
+  "preprint_count": 1,
+  "retraction_excluded_count": 0,
+  "cards_with_contradiction_excerpt": 11,
+  "evidence_gap": {
+    "human_interventional_c5_count": 0,
+    "direct_ssc_longitudinal_count": 0,
+    "gap_direct_human_causal_evidence": true,
+    "note": "No C5 (human interventional) SSc-direct record was found by the frozen queries. This is an evidence gap, NOT proof that such evidence does not exist."
+  },
+  "source_failures": [],
+  "network_calls": {
+    "total": 294,
+    "failures": 0,
+    "retries": 0,
+    "by_stage": {
+      "discovery": {
+        "calls": 16,
+        "failures": 0,
+        "retries": 0
+      },
+      "verification": {
+        "calls": 278,
+        "failures": 0,
+        "retries": 0,
+        "by_source": {
+          "pubmed": 136,
+          "crossref": 142
+        }
+      }
+    }
+  },
+  "paid_llm_calls": 0,
+  "artifact_hashes": {
+    "protocol/SSc_CGAS_STING_EVIDENCE_PROTOCOL_V1.md": "24ad37a634b094cc82dc54dd7f69e376a39f777a79b1c658b3f510f4dec5a7a0",
+    "protocol/SSc_CGAS_STING_EVIDENCE_PROTOCOL_V1.sha256": "99b2ca8d60385855623af196a6c41c58c0a98455c982c96512fb4a6762653b02",
+    "queries/crossref_queries.json": "b54a0806be43717e5869b503e49d821105cbeebabfe692e23bc50a0e0ea6a9ce",
+    "queries/europe_pmc_queries.json": "399def26eb30f0f90821da2db0dbcaed34db8f1caf0d07592a113cd0bd8d34c6",
+    "queries/preprint_queries.json": "baff5a6a3e908fffa42f5abc0eeff69dff5cca438e1f0ba8587e3ebe26b3202c",
+    "queries/pubmed_queries.json": "206d225ee7f4ab6be9eaf64eb31968c3f105043d6dbbdcac2268078ef4da5ff9",
+    "queries/queries_hash.json": "d74aeb9bb1600560edd4311f926aa84bd6592a1300df5fbb1b5b67b63de904bf",
+    "discovery/candidates.jsonl": "9eda1c23d9ad9afc8929cd70e0a5a26cfb30c7741ac27ebad1ad55e4ce75f7a1",
+    "discovery/network_stats.json": "3201a87d8b90821f96421cbfb749f38a108503dded83451bd917c5e12fdce801",
+    "verification/citation_verification.jsonl": "2b914e265d7fcc42046b5bff2d90e9e42bd84eb8c28fd863cf075ac894407781",
+    "verification/source_failures.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "verification/verify_stats.json": "c51bea0d937955a4d947844bd130b49ff147096b3c0a6d42d6a96de284146ae6",
+    "normalized/duplicates.jsonl": "a4c7bf3087681a5b2a5ae4dd6d3fed6aa8a88975a588c48997596865e1a63990",
+    "normalized/eligible_studies.jsonl": "a383343feebfb36ca9f58894b350d5962f6f38e51976188c05ea3487d77f026e",
+    "normalized/exclusions.jsonl": "c5a9473b71c1a739bea3e9c7e448378b95f9409f30ed012eafe0849c42a3d95a",
+    "normalized/manual_review.jsonl": "37019f111a220e088740ee63abe2bf88b21ad05f68d2573bd41ca6fb8e138ea9",
+    "evidence/evidence_cards.jsonl": "89f83c26636d3500e472050f31d343489a73fd13a895dcbda992edd8ec90095f",
+    "evidence/evidence_index.json": "b9454e88cfe6da869bb9a85c4f5a10e78105a4db2cd3d643316be42f876fa0ba"
+  },
+  "pack_hash": "9df9ac40181cb25b9018448154f8b4502845337ee678d1dd39abf0cdd26676f5",
+  "created_at": "2026-08-01T20:32:31+00:00"
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": "evidence-queries-v1",
+  "database": "pubmed",
+  "endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+  "frozen": true,
+  "note": "Frozen before execution. Query strings are verbatim; results must not cause silent edits.",
+  "term_groups": {
+    "disease": "(\"Systemic Sclerosis\"[Mesh] OR \"systemic sclerosis\"[tiab] OR \"systemic scleroderma\"[tiab] OR scleroderma[tiab])",
+    "cgas_sting": "(\"cyclic GMP-AMP synthase\"[tiab] OR \"cyclic guanosine monophosphate-adenosine monophosphate synthase\"[tiab] OR cGAS[tiab] OR MB21D1[tiab] OR STING[tiab] OR TMEM173[tiab] OR \"stimulator of interferon genes\"[tiab] OR cGAMP[tiab] OR \"DNA sensing\"[tiab] OR \"cytosolic DNA\"[tiab])",
+    "fibrosis": "(fibrosis[tiab] OR fibroblast[tiab] OR fibroblasts[tiab] OR myofibroblast[tiab] OR collagen[tiab] OR \"extracellular matrix\"[tiab] OR \"TGF-beta\"[tiab] OR senescence[tiab] OR \"DNA damage\"[tiab] OR micronuclei[tiab] OR \"chromosomal instability\"[tiab])",
+    "upstream": "(\"cytosolic DNA\"[tiab] OR \"DNA damage\"[tiab] OR micronuclei[tiab] OR \"chromosomal instability\"[tiab])",
+    "cgas_sting_core": "(cGAS[tiab] OR STING[tiab] OR MB21D1[tiab] OR TMEM173[tiab])",
+    "review_filter": "(review[pt] OR \"systematic review\"[pt])"
+  },
+  "layers": [
+    {
+      "layer": "A",
+      "purpose": "SSc direct evidence",
+      "term": "{disease} AND {cgas_sting}",
+      "tier_policy": "may support SSc-direct claims if inclusion criteria are met"
+    },
+    {
+      "layer": "B",
+      "purpose": "SSc + fibrosis/fibroblast",
+      "term": "{disease} AND {cgas_sting} AND {fibrosis}",
+      "tier_policy": "may support SSc-direct claims if inclusion criteria are met"
+    },
+    {
+      "layer": "C",
+      "purpose": "SSc + upstream mechanism",
+      "term": "{disease} AND {upstream} AND {cgas_sting_core}",
+      "tier_policy": "may support SSc-direct claims if inclusion criteria are met"
+    },
+    {
+      "layer": "D",
+      "purpose": "non-SSc fibrosis mechanism (indirect only)",
+      "term": "{cgas_sting} AND {fibrosis} NOT {disease}",
+      "tier_policy": "INDIRECT MECHANISTIC TIER ONLY - can never support an SSc-direct causal claim"
+    },
+    {
+      "layer": "E",
+      "purpose": "review navigation only",
+      "term": "({disease} AND {cgas_sting} AND {review_filter}) OR ({cgas_sting} AND {fibrosis} AND {review_filter})",
+      "tier_policy": "navigation only - never replaces a primary-study EvidenceCard"
+    }
+  ],
+  "retmax_per_layer": 200,
+  "sort": "pub_date",
+  "rate_limit_sleep_s": 0.4
+}
