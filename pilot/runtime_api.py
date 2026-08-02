@@ -38,12 +38,45 @@ class _Handle:
         self.thread = None
 
 
+ENV_ENABLE_GATED_RESEARCH = "REUMANI_ENABLE_GATED_RESEARCH"   # 必须显式 == "1" 才可能注册
+
+
 def _register_builtin_executors():
-    """服务端注册内置（零付费 fake）研究执行器。客户端只能按 ID 选择，不能注入对象。"""
+    """服务端注册内置（零付费 fake）研究执行器。客户端只能按 ID 选择，不能注入对象。
+
+    **付费的 gated-research-v1 默认不注册**：即使显式开启开关，也仍需服务端另行完成
+    三角色/价格/证据 hash 配置（见 build_gated_research_executor），否则拒绝启动。
+    """
     from pilot.research_contracts import register_executor, registered_executor_ids
     from pilot.fake_research_executor import FakeResearchExecutor, EXECUTOR_ID
     if EXECUTOR_ID not in registered_executor_ids():
         register_executor(FakeResearchExecutor())
+
+
+def build_gated_research_executor(*, synthesizer=None, verifier=None, claim_extractor=None,
+                                  gate=None, evidence_loader=None, repo_root="."):
+    """显式构造并注册 gated-research-v1。**默认路径永不调用它**。
+
+    拒绝启动的情形：开关未开、三角色不全、gate/证据未提供、证据 hash 不匹配。
+    本函数**不会**创建任何真实模型客户端——三个 GatedModel 必须由调用方注入。
+    """
+    import os as _os
+    from pilot.research_contracts import register_executor
+    from pilot.frozen_evidence import FrozenEvidenceLoader
+    from pilot.gated_research_executor import GatedResearchExecutor, ExecutorConfigError
+    if _os.environ.get(ENV_ENABLE_GATED_RESEARCH) != "1":
+        raise ExecutorConfigError(
+            f"gated-research-v1 未启用：需显式设置 {ENV_ENABLE_GATED_RESEARCH}=1（默认关闭）")
+    if not (synthesizer and verifier and claim_extractor):
+        raise ExecutorConfigError("必须注入三个角色的 GatedModel（不全则拒绝启动）")
+    if gate is None:
+        raise ExecutorConfigError("必须注入 HardBudgetGate（价格/额度未核实则拒绝启动）")
+    loader = evidence_loader or FrozenEvidenceLoader(repo_root)
+    loader.load()                       # 证据 hash 不匹配 → 在注册阶段就失败
+    ex = GatedResearchExecutor(synthesizer=synthesizer, verifier=verifier,
+                               claim_extractor=claim_extractor, gate=gate, evidence_loader=loader)
+    register_executor(ex)
+    return ex
 
 
 class RunManager:
