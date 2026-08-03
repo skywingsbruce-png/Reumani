@@ -1,0 +1,137 @@
+{
+  "schema": "a7536-canary-metrics-v1",
+  "phase": "A.7.5.6",
+  "run_kind": "single authorised real-provider HITL canary (one-shot, not repeated)",
+  "outcome": "failed_closed_at_synthesizer",
+  "executor_id": "gated-research-v1",
+  "control_state_final": "failed",
+  "needs_human_review": true,
+  "provider_calls": {
+    "before_clarification": 0,
+    "after_clarification_answer": 0,
+    "before_approval": 0,
+    "synthesizer": 1,
+    "verifier": 0,
+    "claim_extractor": 0,
+    "total": 1,
+    "cap": 3,
+    "retries": 0,
+    "fallback_calls": 0,
+    "shadow_model_calls": 0,
+    "fourth_call": 0
+  },
+  "zero_call_surfaces": {
+    "planner": 0,
+    "react": 0,
+    "resolver": 0,
+    "search_literature": 0,
+    "search_evidence": 0,
+    "network_fetch": 0,
+    "code_execution": 0,
+    "device_control": 0
+  },
+  "cost_usd": {
+    "reserved_worst_case": 0.06262,
+    "actual": 0.07043,
+    "cap": 0.15,
+    "within_cap": true
+  },
+  "ledger": {
+    "reserved": 1,
+    "reconciled": 1,
+    "open_reservations": 0,
+    "price_config_version": "2026-07-20.1"
+  },
+  "token_usage": [
+    {
+      "role": "synthesizer",
+      "model": "claude-opus-4-8",
+      "input_tokens": 3293,
+      "output_tokens": 1500,
+      "max_tokens": 1500,
+      "output_hit_cap": true
+    }
+  ],
+  "hitl": {
+    "clarification_shown": true,
+    "clarification_answer": "strict_causal",
+    "answer_auto_filled": false,
+    "approval_required": true,
+    "approvals_submitted": 1,
+    "approve_returned_state": "running",
+    "approve_return_ms": 109,
+    "asynchronous": true
+  },
+  "approval_card_exposed": {
+    "executor_id": "gated-research-v1",
+    "stages": 8,
+    "policy": {
+      "allow_network": false,
+      "allow_code_execution": false,
+      "allow_device_control": false,
+      "allow_planner": false,
+      "max_model_calls": 3,
+      "max_cost_usd": "0.00",
+      "role_limits": {
+        "synthesizer": 1,
+        "verifier": 1,
+        "claim_extractor": 1
+      },
+      "require_approval": true
+    },
+    "policy_hash_prefix": "55bb6f9b22d66656",
+    "plan_hash_prefix": "a203d430c291c449",
+    "GAP_not_exposed": [
+      "subset_hash",
+      "core_card_count",
+      "direct/indirect counts",
+      "direct_human_causal_count",
+      "real gate cost cap"
+    ]
+  },
+  "events": {
+    "total": 16,
+    "sequence_contiguous_unique": true,
+    "research_stage_completed": 2,
+    "research_stage_failed": 1,
+    "artifact_created": 0,
+    "run_completed": 0,
+    "run_failed": 1
+  },
+  "stages": {
+    "total": 8,
+    "completed": [
+      "validate_evidence",
+      "evidence_accumulator"
+    ],
+    "failed": "synthesizer",
+    "never_reached": [
+      "verifier",
+      "claim_extractor",
+      "claim_graph",
+      "shadow",
+      "artifact"
+    ]
+  },
+  "failure": {
+    "stage": "synthesizer",
+    "error_type": "ResearchOutputError",
+    "error_summary": "Synthesizer JSON 解析失败（fail-closed）：Expecting ',' delimiter: line 29 column 4 (char 1782)",
+    "root_cause": "Synthesizer output_tokens (1500) hit the configured max_tokens (1500); the structured JSON was truncated mid-object and could not be parsed. Confirmed by the ledger, not inferred.",
+    "root_cause_location": "run-harness max_tokens configuration (scratchpad launcher), not production code",
+    "fail_closed": true,
+    "cascade_prevented": true,
+    "failure_manifest_emitted": true,
+    "artifact_emitted": false
+  },
+  "scientific_output": {
+    "answer_produced": false,
+    "verifier_verdict": null,
+    "shadow_verdict": null,
+    "causal_tier": null,
+    "claim_count": 0,
+    "note": "No scientific conclusion was produced. The run failed before the Verifier. No causal claim about cGAS-STING and SSc may be drawn from this run."
+  },
+  "reran_after_failure": false,
+  "production_code_modified_this_phase": false
+}

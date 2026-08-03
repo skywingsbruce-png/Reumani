@@ -1,0 +1,23 @@
+{
+  "schema": "a7536-input-hashes-v1",
+  "phase": "A.7.5.6",
+  "note": "Frozen inputs verified identical BEFORE and AFTER the paid run.",
+  "subset_hash": "7430fcbd4c3d1e8f1eb5f37b11f0b3ec0ea146eb6fe020f0e9812f57d9375312",
+  "source_pack_hash": "9df9ac40181cb25b9018448154f8b4502845337ee678d1dd39abf0cdd26676f5",
+  "protocol_hash": "24ad37a634b094cc82dc54dd7f69e376a39f777a79b1c658b3f510f4dec5a7a0",
+  "core_card_count": 6,
+  "context_only_count": 2,
+  "direct_count": 3,
+  "indirect_count": 3,
+  "direct_human_causal_count": 0,
+  "causal_ceiling": "preclinical_perturbation_support",
+  "core_card_ids": [
+    "SSCCGAS-36400785",
+    "SSCCGAS-38026177",
+    "SSCCGAS-38474239",
+    "SSCCGAS-39827047",
+    "SSCCGAS-40374521",
+    "SSCCGAS-41888792"
+  ],
+  "evidence_packs_modified_by_this_run": false
+}
