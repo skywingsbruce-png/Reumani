@@ -57,6 +57,17 @@ _SECRET_PATTERNS = (
     r"\b[A-Za-z0-9+/]{32,}={0,2}\b",                                      # 长 base64 样式串
 )
 
+# A.7.5.5 §8：随 approval_requested 事件一并落盘的冻结事实（全部为脱敏元数据/稳定 hash）。
+# 目的是让「人当时看到了什么」可被事后审计，而不是只存在于内存里的 HTTP 响应。
+_FROZEN_FACT_EVENT_KEYS = (
+    "subset_id", "subset_hash", "source_pack_hash", "protocol_hash",
+    "core_card_count", "context_only_count", "direct_count", "indirect_count",
+    "direct_human_causal_count", "causal_ceiling", "model_role_count",
+    "max_model_calls", "max_cost_usd", "evidence_facts_hash",
+    "allow_network", "allow_planner", "allow_code_execution", "allow_device_control",
+    "expected_artifact",
+)
+
 
 def _safe_error(err: BaseException) -> str:
     """脱敏错误摘要：单行、有限长；**不含** traceback / 路径 / key / Prompt / 模型正文。"""
@@ -108,6 +119,7 @@ class HitlRun:
         self._research_state: dict = {}
         self._stages_done: list = []
         self._frozen_plan: Optional[dict] = None      # Approval 时冻结的执行计划
+        self._approval_facts: Optional[dict] = None   # §8 审批卡上展示过的冻结证据事实
         self._spec_missing = False                    # 恢复出的 research run 缺 spec/executor → 不得执行
         self._recovered_plan: Optional[dict] = None   # 恢复期从 approval_requested 还原的冻结计划
         self._worker_generation = 0                   # 服务端产生的 worker 代次（客户端不可指定）
@@ -349,8 +361,14 @@ class HitlRun:
         self._emit("step_started", step_id=2, status="running", summary=a.action_summary[:120],
                    safe_payload={"step_objective": "run fake research chain",
                                  "stage_count": len(self._research_stages)})
-        # action_hash 绑定完整执行计划：任一项改变 → 旧批准失效
+        # §8：审批前向人展示 executor 自报的**冻结事实**（证据子集 hash / 计数 / 真实上限）。
+        # 确定性、零模型调用；若冻结证据已漂移，这里就抛错 → 根本不会出现审批卡。
+        facts = self._executor_approval_facts()
+        self._approval_facts = facts              # 人在卡上看到的那一份，批准时被冻结
+        # action_hash 绑定完整执行计划 + 冻结事实：任一项改变 → 旧批准失效
         args = {"plan_hash": spec.plan_hash(), "answer_hash": self._answer_hash}
+        if facts:
+            args["evidence_facts_hash"] = facts["evidence_facts_hash"]
         ah = HC.action_hash(spec.executor_id, args, a.risk_level)
         rid = f"apr-{self.run_id}"
         self._to("awaiting_approval")
@@ -368,7 +386,8 @@ class HitlRun:
                         "executor_id": pub["executor_id"], "policy": pub["policy"],
                         "policy_hash": pub["policy_hash"], "evidence_hash": pub["evidence_hash"],
                         "plan_hash": pub["plan_hash"], "stages": list(self._research_stages),
-                        "expected_outputs": pub["expected_outputs"], "fixture": pub["fixture_evidence"]}
+                        "expected_outputs": pub["expected_outputs"], "fixture": pub["fixture_evidence"],
+                        **({"frozen_facts": facts} if facts else {})}
         self._emit("approval_requested", step_id=2, status="awaiting_approval",
                    summary=f"需要审批：{a.action_summary[:60]}",
                    safe_payload={"request_id": rid, "action_hash": ah, "tool_name": spec.executor_id,
@@ -380,14 +399,36 @@ class HitlRun:
                                  "evidence_count": pub["evidence_count"],
                                  "question_hash": pub["question_hash"], "run_type": "research",
                                  "stage_count": len(self._research_stages),
-                                 "fixture": pub["fixture_evidence"]})
+                                 "fixture": pub["fixture_evidence"],
+                                 **({k: facts[k] for k in _FROZEN_FACT_EVENT_KEYS if k in facts}
+                                    if facts else {})})
 
-    def _freeze_plan(self):
+    def _executor_approval_facts(self):
+        """向 executor 索取审批冻结事实（可选能力；fake executor 没有则返回 None）。"""
+        fn = getattr(self._executor, "approval_facts", None)
+        if not callable(fn):
+            return None
+        facts = fn()
+        if not isinstance(facts, dict) or not facts.get("evidence_facts_hash"):
+            raise HC.ContractViolation("executor 返回的审批冻结事实无效 → 拒绝进入审批")
+        return facts
+
+    def _freeze_plan(self, *, use_card_facts=False):
         """批准瞬间冻结执行计划；执行前逐项复核，任何漂移 → fail-closed。"""
         spec = self._spec
-        return {"question_hash": spec.question_hash(), "evidence_hash": spec.evidence_hash(),
+        plan = {"question_hash": spec.question_hash(), "evidence_hash": spec.evidence_hash(),
                 "policy_hash": spec.policy_hash(), "executor_id": spec.executor_id,
                 "plan_hash": spec.plan_hash(), "answer_hash": self._answer_hash}
+        # §8：冻结的必须是**人在审批卡上实际看到的那份事实**；比对时再重新求值。
+        # 若两者不同 → 批准后证据/上限发生了漂移 → 旧批准失效。
+        if use_card_facts:
+            if self._approval_facts:
+                plan["evidence_facts_hash"] = self._approval_facts["evidence_facts_hash"]
+        else:
+            facts = self._executor_approval_facts()
+            if facts:
+                plan["evidence_facts_hash"] = facts["evidence_facts_hash"]
+        return plan
 
     def _assert_plan_unchanged(self):
         if self._frozen_plan is None:
@@ -620,7 +661,8 @@ class HitlRun:
                 self._pending_obj = None
                 self._exec_cursor = 0 if research else _STAGE_TOOL
                 if research:
-                    self._frozen_plan = self._freeze_plan()   # 批准瞬间冻结执行计划
+                    # 批准瞬间冻结执行计划（冻结审批卡上展示过的冻结事实）
+                    self._frozen_plan = self._freeze_plan(use_card_facts=True)
                 if not research and not async_mode:
                     self._run_stages_inline()            # 同步：所有阶段 → completed（同一原子批）
             if research:

@@ -64,6 +64,14 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     # never traceback / prompt / key / path / model body)
     "worker_generation", "failed_stage", "error_type", "error_summary",
     "completed_stage_count", "human_review",
+    # A.7.5.5 §8 approval-frozen evidence facts (stable hashes + counts + caps only;
+    # never prompt / key / model body / path)
+    "subset_id", "subset_hash", "source_pack_hash", "protocol_hash",
+    "core_card_count", "context_only_count", "direct_count", "indirect_count",
+    "direct_human_causal_count", "causal_ceiling", "model_role_count",
+    "max_model_calls", "max_cost_usd", "evidence_facts_hash",
+    "allow_network", "allow_planner", "allow_code_execution", "allow_device_control",
+    "expected_artifact",
 })
 # 明令禁止出现的敏感键子串（即便被误放进白名单外，也在校验层再兜底）
 _FORBIDDEN_SUBSTRINGS = ("prompt", "api_key", "apikey", "authorization", "auth_header",

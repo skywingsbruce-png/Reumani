@@ -240,6 +240,19 @@ class ResearchArtifact(_Strict):
     shadow_verdict: Optional[str] = None
     causal_tier: str
     limitations: list[str] = Field(default_factory=list)
+    # A.7.5.5 §12：冻结输入溯源 + 用量。这些字段**在 content_hash 之内**，
+    # 因此产物 hash 绑定它所依据的证据子集；换一份证据必然换一个 hash。
+    subset_id: str = ""
+    subset_hash: str = ""
+    source_pack_hash: str = ""
+    protocol_hash: str = ""
+    verifier_fact_conflict: bool = False
+    contradictions: list[str] = Field(default_factory=list)
+    evidence_gaps: list[str] = Field(default_factory=list)
+    model_calls_by_role: dict = Field(default_factory=dict)
+    token_usage_by_role: dict = Field(default_factory=dict)
+    cost_by_role: dict = Field(default_factory=dict)
+    total_cost: float = 0.0
     fixture: bool = False                 # True = 测试夹具产物，禁止当作真实科研结论
     content_hash: str = ""
     hash_algorithm: Literal["sha256"] = "sha256"

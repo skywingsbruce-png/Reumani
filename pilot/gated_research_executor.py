@@ -109,6 +109,62 @@ class GatedResearchExecutor:
     def model_call_count(self) -> int:
         return sum(self.role_calls.values())
 
+    # ---------------------------------------------------------------- §8 审批冻结事实
+    def approval_facts(self) -> dict:
+        """审批卡必须冻结并显示的内容。**确定性**：只做 hash/schema/计数校验。
+
+        零模型调用、零网络、零 `.env`。在 Approval **之前**调用，使人在批准时真正看到
+        证据边界与预算上限；返回值被 hash 进 action_hash，执行前逐项复核，
+        任何字段漂移 → 拒绝执行（provider 调用为 0）。
+        """
+        ev = self._loader.load()                          # 任一漂移 → 在审批前就 fail-closed
+        f = ev.authoritative_facts()
+        lim = getattr(self._gate, "lim", {}) or {}
+        caps = dict(lim.get("max_calls_per_role") or {})
+        budgets = [float(lim[k]) for k in ("max_usd_global", "max_usd_stage", "max_usd_task")
+                   if k in lim]
+        facts = {
+            "executor_id": self.executor_id,
+            "subset_id": f["subset_id"], "subset_hash": f["subset_hash"],
+            "source_pack_hash": f["source_pack_hash"], "protocol_hash": f["protocol_hash"],
+            "core_card_count": f["core_card_count"],
+            "context_only_count": f["context_only_count"],
+            "direct_count": f["direct_count"], "indirect_count": f["indirect_count"],
+            "direct_human_causal_count": f["direct_human_causal_count"],
+            "causal_ceiling": f["causal_ceiling"],
+            "model_role_count": len(self._models),
+            "per_role_limit": {r: int(caps.get(r, 1)) for r in sorted(self._models)},
+            "max_model_calls": int(lim.get("max_calls_task", 3)),
+            "max_cost_usd": round(min(budgets), 5) if budgets else 0.0,
+            "allow_network": False, "allow_planner": False,
+            "allow_code_execution": False, "allow_device_control": False,
+            "expected_artifact": "research-artifact-v1",
+        }
+        facts["evidence_facts_hash"] = compute_hash(facts)
+        return facts
+
+    # ---- §12 逐角色 token / 费用（由账本 call_uid 关联 reserved→reconciled） ----
+    def _usage_by_role(self):
+        tok = {r: {"input_tokens": 0, "output_tokens": 0} for r in self.role_calls}
+        cost = {r: 0.0 for r in self.role_calls}
+        try:
+            events = list(self._gate.ledger.events())
+        except Exception:                                 # noqa: BLE001
+            return tok, cost, 0.0
+        role_of_uid = {e.get("call_uid"): e.get("role") for e in events
+                       if e.get("event") == "reserved" and e.get("role")}
+        for e in events:
+            if e.get("event") != "reconciled":
+                continue
+            r = role_of_uid.get(e.get("call_uid"))
+            if r not in tok:
+                continue
+            tok[r]["input_tokens"] += int(e.get("input_tokens") or 0)
+            tok[r]["output_tokens"] += int(e.get("output_tokens") or 0)
+            cost[r] += float(e.get("actual_usd") or 0.0)
+        cost = {r: round(v, 6) for r, v in cost.items()}
+        return tok, cost, round(sum(cost.values()), 6)
+
     # ---------------------------------------------------------------- Prompt 组装
     def _prompt(self, role, ctx, state):
         ev = state["frozen"]
@@ -220,7 +276,9 @@ class GatedResearchExecutor:
                               ev.direct_human_causal_count, "Verifier")
         return {"verifier": out, "verifier_fact_conflict": fact_conflict,
                 "verifier_conflicts": conflicts,
-                "verifier_human_review": bool(out.human_review or fact_conflict)}
+                "verifier_human_review": bool(out.human_review or fact_conflict),
+                # HitlRun 从 state 读这两个扁平键来发 SSE；不填则 UI 阶段裁决显示为空
+                "verifier_verdict": out.verdict, "causal_tier": ev.causal_ceiling}
 
     # ---- 5) Claim extractor（付费角色 3/3） ----
     def _stage_claim_extractor(self, ctx, state):
@@ -309,6 +367,8 @@ class GatedResearchExecutor:
                         human_review_required=bool(state.get("verifier_human_review")))
                   for c in state["claims"]]
         usage = self._gate_usage()
+        tok_by_role, cost_by_role, total_cost = self._usage_by_role()
+        syn = state["synthesis"]
         art = ResearchArtifact(
             run_id=ctx.run_id, question_hash=ctx.question_hash,
             evidence_ids=sorted(ev.allowed_citation_ids), claims=claims,
@@ -319,6 +379,13 @@ class GatedResearchExecutor:
                          f"direct_human_causal_count={ev.direct_human_causal_count}",
                          "abstract-level evidence only",
                          *(["verifier_fact_conflict"] if state.get("verifier_fact_conflict") else [])],
+            # §12 冻结输入溯源（进入 content_hash）
+            subset_id=ev.subset_id, subset_hash=ev.subset_hash,
+            source_pack_hash=ev.source_pack_hash, protocol_hash=ev.protocol_hash,
+            verifier_fact_conflict=bool(state.get("verifier_fact_conflict")),
+            contradictions=list(syn.contradictions), evidence_gaps=list(syn.evidence_gaps),
+            model_calls_by_role=dict(self.role_calls),
+            token_usage_by_role=tok_by_role, cost_by_role=cost_by_role, total_cost=total_cost,
             fixture=False).finalize()
         art.assert_claims_cite_known_evidence()
         # 附加受控遥测（不含 Prompt/模型正文/key）

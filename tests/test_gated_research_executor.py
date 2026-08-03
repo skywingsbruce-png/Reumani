@@ -153,6 +153,86 @@ def _state_through(ex, upto):
     return ctx, state
 
 
+# ==================== §8 审批冻结事实（知情批准） ====================
+def test_approval_facts_are_deterministic_and_cost_zero_model_calls():
+    """审批卡事实必须在**第一次模型调用之前**可得，且完全确定性。"""
+    ex, gate, _, inners = build_executor()
+    f1 = ex.approval_facts()
+    f2 = ex.approval_facts()
+    assert f1 == f2                                   # 确定性
+    assert ex.model_call_count() == 0                 # 审批前零模型调用
+    assert sum(i.calls for i in inners.values()) == 0
+    # §8 要求的每一项都必须在场
+    assert f1["executor_id"] == "gated-research-v1"
+    assert f1["subset_hash"].startswith("7430fcbd")
+    assert f1["source_pack_hash"].startswith("9df9ac40")
+    assert f1["protocol_hash"].startswith("24ad37a6")
+    assert f1["core_card_count"] == 6 and f1["context_only_count"] == 2
+    assert f1["direct_count"] == 3 and f1["indirect_count"] == 3
+    assert f1["direct_human_causal_count"] == 0
+    assert f1["causal_ceiling"] == "preclinical_perturbation_support"
+    assert f1["model_role_count"] == 3
+    assert f1["per_role_limit"] == {"claim_extractor": 1, "synthesizer": 1, "verifier": 1}
+    assert f1["max_model_calls"] == 3
+    assert f1["max_cost_usd"] == 0.15                 # 真实闸门上限，不是 0.00
+    assert f1["allow_network"] is False and f1["allow_planner"] is False
+    assert f1["allow_code_execution"] is False and f1["allow_device_control"] is False
+    assert f1["expected_artifact"] == "research-artifact-v1"
+    assert len(f1["evidence_facts_hash"]) == 64
+
+
+def test_approval_card_and_event_expose_frozen_facts():
+    """人在批准时必须真正看到证据边界与上限；事件里也要留痕以便事后审计。"""
+    ex, _, _, _ = build_executor()
+    store = InMemoryEventStore()
+    r = HitlRun("hitl-research-facts", store, spec=make_spec(), executor=ex)
+    r.start()
+    r.answer_clarification(HC.ClarificationAnswer(request_id=r.pending["request_id"],
+        expected_state_version=r.state_version, idempotency_key="a",
+        selected_option_ids=["strict_causal"]))
+    card = r.pending
+    facts = card["frozen_facts"]
+    assert facts["core_card_count"] == 6 and facts["direct_human_causal_count"] == 0
+    assert facts["max_cost_usd"] == 0.15 and facts["max_model_calls"] == 3
+    ev = [e for e in store.list("hitl-research-facts") if e.event_type == "approval_requested"][0]
+    for k in ("subset_hash", "source_pack_hash", "protocol_hash", "core_card_count",
+              "direct_count", "indirect_count", "direct_human_causal_count", "causal_ceiling",
+              "max_model_calls", "max_cost_usd", "evidence_facts_hash"):
+        assert k in ev.safe_payload, f"approval_requested 缺少冻结事实 {k}"
+    assert ex.model_call_count() == 0                 # 仍未调用任何模型（停在 awaiting_approval，无 worker）
+
+
+def test_evidence_drift_after_approval_refuses_execution_with_zero_calls():
+    """批准后证据事实漂移 → 旧批准失效，拒绝执行，provider 调用为 0。"""
+    ex, _, _, inners = build_executor()
+    store = InMemoryEventStore()
+    r = HitlRun("hitl-research-drift", store, spec=make_spec(), executor=ex)
+    r.start()
+    r.answer_clarification(HC.ClarificationAnswer(request_id=r.pending["request_id"],
+        expected_state_version=r.state_version, idempotency_key="a",
+        selected_option_ids=["strict_causal"]))
+    ah = r.pending["action_hash"]
+    sv = r.state_version
+    rid = r.pending["request_id"]
+    # 批准之后、执行之前，冻结事实被换掉（模拟证据包/上限被改动）
+    original = ex.approval_facts
+
+    def drifted():
+        f = dict(original())
+        f["core_card_count"] = 99
+        f["evidence_facts_hash"] = "drifted" + "0" * 57
+        return f
+    ex.approval_facts = drifted
+    r.approve(HC.ApprovalDecision(request_id=rid, expected_state_version=sv,
+                                  idempotency_key="ap", action_hash=ah))
+    r.join_worker(60)
+    snap = r.snapshot()
+    assert snap["control_state"] == "failed"
+    assert ex.model_call_count() == 0
+    assert sum(i.calls for i in inners.values()) == 0
+    assert not [a for a in r.artifacts if getattr(a, "schema_version", "") == "research-artifact-v1"]
+
+
 # ============================ 1-6 冻结证据加载 ============================
 def test_valid_frozen_subset_loads():
     ev = FrozenEvidenceLoader(REPO).load()
@@ -162,6 +242,8 @@ def test_valid_frozen_subset_loads():
     assert ev.subset_hash.startswith("7430fcbd")
     assert ev.source_pack_hash.startswith("9df9ac40")
     assert ev.protocol_hash.startswith("24ad37a6")
+    # subset_id 必须标识子集本身，而不是上游全量包
+    assert ev.subset_id == "ssc_cgas_sting_canary_v1"
 
 
 def test_expected_hash_mismatch_fails_closed():
@@ -631,6 +713,37 @@ def test_artifact_hash_stable_and_desensitised():
     tel = object.__getattribute__(art, "_telemetry")
     assert tel["model_calls_by_role"] == {"synthesizer": 1, "verifier": 1, "claim_extractor": 1}
     assert tel["total_model_calls"] == 3
+
+
+def test_artifact_carries_all_required_provenance_fields():
+    """§12：溯源与用量必须是 Artifact 的**正式字段**，不能只躺在旁路遥测里。"""
+    ex, *_ = build_executor()
+    ctx, st = _state_through(ex, "artifact_builder")
+    art = ex.build_artifact(ctx=ctx, state=st)
+    d = art.model_dump(mode="json")
+    for k in ("schema_version", "run_id", "question_hash", "subset_id", "subset_hash",
+              "source_pack_hash", "protocol_hash", "evidence_ids", "claims", "verifier_verdict",
+              "shadow_verdict", "verifier_fact_conflict", "causal_tier", "contradictions",
+              "evidence_gaps", "limitations", "model_calls_by_role", "token_usage_by_role",
+              "cost_by_role", "total_cost", "content_hash", "hash_algorithm"):
+        assert k in d, f"Artifact 缺少 §12 字段 {k}"
+    assert d["subset_hash"].startswith("7430fcbd")
+    assert d["model_calls_by_role"] == {"synthesizer": 1, "verifier": 1, "claim_extractor": 1}
+    assert d["contradictions"] and d["evidence_gaps"]      # 来自 Synthesizer 的结构化结果
+    assert d["verifier_fact_conflict"] is False
+    # fake provider 报告了 usage，因此逐角色 token 必须被结算出来
+    assert set(d["token_usage_by_role"]) == {"synthesizer", "verifier", "claim_extractor"}
+    assert all(v["input_tokens"] > 0 for v in d["token_usage_by_role"].values())
+    assert d["total_cost"] == round(sum(d["cost_by_role"].values()), 6)
+
+
+def test_artifact_hash_binds_the_evidence_subset():
+    """换一份证据必然换一个 content_hash：产物 hash 必须绑定它所依据的冻结输入。"""
+    ex, *_ = build_executor()
+    ctx, st = _state_through(ex, "artifact_builder")
+    art = ex.build_artifact(ctx=ctx, state=st)
+    tampered = art.model_copy(update={"subset_hash": "0" * 64})
+    assert tampered.compute_content_hash() != art.content_hash
 
 
 def test_only_one_artifact_per_run():

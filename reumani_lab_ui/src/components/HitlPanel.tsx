@@ -77,6 +77,12 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
   const research = pending.run_type === 'research'
   const policy = (pending.policy ?? {}) as Record<string, unknown>
   const stages = (Array.isArray(pending.stages) ? pending.stages : []) as string[]
+  // A.7.5.5 §8：executor 自报的冻结事实。存在即代表这是一个接了受控真实模型的执行器，
+  // 上限与证据边界必须如实展示给批准人（缺省回退到 spec/policy，不臆造数值）。
+  const facts = (pending.frozen_facts ?? null) as Record<string, unknown> | null
+  const fixture = pending.fixture === true
+  const short = (v: unknown) => String(v ?? '').slice(0, 16)
+  const cap = facts ? Number(facts.max_cost_usd ?? 0) : null
   return (
     <section className="section hitl-card approval-card" aria-label="审批请求" data-testid="hitl-approval">
       <div className="clar-head">
@@ -91,18 +97,49 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
           <>
             <div><dt>研究问题</dt><dd data-testid="apr-question">{String(pending.question ?? '')}</dd></div>
             <div><dt>澄清答复</dt><dd className="mono" data-testid="apr-answer">{String(pending.clarification_answer ?? '')}</dd></div>
-            <div><dt>证据数量</dt><dd className="mono" data-testid="apr-evidence">{String(pending.evidence_count ?? 0)} 条（测试夹具）</dd></div>
+            <div><dt>证据数量</dt><dd className="mono" data-testid="apr-evidence">
+              {facts ? `${String(facts.core_card_count ?? 0)} 张核心证据卡（另有 ${String(facts.context_only_count ?? 0)} 张仅背景，不得作为实验依据）`
+                     : `${String(pending.evidence_count ?? 0)} 条${fixture ? '（测试夹具）' : ''}`}
+            </dd></div>
+            {facts ? (
+              <>
+                <div><dt>证据构成</dt><dd className="mono" data-testid="apr-evidence-mix">
+                  SSc 直接 {String(facts.direct_count ?? 0)} · 非 SSc 间接 {String(facts.indirect_count ?? 0)} ·
+                  直接人体因果 {String(facts.direct_human_causal_count ?? 0)}
+                </dd></div>
+                <div><dt>因果上限</dt><dd className="mono" data-testid="apr-ceiling">{String(facts.causal_ceiling ?? '')}</dd></div>
+                <div><dt>证据子集</dt><dd className="mono" data-testid="apr-subset">
+                  {String(facts.subset_id ?? '')} · subset {short(facts.subset_hash)}…
+                </dd></div>
+                <div><dt>来源指纹</dt><dd className="mono" data-testid="apr-source-hash">
+                  pack {short(facts.source_pack_hash)}… · protocol {short(facts.protocol_hash)}…
+                </dd></div>
+              </>
+            ) : null}
             <div><dt>执行器</dt><dd className="mono" data-testid="apr-executor">{String(pending.executor_id ?? '')}</dd></div>
             <div><dt>执行阶段</dt><dd className="mono" data-testid="apr-stages">{stages.length} 阶段</dd></div>
             <div><dt>权限边界</dt><dd className="mono" data-testid="apr-policy">
-              网络 {policy.allow_network ? '允许' : '禁止'} · 代码 {policy.allow_code_execution ? '允许' : '禁止'} ·
-              设备 {policy.allow_device_control ? '允许' : '禁止'} · Planner {policy.allow_planner ? '允许' : '禁止'}
+              网络 {(facts ? facts.allow_network : policy.allow_network) ? '允许' : '禁止'} ·
+              代码 {(facts ? facts.allow_code_execution : policy.allow_code_execution) ? '允许' : '禁止'} ·
+              设备 {(facts ? facts.allow_device_control : policy.allow_device_control) ? '允许' : '禁止'} ·
+              Planner {(facts ? facts.allow_planner : policy.allow_planner) ? '允许' : '禁止'}
             </dd></div>
-            <div><dt>调用上限</dt><dd className="mono">
-              总计 {String(policy.max_model_calls ?? 0)} · 角色各 1（不可互借）
+            <div><dt>调用上限</dt><dd className="mono" data-testid="apr-calls">
+              总计 {String(facts?.max_model_calls ?? policy.max_model_calls ?? 0)} ·
+              {' '}{String(facts?.model_role_count ?? 3)} 个角色各 1（不可互借）
             </dd></div>
-            <div><dt>预期产物</dt><dd className="mono">{(pending.expected_outputs as string[] ?? []).join(', ')}</dd></div>
-            <div><dt>策略指纹</dt><dd className="mono">{String(pending.policy_hash ?? '').slice(0, 16)}…</dd></div>
+            <div><dt>费用上限</dt><dd className="mono" data-testid="apr-cost-cap">
+              {cap !== null ? `US$${cap.toFixed(5)}（硬闸门）` : '不适用（零付费夹具）'}
+            </dd></div>
+            <div><dt>预期产物</dt><dd className="mono">
+              {facts ? String(facts.expected_artifact ?? '') : (pending.expected_outputs as string[] ?? []).join(', ')}
+            </dd></div>
+            <div><dt>策略指纹</dt><dd className="mono">{short(pending.policy_hash)}…</dd></div>
+            {facts ? (
+              <div><dt>冻结事实指纹</dt><dd className="mono" data-testid="apr-facts-hash">
+                {short(facts.evidence_facts_hash)}…
+              </dd></div>
+            ) : null}
           </>
         ) : (
           <div><dt>工具</dt><dd className="mono">{String(pending.tool_name)}</dd></div>
@@ -112,8 +149,13 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
       </dl>
       <p className="approval-note">
         仅在动作/参数完全一致时有效；更改后需重新申请。
-        {research ? '批准后将冻结问题、证据、策略与执行器；此为零付费测试夹具，不调用真实模型。'
-                  : '此为仿真，不连接真实设备。'}
+        {research
+          // 判据是**是否挂了非零预算的硬闸门**，而不是证据是否为夹具：
+          // 前端无法分辨 provider 真假，宁可多警告，绝不可少警告。
+          ? (cap !== null && cap > 0
+              ? `批准后将冻结问题、证据、策略与执行器，并按上述硬上限调用受控付费模型（最多 ${String(facts?.max_model_calls ?? 3)} 次，费用上限 US$${cap.toFixed(5)}）。批准即授权计费。`
+              : '批准后将冻结问题、证据、策略与执行器；此为零付费测试夹具，不调用真实模型。')
+          : '此为仿真，不连接真实设备。'}
       </p>
       <div className="clar-actions">
         <button className="btn primary" data-testid="approve-btn" disabled={busy}

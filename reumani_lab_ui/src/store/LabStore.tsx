@@ -254,7 +254,20 @@ function reducer(state: LabState, action: Action): LabState {
           allow_other: sp.allow_other, reason: sp.reason, allowed_options: sp.allowed_options,
           ...(sp.note ? { prompt: sp.note } : {}) }
       } else if (ev.event_type === 'approval_requested') {
-        pending = { ...keep(sp.request_id),
+        // A.7.5.5 §8: rebuild the frozen evidence facts from the event's own flat keys.
+        // The clarification card has a different request_id, so keep() returns {} on this
+        // transition — without this the snapshot's frozen_facts would be dropped and the human
+        // would approve while seeing less than the server actually froze.
+        const factKeys = ['subset_id', 'subset_hash', 'source_pack_hash', 'protocol_hash',
+          'core_card_count', 'context_only_count', 'direct_count', 'indirect_count',
+          'direct_human_causal_count', 'causal_ceiling', 'model_role_count', 'max_model_calls',
+          'max_cost_usd', 'evidence_facts_hash', 'allow_network', 'allow_planner',
+          'allow_code_execution', 'allow_device_control', 'expected_artifact'] as const
+        const kept = keep(sp.request_id)
+        const facts: Record<string, unknown> = sp.evidence_facts_hash
+          ? Object.fromEntries(factKeys.filter(k => sp[k] !== undefined).map(k => [k, sp[k]]))
+          : ((kept.frozen_facts as Record<string, unknown> | undefined) ?? {})
+        pending = { ...kept,
           type: 'approval', request_id: sp.request_id, action_hash: sp.action_hash,
           tool_name: sp.tool_name, risk_level: sp.risk_level, action_summary: sp.action_summary,
           expected_side_effect: sp.expected_side_effect, is_simulation: sp.is_simulation,
@@ -262,7 +275,9 @@ function reducer(state: LabState, action: Action): LabState {
           ...(sp.run_type ? { run_type: sp.run_type } : {}),
           ...(sp.executor_id ? { executor_id: sp.executor_id } : {}),
           ...(sp.evidence_count !== undefined ? { evidence_count: sp.evidence_count } : {}),
-          ...(sp.policy_hash ? { policy_hash: sp.policy_hash } : {}) }
+          ...(sp.fixture !== undefined ? { fixture: sp.fixture } : {}),
+          ...(sp.policy_hash ? { policy_hash: sp.policy_hash } : {}),
+          ...(Object.keys(facts).length ? { frozen_facts: facts } : {}) }
       } else if (ev.event_type === 'clarification_answered' || ev.event_type === 'approval_granted'
                  || ev.event_type === 'approval_denied') {
         pending = null

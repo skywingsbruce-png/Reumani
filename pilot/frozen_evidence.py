@@ -223,7 +223,9 @@ class FrozenEvidenceLoader:
         if "evidence_gap" not in manifest:
             raise FrozenEvidenceError("manifest 缺少 evidence_gap")
 
-        return FrozenEvidence(subset_id=manifest.get("source_pack_id", "ssc_cgas_sting_canary_v1"),
+        # subset_id 必须标识**子集本身**（目录名）。manifest 里的 `source_pack_id` 指的是
+        # 上游全量包，用它当 subset_id 会把 canary 子集错标成 v1 全量包。
+        return FrozenEvidence(subset_id=self.subset.name,
                               subset_hash=manifest["subset_hash"],
                               source_pack_hash=src_manifest["pack_hash"],
                               protocol_hash=src_manifest["protocol_hash"],

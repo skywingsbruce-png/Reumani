@@ -307,6 +307,75 @@ describe('research run UI (A.7.5.3)', () => {
     expect(screen.getByTestId('apr-question').textContent).toContain('测试研究问题')
   })
 
+  it('approval card exposes frozen evidence facts and the real cost cap (A.7.5.5 §8)', () => {
+    bootApi()
+    act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'awaiting_approval',
+      state_version: 2, run_type: 'research',
+      pending: { type: 'approval', request_id: 'apr-g', action_hash: 'b'.repeat(32), run_type: 'research',
+        risk_level: 'high', is_simulation: false, fixture: false,
+        action_summary: '运行受控三角色科研链',
+        expected_side_effect: '仅生成结构化产物', question: '冻结研究问题',
+        clarification_answer: 'strict_causal', evidence_count: 3,
+        executor_id: 'gated-research-v1', stages: ['validate_evidence', 'synthesizer', 'verifier'],
+        policy_hash: 'p'.repeat(32), expected_outputs: ['research_artifact'],
+        policy: { allow_network: false, allow_code_execution: false, allow_device_control: false,
+                  allow_planner: false, max_model_calls: 3 },
+        frozen_facts: { executor_id: 'gated-research-v1', subset_id: 'ssc_cgas_sting_canary_v1',
+          subset_hash: '7430fcbd4c3d1e8f'.repeat(4), source_pack_hash: '9df9ac40181cb25b'.repeat(4),
+          protocol_hash: '24ad37a634b094cc'.repeat(4), core_card_count: 6, context_only_count: 2,
+          direct_count: 3, indirect_count: 3, direct_human_causal_count: 0,
+          causal_ceiling: 'preclinical_perturbation_support', model_role_count: 3,
+          per_role_limit: { synthesizer: 1, verifier: 1, claim_extractor: 1 },
+          max_model_calls: 3, max_cost_usd: 0.15, allow_network: false, allow_planner: false,
+          allow_code_execution: false, allow_device_control: false,
+          expected_artifact: 'research-artifact-v1',
+          evidence_facts_hash: 'f'.repeat(64) } } } }) })
+    // 证据边界必须可见
+    expect(screen.getByTestId('apr-evidence').textContent).toContain('6')
+    expect(screen.getByTestId('apr-evidence').textContent).toContain('2')
+    const mix = screen.getByTestId('apr-evidence-mix').textContent ?? ''
+    expect(mix).toContain('直接 3'); expect(mix).toContain('间接 3')
+    expect(mix).toContain('直接人体因果 0')
+    expect(screen.getByTestId('apr-ceiling').textContent).toContain('preclinical_perturbation_support')
+    expect(screen.getByTestId('apr-subset').textContent).toContain('7430fcbd4c3d1e8f')
+    const src = screen.getByTestId('apr-source-hash').textContent ?? ''
+    expect(src).toContain('9df9ac40181cb25b'); expect(src).toContain('24ad37a634b094cc')
+    // 真实费用上限，而不是 0.00
+    expect(screen.getByTestId('apr-cost-cap').textContent).toContain('0.15000')
+    expect(screen.getByTestId('apr-calls').textContent).toContain('3')
+    expect(screen.getByTestId('apr-facts-hash').textContent).toContain('ffff')
+    // 接了真实受控模型时，绝不能再声称「零付费测试夹具」
+    const card = screen.getByTestId('hitl-approval').textContent ?? ''
+    expect(card).not.toContain('零付费测试夹具')
+    expect(card).toContain('批准即授权计费')
+  })
+
+  it('SSE approval_requested rebuilds frozen facts and never downgrades the card', () => {
+    bootApi()
+    // 只有 SSE（没有 HTTP 快照）也必须能渲染完整的冻结事实：
+    // 澄清卡与审批卡的 request_id 不同，keep() 会返回 {}，事件必须自带这些事实。
+    act(() => { ctx.dispatch({ type: 'apply_event', ev: mk(7, 'approval_requested', {
+      safe_payload: { control_state: 'awaiting_approval', state_version: 4, run_type: 'research',
+        request_id: 'apr-sse', action_hash: 'c'.repeat(32), tool_name: 'gated-research-v1',
+        risk_level: 'high', action_summary: '运行受控三角色科研链',
+        expected_side_effect: '仅生成结构化产物', is_simulation: false, fixture: false,
+        executor_id: 'gated-research-v1', evidence_count: 3, policy_hash: 'p'.repeat(32),
+        subset_id: 'ssc_cgas_sting_canary_v1', subset_hash: '7430fcbd4c3d1e8f'.repeat(4),
+        source_pack_hash: '9df9ac40181cb25b'.repeat(4),
+        protocol_hash: '24ad37a634b094cc'.repeat(4),
+        core_card_count: 6, context_only_count: 2, direct_count: 3, indirect_count: 3,
+        direct_human_causal_count: 0, causal_ceiling: 'preclinical_perturbation_support',
+        model_role_count: 3, max_model_calls: 3, max_cost_usd: 0.15,
+        allow_network: false, allow_planner: false, allow_code_execution: false,
+        allow_device_control: false, expected_artifact: 'research-artifact-v1',
+        evidence_facts_hash: 'e'.repeat(64) } }) }) })
+    expect(screen.getByTestId('apr-evidence').textContent).toContain('6')
+    expect(screen.getByTestId('apr-evidence-mix').textContent).toContain('直接人体因果 0')
+    expect(screen.getByTestId('apr-cost-cap').textContent).toContain('0.15000')
+    expect(screen.getByTestId('apr-subset').textContent).toContain('7430fcbd4c3d1e8f')
+    expect(screen.getByTestId('hitl-approval').textContent).not.toContain('零付费测试夹具')
+  })
+
   it('stage timeline and verdicts update from SSE events', () => {
     bootApi()
     act(() => {
