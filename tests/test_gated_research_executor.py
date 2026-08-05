@@ -448,6 +448,41 @@ def test_new_estimator_never_under_reserves_the_frozen_canary():
     assert reserved >= ACTUAL_COST, f"新预留 ${reserved:.5f} 仍低于实际 ${ACTUAL_COST}"
 
 
+def test_worst_case_uses_the_most_expensive_input_rate_including_cache_creation():
+    """§8/§9：最坏费用必须按**最贵**输入单价（含 cache creation），不能用基础价低估。"""
+    from pilot import prices as P
+    rates = P.price_for("claude-opus-4-8")["usd_per_mtok"]
+    worst_rate = P.worst_input_rate("claude-opus-4-8")
+    assert worst_rate >= rates["input_base"]
+    # 必须取含 cache creation 在内的最贵输入单价（此处即 cache_write_1h = 10.0）
+    assert worst_rate == max(v for k, v in rates.items()
+                             if k.startswith(("input", "cache_write")))
+    assert worst_rate == rates["cache_write_1h"]
+    # 第一次 Canary 实际就是按该口径计费：3293 in + 1500 out = $0.07043
+    assert abs(P.worst_case_usd("claude-opus-4-8", 3293, 1500) - 0.07043) < 5e-4
+
+
+def test_ledger_records_estimation_accuracy_for_audit():
+    """§8：预留/结算必须留下可审计的估算口径与比值。"""
+    ex, gate, _, _ = build_executor()
+    run_chain(ex, rid="hitl-research-ledger")
+    events = gate.ledger.events()
+    res = [e for e in events if e["event"] == "reserved"]
+    rec = [e for e in events if e["event"] == "reconciled"]
+    assert len(res) == 3 and len(rec) == 3
+    for e in res:
+        assert e["safety_multiplier"] == 1.15
+        assert e["chars_per_token"] == 2.0
+        assert e["message_overhead_tokens"] == 200
+        assert e["est_input_tokens"] > 0
+    for e in rec:
+        assert e["estimated_input_tokens"] > 0
+        assert e["actual_input_tokens"] > 0
+        assert e["estimation_ratio"] is not None
+        assert e["under_reserved"] is False        # 估算高于真实 → 预留充足
+    assert not gate.ledger.open_reservations()     # open == 0
+
+
 def test_estimator_is_strictly_more_conservative_than_the_old_one():
     from pilot.hard_gate import estimate_input_tokens
     for n in (1000, 5000, 7536, 20000):

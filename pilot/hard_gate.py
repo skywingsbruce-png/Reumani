@@ -134,6 +134,7 @@ class HardBudgetGate:
         self.retries = 0
         self._uid = 0
         self.rejected_before_invoke = 0
+        self._reserved_est = {}          # call_uid -> 预留时的估算输入 token（§8 审计）
         self.resume(ledger_only=True)
 
     # ---- 开关：两个都必须显式开启，且默认禁止在 CI 中付费 ----
@@ -245,10 +246,16 @@ class HardBudgetGate:
             self.reserved_usd += worst
             self.usd_task += worst
             self.usd_stage += worst
+            self._reserved_est[uid] = in_tok
             self.ledger.append({"event": "reserved", "call_uid": uid, "stage": self.stage,
                                 "task_id": self.task_id, "role": role, "model": model_id,
                                 "est_input_tokens": in_tok, "max_tokens": out_tok,
                                 "worst_case_usd": round(worst, 6), "is_retry": bool(is_retry),
+                                # A.7.5.6.1 §8：把估算口径一并落盘，事后才能核对
+                                # 预留是否曾低于实际（第一次 Canary 正是如此）。
+                                "safety_multiplier": SAFETY_MULTIPLIER,
+                                "chars_per_token": CHARS_PER_TOKEN,
+                                "message_overhead_tokens": MESSAGE_OVERHEAD_TOKENS,
                                 "price_config_version": _prices.PRICE_TABLE_VERSION,
                                 "ts": time.time()})
             return uid, worst
@@ -269,10 +276,19 @@ class HardBudgetGate:
             self.actual_usd += actual
             self.usd_task += actual - worst
             self.usd_stage += actual - worst
+            # §8：估算准确度可审计。ratio < 1 表示估算低于真实输入（预留可能不足）。
+            est = self._reserved_est.get(uid)
+            actual_in = int((usage or {}).get("input_tokens", in_tok) or in_tok)
+            ratio = round(est / actual_in, 4) if (est and actual_in) else None
             self.ledger.append({"event": "reconciled", "call_uid": uid, "model": model_id,
                                 "input_tokens": in_tok, "output_tokens": out_tok,
                                 "actual_usd": round(actual, 6),
                                 "released_usd": round(worst - actual, 6),
+                                "estimated_input_tokens": est,
+                                "actual_input_tokens": actual_in,
+                                "estimation_ratio": ratio,
+                                "reserved_cost_usd": round(worst, 6),
+                                "under_reserved": bool(actual > worst),
                                 "price_config_version": _prices.PRICE_TABLE_VERSION,
                                 "ts": time.time()})
             return actual

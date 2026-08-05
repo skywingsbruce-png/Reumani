@@ -388,6 +388,33 @@ describe('research run UI (A.7.5.3)', () => {
     expect(screen.getByTestId('hitl-approval').textContent).not.toContain('零付费测试夹具')
   })
 
+  it('failure card marks output_truncated distinctly and hides the raw output (A.7.5.6.1 §11)', () => {
+    bootApi()
+    act(() => {
+      ctx.dispatch({ type: 'apply_event', ev: mk(0, 'run_created', {
+        safe_payload: { run_type: 'research', executor_id: 'gated-research-v1' } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(1, 'research_stage_failed', {
+        safe_payload: { run_type: 'research', stage: 'synthesizer', failed_stage: 'synthesizer',
+          error_type: 'OutputTruncated', error_summary: 'Synthesizer 输出被 max_tokens 截断',
+          human_review: true, output_truncated: true, truncated_role: 'synthesizer',
+          finish_reason: 'max_tokens', output_size: 1600, configured_output_limit: 1600 } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(2, 'run_failed', {
+        safe_payload: { failed_stage: 'synthesizer', error_type: 'OutputTruncated',
+          human_review: true } }) })
+    })
+    expect(screen.getByTestId('failed-stage').textContent).toBe('synthesizer')
+    expect(screen.getByTestId('failure-type').textContent).toBe('OutputTruncated')
+    const t = screen.getByTestId('failure-truncated').textContent ?? ''
+    expect(t).toContain('output_truncated')
+    expect(t).toContain('finish_reason=max_tokens')
+    expect(t).toContain('1600/1600')
+    expect(screen.getByTestId('failure-human-review')).toBeInTheDocument()
+    // 无成功 Artifact，且不得显示被截断的模型原文
+    expect(screen.queryByTestId('art-name')).toBeNull()
+    const panel = screen.getByTestId('research-failure').textContent ?? ''
+    expect(panel).not.toContain('supported_statements')
+  })
+
   it('stage timeline and verdicts update from SSE events', () => {
     bootApi()
     act(() => {

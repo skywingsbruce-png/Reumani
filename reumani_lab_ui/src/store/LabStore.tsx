@@ -306,7 +306,15 @@ function reducer(state: LabState, action: Action): LabState {
           failed_stage: sp.failed_stage ?? prev.failed_stage,
           error_type: sp.error_type ?? prev.error_type,
           error_summary: sp.error_summary ?? prev.error_summary,
-          worker_generation: sp.worker_generation ?? prev.worker_generation }
+          worker_generation: sp.worker_generation ?? prev.worker_generation,
+          // A.7.5.6.1 §11: truncation is a distinct failure class — surface it, but only
+          // the desensitized metadata (never the truncated output itself).
+          output_truncated: sp.output_truncated ?? prev.output_truncated,
+          truncated_role: sp.truncated_role ?? prev.truncated_role,
+          finish_reason: sp.finish_reason ?? prev.finish_reason,
+          output_size: sp.output_size ?? prev.output_size,
+          configured_output_limit: sp.configured_output_limit ?? prev.configured_output_limit,
+          human_review: sp.human_review ?? prev.human_review }
       }
       return {
         ...state, planSteps: next.planSteps, timeline: next.timeline, trace: next.trace,

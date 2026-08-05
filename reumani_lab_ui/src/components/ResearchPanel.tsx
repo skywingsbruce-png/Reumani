@@ -28,6 +28,8 @@ export function ResearchPanel() {
   const errorType = r.error_type as string | undefined
   const errorSummary = r.error_summary as string | undefined
   const interrupted = r.interrupted_stage as string | undefined
+  const truncated = r.output_truncated === true
+  const needsReview = r.human_review === true
 
   return (
     <section className="section research-sec" aria-label="研究阶段" data-testid="research-panel">
@@ -63,7 +65,21 @@ export function ResearchPanel() {
           <strong>执行失败：{STAGE_LABEL[failedStage] ?? failedStage}</strong>
           <span className="mono" data-testid="failed-stage">{failedStage}</span>
           {errorType && <span className="mono" data-testid="failure-type">{errorType}</span>}
+          {truncated && (
+            // A.7.5.6.1 §11：截断必须一眼可辨（≠ 普通 schema 错误），
+            // 但只显示元数据，绝不显示被截断的原始输出。
+            <span className="mono badge b-fail" data-testid="failure-truncated">
+              output_truncated · {String(r.truncated_role ?? failedStage)}
+              {r.finish_reason ? ` · finish_reason=${String(r.finish_reason)}` : ''}
+              {r.output_size != null
+                ? ` · ${String(r.output_size)}/${String(r.configured_output_limit ?? '?')} tokens`
+                : ''}
+            </span>
+          )}
           {errorSummary && <p className="failure-summary">{errorSummary}</p>}
+          {needsReview && (
+            <span className="mono" data-testid="failure-human-review">需人工复核</span>
+          )}
           <p className="approval-note">未生成科研产物；需人工审查（human review）。</p>
         </div>
       )}
