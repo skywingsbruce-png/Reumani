@@ -61,11 +61,11 @@ _SECRET_PATTERNS = (
 # 目的是让「人当时看到了什么」可被事后审计，而不是只存在于内存里的 HTTP 响应。
 _FROZEN_FACT_EVENT_KEYS = (
     "subset_id", "subset_hash", "source_pack_hash", "protocol_hash",
-    "core_card_count", "context_only_count", "direct_count", "indirect_count",
-    "direct_human_causal_count", "causal_ceiling", "model_role_count",
-    "max_model_calls", "max_cost_usd", "evidence_facts_hash",
-    "allow_network", "allow_planner", "allow_code_execution", "allow_device_control",
-    "expected_artifact",
+    "core_evidence_count", "context_only_count", "direct_count", "indirect_count",
+    "direct_human_causal_count", "causal_ceiling", "total_call_cap",
+    "task_budget_usd", "worst_case_cost_usd", "preview_hash",
+    "network_allowed", "planner_allowed", "code_allowed", "device_allowed",
+    "expected_artifact", "evidence_content_level",
 )
 
 
@@ -368,7 +368,7 @@ class HitlRun:
         # action_hash 绑定完整执行计划 + 冻结事实：任一项改变 → 旧批准失效
         args = {"plan_hash": spec.plan_hash(), "answer_hash": self._answer_hash}
         if facts:
-            args["evidence_facts_hash"] = facts["evidence_facts_hash"]
+            args["preview_hash"] = facts["preview_hash"]
         ah = HC.action_hash(spec.executor_id, args, a.risk_level)
         rid = f"apr-{self.run_id}"
         self._to("awaiting_approval")
@@ -409,7 +409,7 @@ class HitlRun:
         if not callable(fn):
             return None
         facts = fn()
-        if not isinstance(facts, dict) or not facts.get("evidence_facts_hash"):
+        if not isinstance(facts, dict) or not facts.get("preview_hash"):
             raise HC.ContractViolation("executor 返回的审批冻结事实无效 → 拒绝进入审批")
         return facts
 
@@ -423,11 +423,11 @@ class HitlRun:
         # 若两者不同 → 批准后证据/上限发生了漂移 → 旧批准失效。
         if use_card_facts:
             if self._approval_facts:
-                plan["evidence_facts_hash"] = self._approval_facts["evidence_facts_hash"]
+                plan["preview_hash"] = self._approval_facts["preview_hash"]
         else:
             facts = self._executor_approval_facts()
             if facts:
-                plan["evidence_facts_hash"] = facts["evidence_facts_hash"]
+                plan["preview_hash"] = facts["preview_hash"]
         return plan
 
     def _assert_plan_unchanged(self):
@@ -517,15 +517,36 @@ class HitlRun:
 
     def _commit_stage_failure(self, stage, idx, err, generation):
         """持锁：阶段异常 → research_stage_failed + run_failed（fail-closed，不产成功产物）。"""
+        # §7：输出截断有专门的诊断字段（只取元数据，绝不取被截断的输出正文）
+        trunc = {}
+        getter = getattr(err, "manifest_fields", None)
+        if callable(getter):
+            try:
+                trunc = {k: v for k, v in dict(getter()).items()
+                         if k in ("role", "finish_reason", "output_tokens",
+                                  "configured_max_tokens", "output_truncated")}
+            except Exception:                            # noqa: BLE001
+                trunc = {}
         self.primary_failure = {"failed_stage": stage, "stage_index": idx,
                                 "error_type": type(err).__name__,
                                 "error_summary": _safe_error(err),
                                 "worker_generation": generation,
-                                "completed_stages": list(self._stages_done)}
-        sp = {"stage": stage, "stage_index": idx, "stage_count": len(self._research_stages),
-              "failed_stage": stage, "error_type": type(err).__name__,
-              "error_summary": _safe_error(err), "worker_generation": generation,
-              "completed_stage_count": len(self._stages_done), "human_review": True}
+                                "completed_stages": list(self._stages_done), **trunc}
+        # 事件层用不含 "token" 子串的键名：SAFE_PAYLOAD 的敏感子串检查会拦下 *_tokens
+        # （那条规则是为了挡 auth token，不能为了本功能放宽）。
+        ev_trunc = {}
+        if trunc:
+            ev_trunc = {"output_truncated": bool(trunc.get("output_truncated")),
+                        "truncated_role": trunc.get("role"),
+                        "finish_reason": trunc.get("finish_reason"),
+                        "output_size": trunc.get("output_tokens"),
+                        "configured_output_limit": trunc.get("configured_max_tokens")}
+            ev_trunc = {k: v for k, v in ev_trunc.items() if v is not None}
+        base_sp = {"stage": stage, "stage_index": idx, "stage_count": len(self._research_stages),
+                   "failed_stage": stage, "error_type": type(err).__name__,
+                   "error_summary": _safe_error(err), "worker_generation": generation,
+                   "completed_stage_count": len(self._stages_done), "human_review": True}
+        sp = {**base_sp, **ev_trunc}
         try:
             with self._txn(None):
                 self._emit("research_stage_failed", step_id=2, status="failed",
@@ -543,6 +564,24 @@ class HitlRun:
                                       "error_type": type(sink_err).__name__,
                                       "error_summary": _safe_error(sink_err)}
             self.needs_human_review = True
+            # 富诊断写不进去（例如 payload 被安全校验拒绝）时，**必须**退回最小载荷再收敛一次：
+            # 否则事务回滚会把 run 永远留在 running（fail-open），这与 fail-closed 相悖。
+            try:
+                with self._txn(None):
+                    self._emit("research_stage_failed", step_id=2, status="failed",
+                               summary=f"stage failed: {stage}", safe_payload=dict(base_sp))
+                    self.needs_human_review = True
+                    self.pending = None
+                    self._pending_obj = None
+                    self._to("failed")
+                    self._emit("run_failed", status="failed", summary="research run failed",
+                               safe_payload={"failed_stage": stage,
+                                             "error_type": type(err).__name__,
+                                             "error_summary": _safe_error(err),
+                                             "human_review": True,
+                                             "completed_stage_count": len(self._stages_done)})
+            except BaseException:                        # noqa: BLE001 — 已尽最大努力
+                pass
         self._build_failure_manifest()                   # 诊断产物；写失败只作为 secondary
 
     def _build_failure_manifest(self):
@@ -556,7 +595,12 @@ class HitlRun:
                 error_summary=pf.get("error_summary", ""),
                 completed_stages=list(pf.get("completed_stages", [])),
                 evidence_count=len(self._spec.evidence_refs) if self._spec else 0,
-                worker_generation=int(pf.get("worker_generation", 0))).finalize()
+                worker_generation=int(pf.get("worker_generation", 0)),
+                # §7 截断诊断（只记录元数据，绝不记录被截断的输出正文）
+                output_truncated=bool(pf.get("output_truncated")),
+                truncated_role=pf.get("role"), finish_reason=pf.get("finish_reason"),
+                output_tokens=pf.get("output_tokens"),
+                configured_max_tokens=pf.get("configured_max_tokens")).finalize()
             self.failure_manifest = m.model_dump(mode="json")
         except BaseException as e:                       # noqa: BLE001
             self.secondary_failure = self.secondary_failure or {

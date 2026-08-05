@@ -259,12 +259,12 @@ function reducer(state: LabState, action: Action): LabState {
         // transition — without this the snapshot's frozen_facts would be dropped and the human
         // would approve while seeing less than the server actually froze.
         const factKeys = ['subset_id', 'subset_hash', 'source_pack_hash', 'protocol_hash',
-          'core_card_count', 'context_only_count', 'direct_count', 'indirect_count',
-          'direct_human_causal_count', 'causal_ceiling', 'model_role_count', 'max_model_calls',
-          'max_cost_usd', 'evidence_facts_hash', 'allow_network', 'allow_planner',
-          'allow_code_execution', 'allow_device_control', 'expected_artifact'] as const
+          'core_evidence_count', 'context_only_count', 'direct_count', 'indirect_count',
+          'direct_human_causal_count', 'causal_ceiling', 'total_call_cap', 'task_budget_usd',
+          'worst_case_cost_usd', 'preview_hash', 'network_allowed', 'planner_allowed',
+          'code_allowed', 'device_allowed', 'expected_artifact', 'evidence_content_level'] as const
         const kept = keep(sp.request_id)
-        const facts: Record<string, unknown> = sp.evidence_facts_hash
+        const facts: Record<string, unknown> = sp.preview_hash
           ? Object.fromEntries(factKeys.filter(k => sp[k] !== undefined).map(k => [k, sp[k]]))
           : ((kept.frozen_facts as Record<string, unknown> | undefined) ?? {})
         pending = { ...kept,

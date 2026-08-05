@@ -274,9 +274,71 @@ class ResearchArtifact(_Strict):
                 raise ResearchContractError(f"Claim {c.claim_id} 引用了不存在的 evidence_id：{sorted(unknown)}")
 
 
+class RolePreview(_Strict):
+    """审批卡上的单个受控角色。上限来自真实 Gate，不是客户端参数。"""
+    role: str
+    model_id: str
+    call_cap: int
+    max_tokens: int
+    worst_case_cost_usd: float
+
+
+class ResearchExecutionPreview(_Strict):
+    """A.7.5.6.1 §5 —— 服务器端生成的结构化执行预览。
+
+    **必须**由真实的 FrozenEvidenceLoader + HardBudgetGate + 已注入的角色生成，
+    不得来自客户端参数或占位 spec。`preview_hash` 在批准时被冻结；执行前任一字段
+    变化都会在**第一次 provider 调用之前**拒绝执行。
+    """
+    schema_version: Literal["research-execution-preview-v1"] = "research-execution-preview-v1"
+    executor_id: str
+    subset_id: str
+    subset_hash: str
+    source_pack_hash: str
+    protocol_hash: str
+    core_evidence_count: int
+    context_only_count: int
+    direct_count: int
+    indirect_count: int
+    direct_human_causal_count: int
+    causal_ceiling: str
+    roles: list[RolePreview] = Field(default_factory=list)
+    total_call_cap: int
+    task_budget_usd: float
+    worst_case_cost_usd: float
+    network_allowed: bool = False
+    planner_allowed: bool = False
+    code_allowed: bool = False
+    device_allowed: bool = False
+    expected_artifact: str = RESEARCH_ARTIFACT_SCHEMA
+    evidence_content_level: str = "abstract_only"
+    preview_hash: str = ""
+
+    def compute_preview_hash(self) -> str:
+        d = self.model_dump(mode="json")
+        d.pop("preview_hash", None)
+        return compute_hash(d)
+
+    def finalize(self) -> "ResearchExecutionPreview":
+        return self.model_copy(update={"preview_hash": self.compute_preview_hash()})
+
+    def assert_within_budget(self) -> None:
+        """最坏费用必须落在真实任务预算内，否则拒绝进入审批（provider 调用为 0）。"""
+        if self.worst_case_cost_usd > self.task_budget_usd:
+            raise ResearchContractError(
+                f"三角色最坏费用 ${self.worst_case_cost_usd:.5f} 超过任务预算 "
+                f"${self.task_budget_usd:.5f} → 拒绝执行（不得自动提高预算）")
+
+
 class ResearchFailureManifest(_Strict):
     """失败诊断产物（research-failure-v1）。**绝不冒充科研成功结论**：claims 恒为空、无成功产物。"""
     schema_version: Literal["research-failure-v1"] = "research-failure-v1"
+    # A.7.5.6.1 §7：输出被 max_tokens 截断时必须可分辨，且**不保存被截断的原文**
+    output_truncated: bool = False
+    truncated_role: Optional[str] = None
+    finish_reason: Optional[str] = None
+    output_tokens: Optional[int] = None
+    configured_max_tokens: Optional[int] = None
     run_id: str
     failed_stage: str
     error_type: str

@@ -82,7 +82,8 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
   const facts = (pending.frozen_facts ?? null) as Record<string, unknown> | null
   const fixture = pending.fixture === true
   const short = (v: unknown) => String(v ?? '').slice(0, 16)
-  const cap = facts ? Number(facts.max_cost_usd ?? 0) : null
+  const cap = facts ? Number(facts.task_budget_usd ?? 0) : null
+  const roles = (Array.isArray(facts?.roles) ? facts!.roles : []) as Array<Record<string, unknown>>
   return (
     <section className="section hitl-card approval-card" aria-label="审批请求" data-testid="hitl-approval">
       <div className="clar-head">
@@ -98,7 +99,7 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
             <div><dt>研究问题</dt><dd data-testid="apr-question">{String(pending.question ?? '')}</dd></div>
             <div><dt>澄清答复</dt><dd className="mono" data-testid="apr-answer">{String(pending.clarification_answer ?? '')}</dd></div>
             <div><dt>证据数量</dt><dd className="mono" data-testid="apr-evidence">
-              {facts ? `${String(facts.core_card_count ?? 0)} 张核心证据卡（另有 ${String(facts.context_only_count ?? 0)} 张仅背景，不得作为实验依据）`
+              {facts ? `${String(facts.core_evidence_count ?? 0)} 张核心证据卡（另有 ${String(facts.context_only_count ?? 0)} 张仅背景，不得作为实验依据）`
                      : `${String(pending.evidence_count ?? 0)} 条${fixture ? '（测试夹具）' : ''}`}
             </dd></div>
             {facts ? (
@@ -119,25 +120,43 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
             <div><dt>执行器</dt><dd className="mono" data-testid="apr-executor">{String(pending.executor_id ?? '')}</dd></div>
             <div><dt>执行阶段</dt><dd className="mono" data-testid="apr-stages">{stages.length} 阶段</dd></div>
             <div><dt>权限边界</dt><dd className="mono" data-testid="apr-policy">
-              网络 {(facts ? facts.allow_network : policy.allow_network) ? '允许' : '禁止'} ·
-              代码 {(facts ? facts.allow_code_execution : policy.allow_code_execution) ? '允许' : '禁止'} ·
-              设备 {(facts ? facts.allow_device_control : policy.allow_device_control) ? '允许' : '禁止'} ·
-              Planner {(facts ? facts.allow_planner : policy.allow_planner) ? '允许' : '禁止'}
+              网络 {(facts ? facts.network_allowed : policy.allow_network) ? '允许' : '禁止'} ·
+              代码 {(facts ? facts.code_allowed : policy.allow_code_execution) ? '允许' : '禁止'} ·
+              设备 {(facts ? facts.device_allowed : policy.allow_device_control) ? '允许' : '禁止'} ·
+              Planner {(facts ? facts.planner_allowed : policy.allow_planner) ? '允许' : '禁止'}
             </dd></div>
             <div><dt>调用上限</dt><dd className="mono" data-testid="apr-calls">
-              总计 {String(facts?.max_model_calls ?? policy.max_model_calls ?? 0)} ·
-              {' '}{String(facts?.model_role_count ?? 3)} 个角色各 1（不可互借）
+              总计 {String(facts?.total_call_cap ?? policy.max_model_calls ?? 0)} ·
+              {' '}{roles.length || 3} 个角色各 1（不可互借）
             </dd></div>
+            {roles.length ? (
+              <div><dt>角色与输出上限</dt><dd className="mono" data-testid="apr-roles">
+                {roles.map(r => `${String(r.role)}:${String(r.model_id)} `
+                  + `max_tokens=${String(r.max_tokens)} `
+                  + `worst=US$${Number(r.worst_case_cost_usd ?? 0).toFixed(5)}`).join(' · ')}
+              </dd></div>
+            ) : null}
             <div><dt>费用上限</dt><dd className="mono" data-testid="apr-cost-cap">
               {cap !== null ? `US$${cap.toFixed(5)}（硬闸门）` : '不适用（零付费夹具）'}
             </dd></div>
+            {facts ? (
+              <div><dt>最坏费用</dt><dd className="mono" data-testid="apr-worst-cost">
+                US${Number(facts.worst_case_cost_usd ?? 0).toFixed(5)}
+                {cap ? `（占预算 ${(100 * Number(facts.worst_case_cost_usd ?? 0) / cap).toFixed(1)}%）` : ''}
+              </dd></div>
+            ) : null}
+            {facts ? (
+              <div><dt>证据层级</dt><dd className="mono" data-testid="apr-content-level">
+                {String(facts.evidence_content_level ?? 'abstract_only')}（仅摘要级，不含全文）
+              </dd></div>
+            ) : null}
             <div><dt>预期产物</dt><dd className="mono">
               {facts ? String(facts.expected_artifact ?? '') : (pending.expected_outputs as string[] ?? []).join(', ')}
             </dd></div>
             <div><dt>策略指纹</dt><dd className="mono">{short(pending.policy_hash)}…</dd></div>
             {facts ? (
               <div><dt>冻结事实指纹</dt><dd className="mono" data-testid="apr-facts-hash">
-                {short(facts.evidence_facts_hash)}…
+                {short(facts.preview_hash)}…
               </dd></div>
             ) : null}
           </>
@@ -153,7 +172,7 @@ function ApprovalCard({ pending }: { pending: Record<string, unknown> }) {
           // 判据是**是否挂了非零预算的硬闸门**，而不是证据是否为夹具：
           // 前端无法分辨 provider 真假，宁可多警告，绝不可少警告。
           ? (cap !== null && cap > 0
-              ? `批准后将冻结问题、证据、策略与执行器，并按上述硬上限调用受控付费模型（最多 ${String(facts?.max_model_calls ?? 3)} 次，费用上限 US$${cap.toFixed(5)}）。批准即授权计费。`
+              ? `批准后将冻结问题、证据、策略与执行器，并按上述硬上限调用受控付费模型（最多 ${String(facts?.total_call_cap ?? 3)} 次，费用上限 US$${cap.toFixed(5)}）。批准即授权计费。`
               : '批准后将冻结问题、证据、策略与执行器；此为零付费测试夹具，不调用真实模型。')
           : '此为仿真，不连接真实设备。'}
       </p>

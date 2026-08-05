@@ -43,14 +43,28 @@ def price_for(model_id):
     return _prices.price_for(model_id)
 
 
-def estimate_input_tokens(payload):
-    """保守估算：按字符数 / 3（比常见的 /4 更保守，宁可高估）。"""
+# A.7.5.6.1 §8 —— 输入 token 估算参数。
+# 旧口径 len/3 在第一次真实 Canary 上低估：估 2512，实际 3293（比值 1.311），
+# 因为 CJK + 结构化 JSON 的实际密度约 2.29 字符/token，而不是 3。
+# 新口径按 2.0 字符/token 计，再加固定消息包装开销与安全系数。
+CHARS_PER_TOKEN = 2.0          # 保守：低于观测到的 2.288
+MESSAGE_OVERHEAD_TOKENS = 200  # system/user 包装、schema 说明、角色前后缀
+SAFETY_MULTIPLIER = 1.15       # 余量；不得低于第一次真实运行观测比例
+
+
+def estimate_input_tokens(payload, *, safety_multiplier=SAFETY_MULTIPLIER):
+    """保守估算输入 token。**宁可高估**：预留不足会导致实际费用超出预算上限。
+
+    计入完整 payload（system+user+schema+evidence facts+untrusted excerpts）的字符数，
+    按 CHARS_PER_TOKEN 折算，加固定消息包装开销，再乘安全系数。
+    """
     try:
         s = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False,
                                                                 default=str)
     except Exception:
         s = str(payload)
-    return max(1, len(s) // 3)
+    base = len(s) / CHARS_PER_TOKEN + MESSAGE_OVERHEAD_TOKENS
+    return max(1, int(base * float(safety_multiplier)))
 
 
 class Ledger:

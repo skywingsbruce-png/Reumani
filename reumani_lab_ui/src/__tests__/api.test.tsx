@@ -322,14 +322,22 @@ describe('research run UI (A.7.5.3)', () => {
                   allow_planner: false, max_model_calls: 3 },
         frozen_facts: { executor_id: 'gated-research-v1', subset_id: 'ssc_cgas_sting_canary_v1',
           subset_hash: '7430fcbd4c3d1e8f'.repeat(4), source_pack_hash: '9df9ac40181cb25b'.repeat(4),
-          protocol_hash: '24ad37a634b094cc'.repeat(4), core_card_count: 6, context_only_count: 2,
+          protocol_hash: '24ad37a634b094cc'.repeat(4), core_evidence_count: 6, context_only_count: 2,
           direct_count: 3, indirect_count: 3, direct_human_causal_count: 0,
-          causal_ceiling: 'preclinical_perturbation_support', model_role_count: 3,
-          per_role_limit: { synthesizer: 1, verifier: 1, claim_extractor: 1 },
-          max_model_calls: 3, max_cost_usd: 0.15, allow_network: false, allow_planner: false,
-          allow_code_execution: false, allow_device_control: false,
+          causal_ceiling: 'preclinical_perturbation_support',
+          roles: [
+            { role: 'synthesizer', model_id: 'claude-opus-4-8', call_cap: 1, max_tokens: 1600,
+              worst_case_cost_usd: 0.06981 },
+            { role: 'verifier', model_id: 'claude-opus-4-8', call_cap: 1, max_tokens: 1150,
+              worst_case_cost_usd: 0.06492 },
+            { role: 'claim_extractor', model_id: 'deepseek-v4-flash', call_cap: 1,
+              max_tokens: 2400, worst_case_cost_usd: 0.00132 }],
+          total_call_cap: 3, task_budget_usd: 0.15, worst_case_cost_usd: 0.136054,
+          network_allowed: false, planner_allowed: false,
+          code_allowed: false, device_allowed: false,
+          evidence_content_level: 'abstract_only',
           expected_artifact: 'research-artifact-v1',
-          evidence_facts_hash: 'f'.repeat(64) } } } }) })
+          preview_hash: 'f'.repeat(64) } } } }) })
     // 证据边界必须可见
     expect(screen.getByTestId('apr-evidence').textContent).toContain('6')
     expect(screen.getByTestId('apr-evidence').textContent).toContain('2')
@@ -342,6 +350,10 @@ describe('research run UI (A.7.5.3)', () => {
     expect(src).toContain('9df9ac40181cb25b'); expect(src).toContain('24ad37a634b094cc')
     // 真实费用上限，而不是 0.00
     expect(screen.getByTestId('apr-cost-cap').textContent).toContain('0.15000')
+    // A.7.5.6.1 §11：重新计算后的最坏费用 + 角色输出上限 + 摘要级证据限制
+    expect(screen.getByTestId('apr-worst-cost').textContent).toContain('0.13605')
+    expect(screen.getByTestId('apr-roles').textContent).toContain('max_tokens=1600')
+    expect(screen.getByTestId('apr-content-level').textContent).toContain('abstract_only')
     expect(screen.getByTestId('apr-calls').textContent).toContain('3')
     expect(screen.getByTestId('apr-facts-hash').textContent).toContain('ffff')
     // 接了真实受控模型时，绝不能再声称「零付费测试夹具」
@@ -363,12 +375,12 @@ describe('research run UI (A.7.5.3)', () => {
         subset_id: 'ssc_cgas_sting_canary_v1', subset_hash: '7430fcbd4c3d1e8f'.repeat(4),
         source_pack_hash: '9df9ac40181cb25b'.repeat(4),
         protocol_hash: '24ad37a634b094cc'.repeat(4),
-        core_card_count: 6, context_only_count: 2, direct_count: 3, indirect_count: 3,
+        core_evidence_count: 6, context_only_count: 2, direct_count: 3, indirect_count: 3,
         direct_human_causal_count: 0, causal_ceiling: 'preclinical_perturbation_support',
-        model_role_count: 3, max_model_calls: 3, max_cost_usd: 0.15,
-        allow_network: false, allow_planner: false, allow_code_execution: false,
-        allow_device_control: false, expected_artifact: 'research-artifact-v1',
-        evidence_facts_hash: 'e'.repeat(64) } }) }) })
+        model_role_count: 3, total_call_cap: 3, task_budget_usd: 0.15, worst_case_cost_usd: 0.136054,
+        network_allowed: false, planner_allowed: false, code_allowed: false,
+        device_allowed: false, evidence_content_level: 'abstract_only', expected_artifact: 'research-artifact-v1',
+        preview_hash: 'e'.repeat(64) } }) }) })
     expect(screen.getByTestId('apr-evidence').textContent).toContain('6')
     expect(screen.getByTestId('apr-evidence-mix').textContent).toContain('直接人体因果 0')
     expect(screen.getByTestId('apr-cost-cap').textContent).toContain('0.15000')
