@@ -29,33 +29,46 @@ class ResearchOutputError(ValueError):
 # A.7.5.6.1 §6 —— 结构化输出的硬性尺寸上限。
 # 目的：让「最坏合法 JSON」可计算，从而能确定 max_tokens 和最坏费用。
 # 超限一律**拒绝**（不再静默截断）：静默截断会把越界输出伪装成合法结果。
-# 这些数值不是随手选的：它们由「最坏合法 JSON 必须放得进 max_tokens，且三角色最坏费用
-# ≤ USD 0.15」反推而来（见 ROLE_MAX_TOKENS）。放宽任何一项都会突破预算。
-LIMITS = {
-    "summary": 320,
-    "statement": 140,          # 单条陈述
-    "supported_statements": 4,
-    "unsupported_statements": 4,
-    "contradictions": 2,
-    "evidence_gaps": 2,
-    "limitations": 3,
-    "citations": 6,            # 冻结子集恰有 6 张核心卡，不需要更多引用位
-    "evidence_id": 32,         # 实际 evidence_id 形如 SSCCGAS-40374521（16 字符）
-    "reason": 260,
-    "conflict": 140,
-    "fact_conflicts": 2,
-    "citation_conflicts": 2,
-    "unsupported_claims": 3,
-    "required_corrections": 3,
-    "claims": 5,
-    "claim_text": 250,
-    "claim_limitations": 3,
-    "claim_limitation": 150,
-}
+# A.8.1 —— 上限的**唯一来源**是 pilot/role_contracts.py 的 OutputContract。
+# 本地 validator、Prompt 文本、provider JSON Schema 三者全部从同一份契约派生；
+# 这里**不得**再手写任何独立常量（两次 Canary 的教训之一就是 schema 与 Prompt 各说各话）。
+def _derive_limits():
+    from pilot.role_contracts import SYNTHESIS_CONTRACT, VERIFIER_CONTRACT, CLAIM_CONTRACT
+    s, v, c = (x.limits() for x in (SYNTHESIS_CONTRACT, VERIFIER_CONTRACT, CLAIM_CONTRACT))
+    claim_fields = {f.name: f for f in CLAIM_CONTRACT.fields}
+    return {
+        "summary": s["summary"]["max_characters"],
+        "statement": s["supported_statements"]["max_characters"],
+        "supported_statements": s["supported_statements"]["max_items"],
+        "unsupported_statements": s["unsupported_statements"]["max_items"],
+        "contradictions": s["contradictions"]["max_items"],
+        "evidence_gaps": s["evidence_gaps"]["max_items"],
+        "limitations": s["limitations"]["max_items"],
+        "citations": s["citations"]["max_items"],
+        "evidence_id": s["citations"]["max_characters"],
+        "reason": v["reason"]["max_characters"],
+        "conflict": v["fact_conflicts"]["max_characters"],
+        "fact_conflicts": v["fact_conflicts"]["max_items"],
+        "citation_conflicts": v["citation_conflicts"]["max_items"],
+        "unsupported_claims": v["unsupported_claims"]["max_items"],
+        "required_corrections": v["required_corrections"]["max_items"],
+        "claims": c["claims"]["max_items"],
+        "claim_text": claim_fields["claims"].max_characters,
+        "claim_limitations": 3,
+        "claim_limitation": 150,
+    }
 
-# A.7.5.6.1 §6 —— 每角色输出上限。由上面的 caps 推出的最坏合法 JSON 长度决定，
-# 再按 2.0 字符/token 折算并留少量余量。第一次 Canary 的失败正是 1500 不够。
-ROLE_MAX_TOKENS = {"synthesizer": 1600, "verifier": 1150, "claim_extractor": 2400}
+
+LIMITS = _derive_limits()
+
+
+def _derive_role_max_tokens():
+    from pilot.role_contracts import ROLE_CONTRACTS
+    return {r: c.max_output_tokens for r, c in ROLE_CONTRACTS.items()}
+
+
+# 每角色输出上限同样来自契约（A.7.5.6.1 由最坏合法 JSON + $0.15 预算反推得到）。
+ROLE_MAX_TOKENS = _derive_role_max_tokens()
 CHARS_PER_OUTPUT_TOKEN = 2.0
 
 
