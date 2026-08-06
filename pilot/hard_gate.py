@@ -344,7 +344,11 @@ _METHODS = ("invoke", "ainvoke", "stream", "astream", "batch", "abatch")
 # 会返回**新 Runnable/模型对象**的派生方法：返回值必须重新包回同一 gate。
 _REWRAP_DERIVATIONS = ("with_config", "with_types", "with_listeners",
                        "with_alisteners", "configurable_fields",
-                       "configurable_alternatives", "assign", "pick")
+                       "configurable_alternatives", "assign", "pick",
+                       # A.8.1.1R：结构化输出是**已审计**的派生方式。返回值仍被包回同一
+                       # gate / role / 账本 / max_tokens，因此每次调用照常计量与硬拒绝。
+                       # 这不改变任何预算裁决语义，只是把它从"未审计逃逸口"改为受控通道。
+                       "with_structured_output")
 # 直接拒绝的派生方法：Pilot 语义上不允许。
 _FORBIDDEN_DERIVATIONS = {
     "with_retry": "Pilot 强制 max_retries=0，禁止任何自动重试",

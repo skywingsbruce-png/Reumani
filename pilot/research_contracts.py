@@ -304,6 +304,9 @@ class ResearchExecutionPreview(_Strict):
     causal_ceiling: str
     roles: list[RolePreview] = Field(default_factory=list)
     total_call_cap: int
+    # A.8.1.1R：预算是**版本化策略**，不是无版本的魔法常量。策略 id 进入 preview_hash，
+    # 因而也进入 action_hash —— 批准后策略或任何费用字段变化都会在 provider 调用前被拒绝。
+    budget_policy_id: str = ""
     task_budget_usd: float
     worst_case_cost_usd: float
     network_allowed: bool = False
@@ -328,6 +331,17 @@ class ResearchExecutionPreview(_Strict):
             raise ResearchContractError(
                 f"三角色最坏费用 ${self.worst_case_cost_usd:.5f} 超过任务预算 "
                 f"${self.task_budget_usd:.5f} → 拒绝执行（不得自动提高预算）")
+
+    def assert_policy_consistent(self) -> None:
+        """预览声明的预算必须与具名策略一致，且该策略允许用于新运行。"""
+        from pilot.budget_policy import policy_for
+        p = policy_for(self.budget_policy_id)
+        p.assert_usable_for_new_run()
+        if abs(p.task_budget_usd - self.task_budget_usd) > 1e-9:
+            raise ResearchContractError(
+                f"预览预算 ${self.task_budget_usd:.5f} 与策略 {p.policy_id} 的 "
+                f"${p.task_budget_usd:.5f} 不一致 → 拒绝执行")
+        p.assert_covers(self.worst_case_cost_usd)
 
 
 class ResearchFailureManifest(_Strict):

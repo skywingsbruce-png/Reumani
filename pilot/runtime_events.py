@@ -69,7 +69,7 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "subset_id", "subset_hash", "source_pack_hash", "protocol_hash",
     "core_evidence_count", "context_only_count", "direct_count", "indirect_count",
     "direct_human_causal_count", "causal_ceiling", "total_call_cap",
-    "task_budget_usd", "worst_case_cost_usd", "preview_hash",
+    "task_budget_usd", "worst_case_cost_usd", "preview_hash", "budget_policy_id",
     "network_allowed", "planner_allowed", "code_allowed", "device_allowed",
     "expected_artifact", "evidence_content_level",
     # A.7.5.6.1 §7 truncation diagnostics (never the truncated output itself)

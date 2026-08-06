@@ -43,14 +43,38 @@ class FieldLimit(_Strict):
     free_text_allowed: bool = True
     nullable: bool = False
     description: str = ""
+    # A.8.1.1R §2：具有**科学裁决意义**的一句语义说明。JSON Schema 只能表达格式，
+    # 表达不了「不得超过因果上限」「证据不足就应返回不足」这类科学约束，
+    # 因此即使在原生 schema 去重模式下也**必须保留**。
+    semantic_note: str = ""
+    scientific: bool = False           # True = 影响支持状态 / 人工复核 / Artifact 资格
 
-    def prompt_line(self) -> str:
+    def prompt_line(self, *, native_schema: bool = False) -> str:
         """给模型看的一行机器可检查说明。
 
         刻意使用**紧凑记法**：这段文字要随每次调用付费发送，冗长的散文措辞会挤占
         科学字段的预算。记法压缩不改变任何语义，也不删减任何字段。
         """
         opt = "" if self.required else "?"
+        if native_schema:
+            # Schema 已表达：类型 / required / enum 取值 / object 结构 / additionalProperties。
+            # 这里只保留 Schema **管不住**的：长度边界 + 科学语义。
+            if self.type in ("string_list", "object_list"):
+                body = f"<={self.max_items}x<={self.max_characters}ch"
+            elif self.type == "string" and self.max_characters:
+                body = f"<={self.max_characters}ch"
+            else:
+                body = ""
+            note = self.semantic_note or self.description
+            if not body and not note and not self.evidence_reference_only:
+                return ""                      # 纯格式字段，Schema 已完全覆盖
+            out = f"{self.name}: {body}".rstrip()
+            if self.evidence_reference_only:
+                out += " [evidence_id ONLY]"
+            if note:
+                out += f"  # {note}"
+            return out
+
         if self.enum_values:
             body = "enum[" + "|".join(sorted(self.enum_values)) + "]"
         elif self.type in ("string_list", "object_list"):
@@ -62,8 +86,11 @@ class FieldLimit(_Strict):
         out = f"{self.name}{opt}: {body}"
         if self.evidence_reference_only:
             out += " [evidence_id ONLY]"
-        if self.description:
-            out += f"  # {self.description}"
+        note = self.description or self.semantic_note
+        if self.semantic_note and self.description:
+            note = f"{self.description}; {self.semantic_note}"
+        if note:
+            out += f"  # {note}"
         return out
 
     def json_schema_fragment(self) -> dict:
@@ -129,6 +156,32 @@ class OutputContract(_Strict):
     # ---------- 派生：Prompt 文本 ----------
     def prompt_block(self) -> str:
         """把上限**真正告诉模型**。这是 A.8.1 的核心：过去 Prompt 从未包含任何长度上限。"""
+        return self.render_prompt_block(native_schema=False)
+
+    def render_prompt_block(self, *, native_schema: bool) -> str:
+        """A.8.1.1R §3 —— 按 provider 能力渲染。
+
+        `native_schema=True`（原生 JSON Schema 随请求发送）时做**无损去重**：
+        删除 Schema 已完整表达的 JSON 样板 / 类型 / required / enum 取值 /
+        additionalProperties；**保留** Schema 表达不了的长度边界与全部科学语义
+        （因果上限、裁决依据、evidence_id 限制、局限/矛盾/证据缺口等）。
+        字段一个不少，上限一个不改。
+        """
+        if native_schema:
+            lines = [f"OUTPUT LIMITS + SCIENTIFIC RULES {self.contract_id} "
+                     "(the attached JSON Schema fixes format; these it cannot enforce):"]
+            lines += [ln for ln in (f.prompt_line(native_schema=True) for f in self.fields) if ln]
+            lines += [
+                "No restated abstracts or EvidenceCard copies. No reasoning or chain-of-thought. "
+                "Do not invent literature, data or observations. "
+                "Do not state association as causation.",
+                f"Fill every required field; if tight, SHORTEN wording — never stop mid-object. "
+                f"Whole reply must fit in {self.max_output_tokens} output tokens.",
+            ]
+            return "\n".join(lines)
+        return self._full_block()
+
+    def _full_block(self) -> str:
         lines = [
             f"OUTPUT CONTRACT {self.contract_id} — hard limits, violating any voids the answer:",
             f'schema_version="{self.result_schema_version}"',

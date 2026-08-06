@@ -64,6 +64,7 @@
     "artifact_kind",
     "artifact_name",
     "attempt_number",
+    "budget_policy_id",
     "causal_ceiling",
     "causal_strength",
     "causal_tier",

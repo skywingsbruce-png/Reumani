@@ -21,6 +21,26 @@ from pilot.research_results import (ResearchOutputError, ROLE_MAX_TOKENS, LIMITS
                                     worst_case_output_chars, assert_max_tokens_sufficient)
 from pilot.research_contracts import (ResearchRunSpec, ResearchClarificationSpec, ResearchApprovalSpec,
                                       ResearchOption, ResearchExecutionPolicy, EvidenceReference)
+from pilot.output_contract import ProviderOutputCapability
+
+# 离线 fake provider 的能力记录：只支持 json_object（FakeChat 有 bind，无 with_structured_output）。
+# 注入而非写进生产能力表，生产表仍然只含已实测的真实模型。
+FAKE_CAP = ProviderOutputCapability(
+    provider="fake", model_id="fake-model", sdk_version="offline-fake",
+    json_object_supported=True, json_schema_supported=False,
+    strict_tool_schema_supported=False,
+    string_max_length_supported_by_provider=False,
+    array_max_items_supported_by_provider=False,
+    native_constraint_mode="json_object_only", fallback_mode="prompt_only",
+    verified_at="2026-08-06", documentation_source="offline test fake")
+def _fake_cap_for(model_id):
+    """给离线 fake 用的能力记录：FakeChat 只有 bind()，因此一律 json_object_only。
+    需要断言 Anthropic 原生 schema 的测试会注入自己的能力表。"""
+    return FAKE_CAP.model_copy(update={"model_id": model_id})
+
+
+FAKE_CAPS = {m: _fake_cap_for(m) for m in
+             ("fake-model", "claude-opus-4-8", "deepseek-v4-flash")}
 
 pytestmark = pytest.mark.unit
 REPO = str(pathlib.Path(__file__).resolve().parent.parent)
@@ -35,7 +55,9 @@ class FakeChat:
         self.calls = 0
 
     def bind(self, **k):
-        return FakeChat(self.payload, self.raise_exc, self.raw)
+        # 返回 self：适配器绑定 response_format 后，调用计数与注入的响应必须仍落在同一对象上
+        self.bound_kwargs = dict(k)
+        return self
 
     def invoke(self, prompt, **k):
         self.calls += 1
@@ -79,7 +101,7 @@ def _gate_switches(monkeypatch):
     monkeypatch.delenv("CI", raising=False)
 
 
-def make_gate(max_calls=3, max_usd=0.15, per_role=None):
+def make_gate(max_calls=3, max_usd=0.18, per_role=None):   # 新运行采用 research-budget-policy-v2
     return HardBudgetGate(stage="A755_offline",
                           ledger_path=os.path.join(tempfile.mkdtemp(), "l.jsonl"),
                           max_usd_global=max_usd, max_usd_stage=max_usd, max_usd_task=max_usd,
@@ -105,7 +127,8 @@ def build_executor(syn=None, ver=None, clm=None, *, gate=None, loader=None, exc=
                                   max_tokens=ROLE_MAX_TOKENS[role])
     ex = GatedResearchExecutor(synthesizer=models["synthesizer"], verifier=models["verifier"],
                                claim_extractor=models["claim_extractor"], gate=gate,
-                               evidence_loader=loader or FrozenEvidenceLoader(REPO))
+                               evidence_loader=loader or FrozenEvidenceLoader(REPO),
+                               capabilities=FAKE_CAPS)
     return ex, gate, models, inners
 
 
@@ -178,7 +201,8 @@ def test_approval_facts_are_deterministic_and_cost_zero_model_calls():
     assert [r["role"] for r in f1["roles"]] == ["synthesizer", "verifier", "claim_extractor"]
     assert all(r["call_cap"] == 1 for r in f1["roles"])
     assert f1["total_call_cap"] == 3
-    assert f1["task_budget_usd"] == 0.15               # 真实闸门上限，不是 0.00
+    assert f1["task_budget_usd"] == 0.18               # research-budget-policy-v2
+    assert f1["budget_policy_id"] == "research-budget-policy-v2"
     assert f1["worst_case_cost_usd"] <= f1["task_budget_usd"]
     assert f1["network_allowed"] is False and f1["planner_allowed"] is False
     assert f1["code_allowed"] is False and f1["device_allowed"] is False
@@ -202,8 +226,8 @@ def test_approval_card_and_event_expose_frozen_facts():
     card = r.pending
     facts = card["frozen_facts"]
     assert facts["core_evidence_count"] == 6 and facts["direct_human_causal_count"] == 0
-    assert facts["task_budget_usd"] == 0.15 and facts["total_call_cap"] == 3
-    assert 0 <= facts["worst_case_cost_usd"] <= 0.15   # fake-model 计价为 0
+    assert facts["task_budget_usd"] == 0.18 and facts["total_call_cap"] == 3
+    assert 0 <= facts["worst_case_cost_usd"] <= 0.18   # fake-model 计价为 0
     ev = [e for e in store.list("hitl-research-facts") if e.event_type == "approval_requested"][0]
     for k in ("subset_hash", "source_pack_hash", "protocol_hash", "core_evidence_count",
               "direct_count", "indirect_count", "direct_human_causal_count", "causal_ceiling",
@@ -246,18 +270,20 @@ def test_evidence_drift_after_approval_refuses_execution_with_zero_calls():
 # ============ A.7.5.6.1 §5-§9 预览 / sizing / 截断 / 保守预留 ============
 def test_preview_comes_from_real_loader_and_gate_not_client_params():
     """§5：预览必须来自真实 loader + 真实 gate，客户端参数改不动它。"""
-    ex, gate, _, _ = build_executor(gate=make_gate(max_usd=0.15))
+    ex, gate, _, _ = build_executor(gate=make_gate(max_usd=0.18))
     pv = ex.execution_preview()
     assert pv.task_budget_usd == gate.lim["max_usd_task"]          # 来自真实 gate
     assert pv.core_evidence_count == len(FrozenEvidenceLoader(REPO).load().core_cards)
     # 客户端 spec 里的 evidence_refs 只有 1 条占位，绝不能冒充 6 张核心卡
     assert len(make_spec().evidence_refs) != pv.core_evidence_count
     # 预算变了 → 预览必须跟着变（不是写死的占位）
+    # 闸门预算与具名策略不一致 → 拒绝（策略不可混用）
     ex2, _, _, _ = build_executor(gate=make_gate(max_usd=0.14))
-    assert ex2.execution_preview().task_budget_usd == 0.14
+    with pytest.raises(Exception):
+        ex2.execution_preview()
 
 
-def _priced_executor(max_usd=0.15):
+def _priced_executor(max_usd=0.18):
     """已核价 model_id + 本地 fake inner（不构造任何真实客户端），用于费用算术。"""
     priced, cheap = "claude-opus-4-8", "deepseek-v4-flash"
     gate = HardBudgetGate(stage="A755_offline",
@@ -276,13 +302,13 @@ def _priced_executor(max_usd=0.15):
                                   max_tokens=ROLE_MAX_TOKENS[role])
     return GatedResearchExecutor(synthesizer=models["synthesizer"], verifier=models["verifier"],
                                  claim_extractor=models["claim_extractor"], gate=gate,
-                                 evidence_loader=FrozenEvidenceLoader(REPO)), gate
+                                 evidence_loader=FrozenEvidenceLoader(REPO), capabilities=FAKE_CAPS), gate
 
 
 def test_preview_never_reports_zero_budget_regression():
     """回归：第一次 Canary 的审批卡显示 max_cost_usd=0.00，绝不可再现。"""
     ex, *_ = build_executor()
-    assert ex.execution_preview().task_budget_usd == 0.15      # 真实闸门预算，不是 0.00
+    assert ex.execution_preview().task_budget_usd == 0.18      # v2 策略预算，不是 0.00
     # 用已核价模型时，最坏费用必须是一个真实的正数，并落在预算内
     pex, _ = _priced_executor()
     pv = pex.execution_preview()
@@ -329,7 +355,7 @@ def test_three_roles_worst_case_within_budget_with_real_prices():
         from pilot.gated_research_executor import _PreviewCtx
         est = estimate_input_tokens(ex._preview_prompt(role, _PreviewCtx(), {"frozen": ev}, ev))
         total += P.worst_case_usd(model, est, ROLE_MAX_TOKENS[role])
-    assert total <= 0.15, f"三角色最坏费用 ${total:.5f} 超过 USD 0.15"
+    assert total <= 0.18, f"三角色最坏费用 ${total:.5f} 超过 USD 0.18"
 
 
 def test_max_tokens_cover_worst_legal_output():
@@ -372,7 +398,8 @@ class _TruncatedChat(FakeChat):
         self._mt = max_tokens
 
     def bind(self, **k):
-        return _TruncatedChat(self._mt)
+        self.bound_kwargs = dict(k)
+        return self
 
     def invoke(self, prompt, **k):
         self.calls += 1
@@ -396,7 +423,7 @@ def _truncating_executor():
                                   max_tokens=ROLE_MAX_TOKENS[role])
     ex = GatedResearchExecutor(synthesizer=models["synthesizer"], verifier=models["verifier"],
                                claim_extractor=models["claim_extractor"], gate=gate,
-                               evidence_loader=FrozenEvidenceLoader(REPO))
+                               evidence_loader=FrozenEvidenceLoader(REPO), capabilities=FAKE_CAPS)
     return ex, gate, inners
 
 
@@ -712,7 +739,7 @@ def test_budget_exceeded_before_provider():
                                   max_tokens=ROLE_MAX_TOKENS[role])
     ex = GatedResearchExecutor(synthesizer=models["synthesizer"], verifier=models["verifier"],
                                claim_extractor=models["claim_extractor"], gate=gate,
-                               evidence_loader=FrozenEvidenceLoader(REPO))
+                               evidence_loader=FrozenEvidenceLoader(REPO), capabilities=FAKE_CAPS)
     ctx = _ctx(ex)
     state = {}
     for s in ("validate_evidence", "evidence_accumulator"):
@@ -778,7 +805,7 @@ def _build_with_gate_on(role, ev):
                                 max_tokens=ROLE_MAX_TOKENS[r_])
     ex = GatedResearchExecutor(synthesizer=models["synthesizer"], verifier=models["verifier"],
                                claim_extractor=models["claim_extractor"], gate=gate,
-                               evidence_loader=FrozenEvidenceLoader(REPO))
+                               evidence_loader=FrozenEvidenceLoader(REPO), capabilities=FAKE_CAPS)
     return ex, inners
 
 
@@ -857,7 +884,7 @@ def test_provider_failure_fails_closed(exc, label):
                                   max_tokens=ROLE_MAX_TOKENS[role])
     ex = GatedResearchExecutor(synthesizer=models["synthesizer"], verifier=models["verifier"],
                                claim_extractor=models["claim_extractor"], gate=gate,
-                               evidence_loader=FrozenEvidenceLoader(REPO))
+                               evidence_loader=FrozenEvidenceLoader(REPO), capabilities=FAKE_CAPS)
     store, r, _ = run_chain(ex, rid=f"hitl-research-f{label}")
     assert r.state == "failed" and r.needs_human_review is True
     t = [e.event_type for e in store.list(f"hitl-research-f{label}")]
