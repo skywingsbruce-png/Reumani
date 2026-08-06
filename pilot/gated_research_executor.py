@@ -25,6 +25,7 @@ from pilot.research_results import (SynthesisResult, VerifierResult, ClaimExtrac
                                     assert_claim_not_upgraded, ROLE_MAX_TOKENS,
                                     assert_max_tokens_sufficient, LIMITS as RL)
 from pilot.budget_policy import active_policy_for_new_run, DEFAULT_NEW_RUN_POLICY_ID
+from pilot.live_cost import estimate_call_cost, CostUnverifiable
 from pilot.provider_output import apply_output_contract, ProviderRefusal
 from pilot.role_contracts import contract_for, capability_for
 from schemas import Claim
@@ -265,6 +266,7 @@ class GatedResearchExecutor:
         self.forbidden_calls = {"planner": 0, "react_executor": 0, "resolver": 0,
                                 "network": 0, "code_execution": 0, "device": 0}
         self.enforcement = {}            # role -> 实际施加的 provider enforcement（可审计）
+        self.cost_estimates = {}         # role -> CostEstimate（唯一费用权威的产物）
         # 能力表由服务端注入（与三个 GatedModel 同一注入点）；缺省用已核实的生产表。
         # 未登记的 model_id 一律在 provider 之前拒绝，绝不假设它支持结构化输出。
         self._capabilities = dict(capabilities) if capabilities else None
@@ -337,15 +339,27 @@ class GatedResearchExecutor:
             mt = int(self._role_max_tokens(role) or ROLE_MAX_TOKENS[role])
             assert_max_tokens_sufficient(role, mt)        # 合法输出放不下 → 拒绝
             model_id = _model_id_of(self._models[role]) or "unknown"
-            est = estimate_input_tokens(self._preview_prompt(role, ctx, state, ev))
+            # A.8.1.1R.1：费用必须按**最终真实请求对象**计算——Prompt + 随请求发送的
+            # JSON Schema + provider wrapper 开销。此前这里只算 Prompt，低估了真实费用。
+            # 唯一权威是 pilot.live_cost；此处**不得**再写第二份公式。
+            cap = self._role_capability(role)
             try:
-                cost = prices.worst_case_usd(model_id, est, mt)
-            except Exception as e:                        # noqa: BLE001 —— 价格未核实 → 拒绝
-                raise ExecutorConfigError(f"角色 {role} 的模型 {model_id!r} 价格未核实：{e}") from e
-            worst_total += cost
+                est = estimate_call_cost(
+                    role=role, model_id=model_id,
+                    prompt=self._preview_prompt(role, ctx, state, ev),
+                    contract=contract_for(role),
+                    provider_mode=cap.native_constraint_mode,
+                    max_tokens=mt, policy_id=self._budget_policy_id)
+            except CostUnverifiable as e:                 # 价格/模式无法核实 → 拒绝
+                raise ExecutorConfigError(f"角色 {role} 费用无法核实：{e}") from e
+            self.cost_estimates[role] = est
+            worst_total += est.worst_case_usd
             roles.append(RolePreview(role=role, model_id=model_id,
                                      call_cap=int(caps.get(role, 1)), max_tokens=mt,
-                                     worst_case_cost_usd=round(cost, 6)))
+                                     worst_case_cost_usd=est.worst_case_usd,
+                                     provider_mode=est.provider_mode,
+                                     schema_hash=est.schema_hash[:16],
+                                     total_input_token_estimate=est.total_input_token_estimate))
 
         pv = ResearchExecutionPreview(
             executor_id=self.executor_id,

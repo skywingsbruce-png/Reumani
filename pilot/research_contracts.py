@@ -275,12 +275,20 @@ class ResearchArtifact(_Strict):
 
 
 class RolePreview(_Strict):
-    """审批卡上的单个受控角色。上限来自真实 Gate，不是客户端参数。"""
+    """审批卡上的单个受控角色。上限来自真实 Gate，不是客户端参数。
+
+    A.8.1.1R.1：费用相关字段全部来自唯一权威 `pilot.live_cost.estimate_call_cost`，
+    并进入 preview_hash → action_hash，因此 schema / provider mode / max_tokens
+    任一变化都会让旧批准失效。
+    """
     role: str
     model_id: str
     call_cap: int
     max_tokens: int
     worst_case_cost_usd: float
+    provider_mode: str = ""
+    schema_hash: str = ""
+    total_input_token_estimate: int = 0
 
 
 class ResearchExecutionPreview(_Strict):

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from schemas import _Strict
 from tool_envelope import compute_hash
@@ -23,8 +23,34 @@ from tool_envelope import compute_hash
 BUDGET_POLICY_SCHEMA = "research-budget-policy-v1"   # 策略对象自身的 schema 版本
 
 
+class HistoricalRunSnapshot(_Strict):
+    """A.8.1.1R.1 §3 —— 单次历史运行的**不可变**配置快照。
+
+    两次 Canary 的 max_tokens 配置并不相同（1500/1200/1200 与 1600/1150/2400），
+    因此**不能**用一组 role_max_tokens 描述两者。每次运行各有一份快照，
+    数值只从冻结产物读取；产物未明确记录的写 `unknown`，绝不猜测。
+    权威始终是冻结的 Manifest / 结果文件本身，本快照只是它们的只读索引。
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: str
+    phase: str
+    budget_policy_id: str
+    task_budget_usd: float
+    role_max_tokens: dict            # 该次运行实际使用的配置
+    actual_cost_usd: float
+    outcome: str
+    source_artifact: str             # 权威出处（冻结产物文件名）
+
+
 class BudgetPolicy(_Strict):
-    """一个具名、可审计的预算策略。策略 id 进入 Approval 与 action_hash。"""
+    """一个具名、可审计的预算策略。策略 id 进入 Approval 与 action_hash。
+
+    A.8.1.1R.1 §4：真正不可变（frozen），且嵌套映射对外只暴露副本，
+    调用方无法就地修改而污染全局注册表。
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     schema_version: Literal["research-budget-policy-v1"] = BUDGET_POLICY_SCHEMA
     policy_id: str
     task_budget_usd: float
@@ -42,6 +68,13 @@ class BudgetPolicy(_Strict):
 
     def policy_hash(self) -> str:
         return compute_hash(self.model_dump(mode="json"))
+
+    def caps(self) -> dict:
+        """对外只给副本：外部改动不得污染全局注册表。"""
+        return dict(self.role_call_caps)
+
+    def max_tokens(self) -> dict:
+        return dict(self.role_max_tokens)
 
     def assert_usable_for_new_run(self) -> None:
         """历史专用策略不得被新运行采用（否则等于追溯改写历史口径）。"""
@@ -71,7 +104,9 @@ FROZEN_CANARY_BUDGET_V1 = BudgetPolicy(
     policy_id="frozen-canary-budget-v1",
     task_budget_usd=0.15,
     role_call_caps=_role_caps(),
-    role_max_tokens={"synthesizer": 1500, "verifier": 1200, "claim_extractor": 1200},
+    # 两次 Canary 的 max_tokens 配置**不同**，因此本策略只描述二者**共同的预算上限**，
+    # 具体角色配置由各自的冻结产物（见 HISTORICAL_RUNS）作为权威。
+    role_max_tokens={},
     pricing_version="2026-07-20.1",
     estimation_method="A.7.5.6.1 conservative: chars/2.0 + 200 overhead tokens x1.15",
     cache_write_assumption="worst input rate incl. cache creation (Opus cache_write_1h $10/MTok)",
@@ -81,7 +116,32 @@ FROZEN_CANARY_BUDGET_V1 = BudgetPolicy(
     immutable=True,
     historical_only=True,
     note="Applies ONLY to the two canaries already executed (A.7.5.6 and A.7.5.6.2). "
+         "It fixes the shared $0.15 ceiling only; per-role configuration differed between "
+         "the two runs and is authoritative in each run's own frozen artifacts. "
          "Their approvals, manifests, ledgers and reports are never rewritten.")
+
+# 每次历史运行各自的不可变快照。数值只从冻结产物读取，未记录者写 unknown。
+HISTORICAL_RUNS = (
+    HistoricalRunSnapshot(
+        run_id="hitl-research-e4cbb903", phase="A.7.5.6",
+        budget_policy_id="frozen-canary-budget-v1", task_budget_usd=0.15,
+        role_max_tokens={"synthesizer": 1500, "verifier": 1200, "claim_extractor": 1200},
+        actual_cost_usd=0.07043, outcome="failed_closed_at_synthesizer_output_truncated",
+        source_artifact="pilot/round2_results/A7536_CANARY_METRICS.json"),
+    HistoricalRunSnapshot(
+        run_id="hitl-research-ac76f309", phase="A.7.5.6.2",
+        budget_policy_id="frozen-canary-budget-v1", task_budget_usd=0.15,
+        role_max_tokens={"synthesizer": 1600, "verifier": 1150, "claim_extractor": 2400},
+        actual_cost_usd=0.06153, outcome="failed_closed_at_synthesizer_output_truncated",
+        source_artifact="pilot/round2_results/A7562_CANARY_METRICS.json"),
+)
+
+
+def historical_run(run_id: str) -> HistoricalRunSnapshot:
+    for s in HISTORICAL_RUNS:
+        if s.run_id == run_id:
+            return s
+    raise KeyError(f"未知历史运行 {run_id!r}")
 
 # ---------------------------------------------------------------- v2：未来运行
 RESEARCH_BUDGET_POLICY_V2 = BudgetPolicy(
@@ -96,7 +156,7 @@ RESEARCH_BUDGET_POLICY_V2 = BudgetPolicy(
     provider_wrapper_assumption="native_json_schema 120 tokens / json_object_only 40 tokens",
     valid_for_future_runs_only=True,
     historical_runs_unchanged=True,
-    immutable=False,
+    immutable=True,
     historical_only=False,
     note="Raised from $0.15 solely because provider-native JSON Schema is now part of the "
          "request payload. Output constraints were NOT weakened and max_tokens were NOT changed.")
@@ -118,6 +178,6 @@ def active_policy_for_new_run(policy_id: str = DEFAULT_NEW_RUN_POLICY_ID) -> Bud
     return p
 
 
-__all__ = ["BudgetPolicy", "FROZEN_CANARY_BUDGET_V1", "RESEARCH_BUDGET_POLICY_V2",
+__all__ = ["BudgetPolicy", "HistoricalRunSnapshot", "HISTORICAL_RUNS", "historical_run", "FROZEN_CANARY_BUDGET_V1", "RESEARCH_BUDGET_POLICY_V2",
            "POLICIES", "policy_for", "active_policy_for_new_run",
            "DEFAULT_NEW_RUN_POLICY_ID", "BUDGET_POLICY_SCHEMA"]

@@ -20,8 +20,81 @@ def test_historical_canaries_keep_015_and_are_immutable():
     assert v1.task_budget_usd == 0.15
     assert v1.historical_only is True and v1.immutable is True
     assert v1.valid_for_future_runs_only is False
-    # 历史策略记录的是两次 Canary 当时的 max_tokens，不随后来的改动漂移
-    assert v1.role_max_tokens == {"synthesizer": 1500, "verifier": 1200, "claim_extractor": 1200}
+    # A.8.1.1R.1 §3：两次 Canary 配置不同，v1 只描述共同的预算上限，
+    # 绝不用一组 role_max_tokens 冒充两次实际不同的配置
+    assert v1.role_max_tokens == {}
+
+
+def test_each_historical_run_has_its_own_immutable_snapshot():
+    """两次 Canary 的 max_tokens 确实不同，必须各有快照，且与冻结产物一致。"""
+    import json as _json
+    import pathlib
+    from pilot.budget_policy import HISTORICAL_RUNS, historical_run
+    assert len(HISTORICAL_RUNS) == 2
+    a = historical_run("hitl-research-e4cbb903")
+    b = historical_run("hitl-research-ac76f309")
+    assert a.role_max_tokens != b.role_max_tokens          # 配置确实不同
+    assert a.role_max_tokens["synthesizer"] == 1500
+    assert b.role_max_tokens["synthesizer"] == 1600
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for snap in HISTORICAL_RUNS:
+        d = _json.loads((root / snap.source_artifact).read_text(encoding="utf-8"))
+        # 快照与冻结产物一致（A7536 指标未记录顶层 run_id，故以费用/配置为准）
+        assert d["cost_usd"]["cap"] == snap.task_budget_usd == 0.15
+        assert abs(d["cost_usd"]["actual"] - snap.actual_cost_usd) < 1e-9
+        mt = d["token_usage"][0]["max_tokens"]
+        assert snap.role_max_tokens["synthesizer"] == mt   # 出处即权威
+    with pytest.raises(KeyError):
+        historical_run("hitl-research-nonexistent")
+
+
+def test_policies_are_truly_immutable():
+    """§4：frozen 模型 + 嵌套映射只暴露副本，外部无法污染全局注册表。"""
+    from pilot.budget_policy import policy_for
+    v2 = RESEARCH_BUDGET_POLICY_V2
+    assert v2.immutable is True
+    with pytest.raises(Exception):                          # 字段不可赋值
+        v2.task_budget_usd = 0.99
+    with pytest.raises(Exception):
+        v2.policy_id = "hacked"
+    # 取出的映射是副本：改它不影响注册表
+    caps = v2.caps(); caps["synthesizer"] = 99
+    mt = v2.max_tokens(); mt["synthesizer"] = 99999
+    assert policy_for("research-budget-policy-v2").role_call_caps["synthesizer"] == 1
+    assert policy_for("research-budget-policy-v2").role_max_tokens["synthesizer"] == 1600
+    # 快照同样不可变
+    from pilot.budget_policy import HISTORICAL_RUNS
+    with pytest.raises(Exception):
+        HISTORICAL_RUNS[0].task_budget_usd = 0.99
+
+
+def test_policy_hash_changes_with_budget_caps_or_tokens():
+    base = RESEARCH_BUDGET_POLICY_V2.policy_hash()
+    for upd in ({"task_budget_usd": 0.20}, {"policy_id": "x"},
+                {"role_max_tokens": {"synthesizer": 9}},
+                {"estimation_method": "different"}):
+        assert RESEARCH_BUDGET_POLICY_V2.model_copy(update=upd).policy_hash() != base
+
+
+def test_concurrent_reads_are_stable():
+    import threading
+    from pilot.budget_policy import active_policy_for_new_run as act
+    seen, errs = [], []
+
+    def rd():
+        try:
+            for _ in range(200):
+                p = act()
+                seen.append((p.policy_id, p.task_budget_usd))
+        except Exception as e:                              # noqa: BLE001
+            errs.append(e)
+    ts = [threading.Thread(target=rd) for _ in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(30)
+    assert not errs
+    assert set(seen) == {("research-budget-policy-v2", 0.18)}
 
 
 def test_future_runs_use_v2_at_018():
