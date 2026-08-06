@@ -1,0 +1,196 @@
+{
+  "schema": "a7562-canary-metrics-v1",
+  "phase": "A.7.5.6.2",
+  "run_kind": "second and FINAL authorised real-provider HITL canary",
+  "run_id": "hitl-research-ac76f309",
+  "outcome": "failed_closed_at_synthesizer_output_truncated",
+  "executor_id": "gated-research-v1",
+  "approval_preview": {
+    "subset_id": "ssc_cgas_sting_canary_v1",
+    "subset_hash": "7430fcbd4c3d1e8f1eb5f37b11f0b3ec0ea146eb6fe020f0e9812f57d9375312",
+    "source_pack_hash": "9df9ac40181cb25b9018448154f8b4502845337ee678d1dd39abf0cdd26676f5",
+    "protocol_hash": "24ad37a634b094cc82dc54dd7f69e376a39f777a79b1c658b3f510f4dec5a7a0",
+    "core_evidence_count": 6,
+    "context_only_count": 2,
+    "direct_count": 3,
+    "indirect_count": 3,
+    "direct_human_causal_count": 0,
+    "causal_ceiling": "preclinical_perturbation_support",
+    "roles": [
+      {
+        "role": "synthesizer",
+        "model_id": "claude-opus-4-8",
+        "call_cap": 1,
+        "max_tokens": 1600,
+        "worst_case_cost_usd": 0.06981
+      },
+      {
+        "role": "verifier",
+        "model_id": "claude-opus-4-8",
+        "call_cap": 1,
+        "max_tokens": 1150,
+        "worst_case_cost_usd": 0.06492
+      },
+      {
+        "role": "claim_extractor",
+        "model_id": "deepseek-v4-flash",
+        "call_cap": 1,
+        "max_tokens": 2400,
+        "worst_case_cost_usd": 0.001324
+      }
+    ],
+    "total_call_cap": 3,
+    "task_budget_usd": 0.15,
+    "worst_case_cost_usd": 0.136054,
+    "network_allowed": false,
+    "planner_allowed": false,
+    "code_allowed": false,
+    "device_allowed": false,
+    "expected_artifact": "research-artifact-v1",
+    "evidence_content_level": "abstract_only",
+    "preview_hash": "8934ef1f7fbadfca81c8bc31b80531c4875a8a9ef767d126862057de61a0b678",
+    "ui_roles_line_rendered": false
+  },
+  "provider_calls": {
+    "before_clarification": 0,
+    "before_approval": 0,
+    "synthesizer": 1,
+    "verifier": 0,
+    "claim_extractor": 0,
+    "total": 1,
+    "cap": 3,
+    "retries": 0,
+    "fallback_calls": 0,
+    "shadow_model_calls": 0,
+    "fourth_call": 0
+  },
+  "zero_call_surfaces": {
+    "planner": 0,
+    "react": 0,
+    "resolver": 0,
+    "search_literature": 0,
+    "search_evidence": 0,
+    "network_fetch": 0,
+    "code_execution": 0,
+    "device_control": 0
+  },
+  "cost_usd": {
+    "reserved": 0.06823,
+    "actual": 0.06153,
+    "cap": 0.15,
+    "within_cap": true,
+    "under_reserved": false
+  },
+  "estimation": {
+    "estimated_input_tokens": 2823,
+    "actual_input_tokens": 2153,
+    "estimation_ratio": 1.3112,
+    "safety_multiplier": 1.15,
+    "chars_per_token": 2.0,
+    "note": "ratio > 1 means the estimate exceeded real input — reservation was sufficient. The first canary was the opposite (2512 est vs 3293 actual)."
+  },
+  "ledger": {
+    "reserved": 1,
+    "reconciled": 1,
+    "open_reservations": 0,
+    "price_config_version": "2026-07-20.1"
+  },
+  "token_usage": [
+    {
+      "role": "synthesizer",
+      "model": "claude-opus-4-8",
+      "input_tokens": 2153,
+      "output_tokens": 1600,
+      "max_tokens": 1600,
+      "output_hit_cap": true
+    }
+  ],
+  "hitl": {
+    "clarification_shown": true,
+    "clarification_answer": "strict_causal",
+    "answer_auto_filled": false,
+    "approvals_submitted": 1,
+    "approve_returned_state": "running",
+    "approve_return_ms": 1564,
+    "asynchronous": true
+  },
+  "stages": {
+    "total": 8,
+    "completed": [
+      "validate_evidence",
+      "evidence_accumulator"
+    ],
+    "failed": "synthesizer",
+    "never_reached": [
+      "verifier",
+      "claim_extractor",
+      "claim_graph",
+      "shadow",
+      "artifact_builder"
+    ]
+  },
+  "failure": {
+    "stage": "synthesizer",
+    "error_type": "OutputTruncated",
+    "output_truncated": true,
+    "finish_reason": "max_tokens",
+    "output_tokens": 1600,
+    "configured_max_tokens": 1600,
+    "classified_correctly": true,
+    "root_cause": "The schema caps define what is VALID; nothing constrains what the model EMITS. The prompt states the schema but not per-field length limits, and no structured-output/tool-use enforcement is used, so the model wrote a longer answer than the caps allow and was cut at max_tokens. Sizing max_tokens to the worst LEGAL JSON is necessary but not sufficient.",
+    "fail_closed": true,
+    "cascade_prevented": true,
+    "failure_manifest_emitted": true,
+    "artifact_emitted": false,
+    "retried": false
+  },
+  "events": {
+    "total": 16,
+    "sequence_contiguous_unique": true,
+    "research_stage_completed": 2,
+    "research_stage_failed": 1,
+    "artifact_created": 0,
+    "run_completed": 0,
+    "run_failed": 1
+  },
+  "scientific_output": {
+    "answer_produced": false,
+    "verifier_verdict": null,
+    "shadow_verdict": null,
+    "causal_tier": null,
+    "claim_count": 0,
+    "note": "No scientific conclusion was produced. No causal claim about cGAS-STING and SSc may be drawn from this run."
+  },
+  "comparison_with_first_canary": {
+    "first": {
+      "input_tokens": 3293,
+      "output_tokens": 1500,
+      "max_tokens": 1500,
+      "actual_usd": 0.07043,
+      "reserved_usd": 0.06262,
+      "under_reserved": true,
+      "error_type": "ResearchOutputError",
+      "classified_as_truncation": false
+    },
+    "second": {
+      "input_tokens": 2153,
+      "output_tokens": 1600,
+      "max_tokens": 1600,
+      "actual_usd": 0.06153,
+      "reserved_usd": 0.06823,
+      "under_reserved": false,
+      "error_type": "OutputTruncated",
+      "classified_as_truncation": true
+    },
+    "fixes_confirmed_working": [
+      "approval preview shows real frozen evidence + real gate budget",
+      "reservation no longer below actual cost",
+      "truncation classified distinctly with finish_reason and token counts",
+      "prompt compression cut real input 3293 -> 2153 tokens"
+    ],
+    "problem_not_solved": "Synthesizer still exceeds its output cap."
+  },
+  "total_paid_canary_spend_usd": 0.13196,
+  "production_code_modified_this_round": false,
+  "reran_after_failure": false
+}
