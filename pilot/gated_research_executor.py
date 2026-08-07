@@ -487,11 +487,26 @@ class GatedResearchExecutor:
         if contract.max_output_tokens != int(self._role_max_tokens(role) or -1):
             raise ExecutorConfigError(
                 f"角色 {role} 的 max_tokens 与契约 {contract.contract_id} 不一致")
+        prompt = self._prompt(role, ctx, state)
+
+        # A.8.1.1R.1：用**唯一费用权威**对这次真实请求定价，并把 payload 之外的部分
+        # （原生 schema + provider wrapper）交给闸门，使 Gate 预留与 Approval 展示同源。
+        # 此前闸门只按 payload 估算，预留低于真实最坏费用 —— 这正是本轮审计发现的缺口。
+        try:
+            est = estimate_call_cost(
+                role=role, model_id=capability.model_id, prompt=prompt, contract=contract,
+                provider_mode=capability.native_constraint_mode,
+                max_tokens=contract.max_output_tokens, policy_id=self._budget_policy_id)
+        except CostUnverifiable as e:
+            raise ExecutorConfigError(f"角色 {role} 费用无法核实：{e}") from e
+        self.cost_estimates[role] = est
+
         # 能力不足 / 绑定失败 → ProviderCapabilityError，绝不静默降级为自由文本
         bound, applied = apply_output_contract(model, contract, capability)
         self.enforcement[role] = applied                 # 供审计与 transport capture 断言
+        object.__setattr__(bound, "_extra_input_tokens",
+                           int(est.schema_token_estimate + est.wrapper_token_estimate))
 
-        prompt = self._prompt(role, ctx, state)
         self._attempts[role] += 1                        # 额度占用：即使失败也不允许再试（retries=0）
         out = bound.invoke(prompt)
         # 逻辑调用计数只在 provider 真正返回后 +1，保证 logical calls == provider calls；

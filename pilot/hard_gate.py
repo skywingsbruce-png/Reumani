@@ -186,7 +186,8 @@ class HardBudgetGate:
         return self.actual_usd + self.reserved_usd
 
     # ---- 核心：进入网络调用之前，同步执行 12 项检查并原子预留 ----
-    def before_call(self, *, model_id, role, payload, max_tokens=None, is_retry=False):
+    def before_call(self, *, model_id, role, payload, max_tokens=None, is_retry=False,
+                    extra_input_tokens=0):
         with self._lock:                                  # 原子：并发调用不能共同越界
             self.check_switches()                          # 1 两个显式开关
             if self.cancelled:                             # 用户取消 → 后续一律拒绝
@@ -214,7 +215,11 @@ class HardBudgetGate:
                 self._reject(f"max_calls_global: {self.calls_global + 1} > "
                              f"{self.lim['max_calls_global']}")
 
-            in_tok = estimate_input_tokens(payload)        # 9 估算输入 token
+            # 9 估算输入 token。A.8.1.1R.1：`extra_input_tokens` 由唯一费用权威
+            # （pilot.live_cost.CostEstimate）提供，用于补上**随请求发送但不在 payload 里**
+            # 的部分——原生 JSON Schema 与 provider wrapper。缺省 0 时行为与以前完全一致。
+            # 只会让预留**变大**，不会放宽任何裁决。
+            in_tok = estimate_input_tokens(payload) + max(0, int(extra_input_tokens or 0))
             out_tok = int(max_tokens or self.default_max_tokens)   # 10 按 max_tokens 算最坏
             # 未知 provider/model/价格 → PriceUnverified（唯一权威 pilot.prices）
             worst = _prices.worst_case_usd(model_id, in_tok, out_tok)
@@ -359,8 +364,12 @@ _FORBIDDEN_DERIVATIONS = {
 class GatedModel:
     """包住 LangChain chat model。任何 _METHODS 在进入底层实现之前先过 gate.before_call()。"""
 
-    def __init__(self, inner, gate, *, role, model_id, max_tokens=None, hooks=None):
+    def __init__(self, inner, gate, *, role, model_id, max_tokens=None, hooks=None,
+                 extra_input_tokens=0):
         object.__setattr__(self, "_inner", inner)
+        # A.8.1.1R.1：随请求发送但不在 payload 中的 token（原生 schema + wrapper）。
+        # 由唯一费用权威提供，使 Gate 预留与 Approval 展示同源。
+        object.__setattr__(self, "_extra_input_tokens", int(extra_input_tokens or 0))
         object.__setattr__(self, "_gate", gate)
         object.__setattr__(self, "_role", role)
         object.__setattr__(self, "_model_id", model_id)
@@ -400,7 +409,8 @@ class GatedModel:
                           role=object.__getattribute__(self, "_role"),
                           model_id=object.__getattribute__(self, "_model_id"),
                           max_tokens=object.__getattribute__(self, "_max_tokens"),
-                          hooks=object.__getattribute__(self, "_hooks"))
+                          hooks=object.__getattribute__(self, "_hooks"),
+                          extra_input_tokens=object.__getattribute__(self, "_extra_input_tokens"))
 
     def _gated(self, name):
         inner = object.__getattribute__(self, "_inner")
@@ -408,6 +418,7 @@ class GatedModel:
         role = object.__getattribute__(self, "_role")
         model_id = object.__getattribute__(self, "_model_id")
         mt = object.__getattribute__(self, "_max_tokens")
+        extra = object.__getattribute__(self, "_extra_input_tokens")
         target = getattr(inner, name)
 
         hooks = object.__getattribute__(self, "_hooks")
@@ -419,7 +430,8 @@ class GatedModel:
                 hooks.pre_invoke(role=role, model_id=model_id,
                                  payload=(a[0] if a else k))
             uid, worst = gate.before_call(model_id=model_id, role=role,
-                                          payload=a[0] if a else k, max_tokens=mt)
+                                          payload=a[0] if a else k, max_tokens=mt,
+                                          extra_input_tokens=extra)
             try:
                 res = target(*a, **k)
             except Exception as e:
@@ -436,7 +448,8 @@ class GatedModel:
                 hooks.pre_invoke(role=role, model_id=model_id,
                                  payload=(a[0] if a else k))
             uid, worst = gate.before_call(model_id=model_id, role=role,
-                                          payload=a[0] if a else k, max_tokens=mt)
+                                          payload=a[0] if a else k, max_tokens=mt,
+                                          extra_input_tokens=extra)
             try:
                 res = await target(*a, **k)
             except Exception as e:

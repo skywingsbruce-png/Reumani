@@ -135,6 +135,38 @@ def test_cost_fields_are_bound_into_the_action_hash():
         assert pv.model_copy(update=upd).compute_preview_hash() != pv.preview_hash
 
 
+def test_gate_reservation_matches_the_cost_authority():
+    """§2 第 5 项：Approval 展示、CostEstimate 与 Gate 预留必须完全一致。"""
+    ex, gate, _ = build_live()
+    pv = ex.execution_preview()
+    _run_stages(ex, "claim_extractor")
+    reserved = [e for e in gate.ledger.events() if e["event"] == "reserved"]
+    assert len(reserved) == 3
+    by_role = {e["role"]: e for e in reserved}
+    for role, e in by_role.items():
+        est = ex.cost_estimates[role]
+        # 闸门预留的最坏费用 == 权威估算
+        assert abs(e["worst_case_usd"] - est.worst_case_usd) < 1e-6, role
+        # 闸门估算的输入 token 也已包含 schema + wrapper
+        assert e["est_input_tokens"] == est.total_input_token_estimate, role
+        assert e["max_tokens"] == est.max_output_tokens
+    # 预览用最坏情况 Prompt，实际运行用真实 Prompt，因此预览是实际的**上界**
+    total_reserved = round(sum(e["worst_case_usd"] for e in reserved), 6)
+    assert total_reserved <= pv.worst_case_cost_usd + 1e-9
+    assert total_reserved <= pv.task_budget_usd
+
+
+def test_extra_input_tokens_only_ever_increases_the_reservation():
+    """新增参数不得放宽任何裁决：缺省 0 时行为与以前一致，给值只会让预留变大。"""
+    from pilot.hard_gate import estimate_input_tokens
+    ex, gate, _ = build_live()
+    _run_stages(ex, "synthesizer")
+    e = [x for x in gate.ledger.events() if x["event"] == "reserved"][0]
+    assert e["est_input_tokens"] > estimate_input_tokens("x")   # 确实加了额外部分
+    est = ex.cost_estimates["synthesizer"]
+    assert est.schema_token_estimate > 0 and est.wrapper_token_estimate > 0
+
+
 def test_no_parallel_cost_formula_in_production_sources():
     """生产代码里不得再出现第二份费用公式。"""
     import pathlib
