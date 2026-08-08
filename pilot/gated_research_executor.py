@@ -236,6 +236,23 @@ class GatedResearchExecutor:
     stages = STAGES
     has_blocking_stages = True                # 真实模型调用会阻塞 → 始终走后台 worker
 
+    @classmethod
+    def from_registry(cls, *, registry, gate, evidence_loader, **kw):
+        """A.8.2a §2 —— 从 ProviderRegistry 按**角色**显式解析三个受控模型。
+
+        角色由 ProviderSpec 声明决定，不按 Prompt、调用顺序或全局状态推断；
+        三个 handle 必然是三个独立对象（Registry 侧已断言）。
+        """
+        handles = {r: registry.resolve_role(r)
+                   for r in ("synthesizer", "verifier", "claim_extractor")}
+        caps = kw.pop("capabilities", None)
+        ex = cls(synthesizer=handles["synthesizer"].gated_model,
+                 verifier=handles["verifier"].gated_model,
+                 claim_extractor=handles["claim_extractor"].gated_model,
+                 gate=gate, evidence_loader=evidence_loader, capabilities=caps, **kw)
+        ex.provider_handles = handles
+        return ex
+
     def __init__(self, *, synthesizer, verifier, claim_extractor, gate, evidence_loader,
                  executor_id: str = EXECUTOR_ID,
                  budget_policy_id: str = DEFAULT_NEW_RUN_POLICY_ID,
@@ -267,6 +284,7 @@ class GatedResearchExecutor:
                                 "network": 0, "code_execution": 0, "device": 0}
         self.enforcement = {}            # role -> 实际施加的 provider enforcement（可审计）
         self.cost_estimates = {}         # role -> CostEstimate（唯一费用权威的产物）
+        self.provider_handles = {}       # role -> ProviderHandle（经 from_registry 注入时填充）
         # 能力表由服务端注入（与三个 GatedModel 同一注入点）；缺省用已核实的生产表。
         # 未登记的 model_id 一律在 provider 之前拒绝，绝不假设它支持结构化输出。
         self._capabilities = dict(capabilities) if capabilities else None

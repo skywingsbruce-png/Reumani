@@ -21,9 +21,21 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
 from pilot.event_store import InMemoryEventStore
-from pilot.demo_fixtures import run_demo
-from pilot.real_runtime import run_real_demo
 from pilot.runtime_events import EVENT_SCHEMA
+
+# A.8.2a §5.1：`demo_fixtures` / `real_runtime` 属于旧 demo 链，它们在 import 期会拉起
+# langchain 客户端库。受控科研链**不需要**它们，因此改为在真正用到时才 import ——
+# 这样 `import pilot.runtime_api` 不再加载任何付费客户端库，也不读取任何 key。
+
+
+def run_demo(*a, **k):
+    from pilot.demo_fixtures import run_demo as _f
+    return _f(*a, **k)
+
+
+def run_real_demo(*a, **k):
+    from pilot.real_runtime import run_real_demo as _f
+    return _f(*a, **k)
 
 _TERMINAL = frozenset({"run_completed", "run_failed", "run_stopped"})
 # 仅允许本地 UI origin（不默认开放公网）
@@ -54,7 +66,8 @@ def _register_builtin_executors():
 
 
 def build_gated_research_executor(*, synthesizer=None, verifier=None, claim_extractor=None,
-                                  gate=None, evidence_loader=None, repo_root="."):
+                                  gate=None, evidence_loader=None, repo_root=".",
+                                  registry=None):
     """显式构造并注册 gated-research-v1。**默认路径永不调用它**。
 
     拒绝启动的情形：开关未开、三角色不全、gate/证据未提供、证据 hash 不匹配。
@@ -67,6 +80,16 @@ def build_gated_research_executor(*, synthesizer=None, verifier=None, claim_extr
     if _os.environ.get(ENV_ENABLE_GATED_RESEARCH) != "1":
         raise ExecutorConfigError(
             f"gated-research-v1 未启用：需显式设置 {ENV_ENABLE_GATED_RESEARCH}=1（默认关闭）")
+    # A.8.2a：优先走 ProviderRegistry —— 角色由声明决定，客户端惰性构造且已包 Gate。
+    if registry is not None:
+        if gate is None:
+            raise ExecutorConfigError("必须注入 HardBudgetGate（价格/额度未核实则拒绝启动）")
+        loader0 = evidence_loader or FrozenEvidenceLoader(repo_root)
+        loader0.load()
+        ex0 = GatedResearchExecutor.from_registry(registry=registry, gate=gate,
+                                                  evidence_loader=loader0)
+        register_executor(ex0)
+        return ex0
     if not (synthesizer and verifier and claim_extractor):
         raise ExecutorConfigError("必须注入三个角色的 GatedModel（不全则拒绝启动）")
     if gate is None:
