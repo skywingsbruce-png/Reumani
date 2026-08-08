@@ -25,6 +25,11 @@ MIGRATED_CONSUMERS = (
      "was": "三个 GatedModel 由启动脚本按位置注入",
      "now": "显式接收 ProviderRegistry / 按角色 resolve 的 ProviderHandle",
      "roles": ["synthesizer", "verifier", "claim_extractor"]},
+    {"consumer": "pilot/controlled_runtime.py::build_controlled_runtime_registry + "
+                 "build_approved_research_executor",
+     "was": "无两阶段边界：from_registry 会在任何时点立即 resolve 付费客户端",
+     "now": "阶段 A 只注册并 validate（factory_calls=0）；阶段 B 需 approval_verified 才 resolve",
+     "roles": ["synthesizer", "verifier", "claim_extractor"]},
     {"consumer": "pilot/runtime_api.py::build_gated_research_executor",
      "was": "调用方自行构造并传入三个模型",
      "now": "接受 ProviderRegistry，按角色 resolve",
@@ -52,11 +57,16 @@ UNMIGRATED_LEGACY = (
 # 这些 legacy 项**不阻断** A.8.3：受控链已自足，且 Canary 启动时靠
 # neutralize_unused_paid_clients + assert_no_raw_paid_client_reachable 兜底。
 BLOCKS_A83 = False
+# A.8.2a.2：受控生产入口已改为「阶段 A 只注册 / 阶段 B 批准后 resolve」的 Registry 路径
+CONTROLLED_RUNTIME_REGISTRY_ACTIVE = True
+BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
     "phase": "A.8.2a",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
+    "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
+    "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
     "legacy_ssc_pi_agent_import_safe": LEGACY_SSC_PI_AGENT_IMPORT_SAFE,
     "controlled_runtime_modules": list(CONTROLLED_RUNTIME_MODULES),
     "migrated_consumers": list(MIGRATED_CONSUMERS),
@@ -67,6 +77,6 @@ MANIFEST = {
             "任何声称'全仓库已完成'的说法都是错误的。",
 }
 
-__all__ = ["MANIFEST", "CONTROLLED_RUNTIME_MODULES", "MIGRATED_CONSUMERS",
+__all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_A8_2B", "CONTROLLED_RUNTIME_MODULES", "MIGRATED_CONSUMERS",
            "UNMIGRATED_LEGACY", "CONTROLLED_RUNTIME_IMPORT_SAFE",
            "LEGACY_SSC_PI_AGENT_IMPORT_SAFE", "BLOCKS_A83"]
