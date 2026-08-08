@@ -74,7 +74,18 @@ def build_registry(gate=None, counter=None):
 
 # ---------------------------------------------------------------- 1-2 import 安全
 def test_importing_controlled_runtime_constructs_no_client_and_reads_no_key():
-    """在**干净子进程**中 import 受控模块：不得出现付费客户端，也不得读 API key。"""
+    """在**干净子进程**中 import 受控模块：不得出现付费客户端，也不得读 API key。
+
+    `pilot.runtime_api` 依赖 starlette，而 CI 的精简 unit 环境（requirements-ci.txt）
+    不装 starlette —— 与既有 3 处 `importorskip("starlette")` 同一约定。缺 starlette 时
+    只把该模块移出本次检查，**其余 11 个受控模块的断言强度不变**（不 skip 整个测试、
+    不放宽任何断言）。
+    """
+    import importlib.util
+    mods = list(CONTROLLED_RUNTIME_MODULES)
+    if importlib.util.find_spec("starlette") is None:
+        mods = [m for m in mods if m != "pilot.runtime_api"]
+    assert len(mods) >= 11
     code = (
         "import sys, builtins\n"
         "reads = []\n"
@@ -85,7 +96,7 @@ def test_importing_controlled_runtime_constructs_no_client_and_reads_no_key():
         "builtins.open = spy\n"
         "import os\n"
         "os.environ.pop('ANTHROPIC_API_KEY', None); os.environ.pop('DEEPSEEK_API_KEY', None)\n"
-        f"for m in {list(CONTROLLED_RUNTIME_MODULES)!r}:\n"
+        f"for m in {mods!r}:\n"
         "    __import__(m)\n"
         "bad = [m for m in ('langchain_anthropic','langchain_openai') if m in sys.modules]\n"
         "print('CLIENTMODS=' + ','.join(bad))\n"
