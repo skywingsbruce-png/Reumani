@@ -120,6 +120,7 @@ class HitlRun:
         self._stages_done: list = []
         self._frozen_plan: Optional[dict] = None      # Approval 时冻结的执行计划
         self._approval_facts: Optional[dict] = None   # §8 审批卡上展示过的冻结证据事实
+        self.approval_grant = None                    # A.8.2a.3 签发的执行授权（仅进程内）
         self._spec_missing = False                    # 恢复出的 research run 缺 spec/executor → 不得执行
         self._recovered_plan: Optional[dict] = None   # 恢复期从 approval_requested 还原的冻结计划
         self._worker_generation = 0                   # 服务端产生的 worker 代次（客户端不可指定）
@@ -710,6 +711,9 @@ class HitlRun:
                 if not research and not async_mode:
                     self._run_stages_inline()            # 同步：所有阶段 → completed（同一原子批）
             if research:
+                # A.8.2a.3：approval_granted 已成功落盘之后，才签发绑定的执行授权。
+                # 授权只在进程内交给 executor，绝不出现在 HTTP 请求/响应里。
+                self._issue_approval_grant(req)
                 # A.7.5.3.1：research run **始终异步**——与 gate / delay / executor 声明无关。
                 # approve() 在此立即返回 running，8 个阶段由后台 worker 顺序推进。
                 self._start_research_worker()
@@ -717,6 +721,35 @@ class HitlRun:
                 self._exec_active = True                 # 后台 worker 驱动，approve 立即返回 running
                 self._start_worker()
             return self._cache(h, fp)
+
+    def _issue_approval_grant(self, req):
+        """在 approval_granted 落盘后签发授权，并交给支持 authorize() 的 executor。
+
+        executor 会用全部绑定字段重新校验（凭证本身在同进程内并非不可伪造，
+        真正的防线是那次比对）。executor 不支持 authorize 时静默跳过 —— 旧的
+        fake executor 仍按原语义工作。
+        """
+        auth = getattr(self._executor, "authorize", None)
+        if not callable(auth):
+            return
+        from pilot.approval_grant import issue_grant, _ISSUER
+        facts = self._approval_facts or {}
+        seq = -1
+        try:
+            evs = self._store.list(self.run_id)
+            seq = max(e.sequence for e in evs if e.event_type == "approval_granted")
+        except Exception:                                    # noqa: BLE001
+            pass
+        grant = issue_grant(
+            _ISSUER, run_id=self.run_id, request_id=req.request_id,
+            action_hash=req.action_hash,
+            preview_hash=str(facts.get("preview_hash") or ""),
+            approved_state_version=int(self.state_version),
+            executor_id=getattr(self._executor, "executor_id", ""),
+            policy_id=str(facts.get("budget_policy_id") or ""),
+            granted_event_sequence=int(seq))
+        auth(grant)                                          # 不符即抛 → 不会进入执行
+        self.approval_grant = grant
 
     def _async_exec(self) -> bool:
         """是否需要后台 worker：本身有门控/延迟，或 executor 声明了阻塞阶段（research）。"""

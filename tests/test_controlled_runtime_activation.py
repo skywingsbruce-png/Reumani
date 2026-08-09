@@ -184,6 +184,41 @@ def test_production_builder_never_takes_positional_models():
         assert not ({"synthesizer", "verifier", "claim_extractor"} & params), fn.__name__
 
 
+def test_legacy_positional_builder_is_isolated_and_named():
+    """§5：三模型位置参数入口必须改名为 legacy_test_only，且生产模块不调用它。"""
+    from pilot import runtime_api
+    assert hasattr(runtime_api, "build_gated_research_executor_legacy_test_only")
+    src_root = pathlib.Path(REPO) / "pilot"
+    for name in ("controlled_runtime.py", "deferred_research_executor.py",
+                 "provider_registry.py", "gated_research_executor.py", "hitl.py"):
+        code = "\n".join(l for l in (src_root / name).read_text(encoding="utf-8").splitlines()
+                         if not l.lstrip().startswith("#"))
+        assert "legacy_test_only" not in code, f"生产模块 {name} 调用了 legacy 入口"
+
+
+def test_no_production_module_constructs_the_three_models_positionally():
+    """静态守卫：生产文件里不得出现三模型位置参数构造 GatedResearchExecutor。"""
+    src_root = pathlib.Path(REPO) / "pilot"
+    for py in src_root.glob("*.py"):
+        if py.name in ("runtime_api.py",):        # legacy_test_only 明确保留在此
+            continue
+        code = py.read_text(encoding="utf-8")
+        if "GatedResearchExecutor(" in code:
+            # 只允许 deferred executor 的预览桩（stub），它不含真实客户端
+            assert py.name == "deferred_research_executor.py", (
+                f"{py.name} 直接以位置参数构造了 GatedResearchExecutor")
+
+
+def test_deferred_executor_is_the_authorized_path():
+    """authorize 缺失时 run_stage 必须 fail-closed（不回退旧路径）。"""
+    from pilot.deferred_research_executor import DeferredRegistryResearchExecutor
+    import inspect
+    sig = set(inspect.signature(DeferredRegistryResearchExecutor.__init__).parameters)
+    assert not ({"synthesizer", "verifier", "claim_extractor"} & sig)
+    assert "authorize" in dir(DeferredRegistryResearchExecutor)
+    assert "approval_verified" not in inspect.getsource(DeferredRegistryResearchExecutor)
+
+
 def test_migration_manifest_marks_registry_active():
     from pilot.provider_migration import MANIFEST
     assert MANIFEST["controlled_runtime_registry_active"] is True

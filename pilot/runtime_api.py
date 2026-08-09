@@ -90,6 +90,24 @@ def build_gated_research_executor(*, synthesizer=None, verifier=None, claim_extr
                                                   evidence_loader=loader0)
         register_executor(ex0)
         return ex0
+    # A.8.2a.3 §5：三模型位置参数路径是 **legacy / test-only**，不再是生产入口。
+    # 生产必须走 registry=（上面的分支）。这里保留能力，但明确标注并可被静态守卫识别。
+    return build_gated_research_executor_legacy_test_only(
+        synthesizer=synthesizer, verifier=verifier, claim_extractor=claim_extractor,
+        gate=gate, evidence_loader=evidence_loader, repo_root=repo_root)
+
+
+def build_gated_research_executor_legacy_test_only(*, synthesizer=None, verifier=None,
+                                                   claim_extractor=None, gate=None,
+                                                   evidence_loader=None, repo_root="."):
+    """**legacy / test-only**：按位置注入三个模型。生产模块不得调用。
+
+    保留它是为了不删除既有离线测试能力；正常生产路径请用
+    `build_gated_research_executor(registry=...)`（内部走 Deferred/Registry）。
+    """
+    from pilot.research_contracts import register_executor
+    from pilot.frozen_evidence import FrozenEvidenceLoader
+    from pilot.gated_research_executor import GatedResearchExecutor, ExecutorConfigError
     if not (synthesizer and verifier and claim_extractor):
         raise ExecutorConfigError("必须注入三个角色的 GatedModel（不全则拒绝启动）")
     if gate is None:
