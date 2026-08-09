@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import threading
 
-from pilot.approval_grant import ApprovalGrant, ApprovalGrantError
+from pilot.approval_grant import (ApprovalGrant, ApprovalGrantError, PendingApprovalBinding,
+                                  compare_binding)
 from pilot.gated_research_executor import (EXECUTOR_ID, STAGES, GatedResearchExecutor,
                                            ExecutorConfigError)
 from pilot.research_results import ROLE_MAX_TOKENS
@@ -33,16 +34,46 @@ class DeferredRegistryResearchExecutor:
 
     def __init__(self, *, registry, gate, evidence_loader,
                  budget_policy_id: str = "research-budget-policy-v2",
-                 capabilities=None):
+                 capabilities=None, approval_event_lookup=None):
         self._registry = registry
         self._gate = gate
         self._loader = evidence_loader
         self._budget_policy_id = budget_policy_id
         self._capabilities = capabilities
+        # 只读的 approval_granted 事件查询口：用于核实 Grant 指向的事件真实存在。
+        # 不得允许写 EventStore，也不得来自 HTTP。
+        self._event_lookup = approval_event_lookup
+        self._binding: PendingApprovalBinding | None = None
         self._grant: ApprovalGrant | None = None
+        self._revoked = False                  # deny / cancel / stop 之后绑定与授权失效
         self._inner: GatedResearchExecutor | None = None
         self._lock = threading.RLock()
         self.resolved_at_stage = None          # 记录首次 resolve 发生在哪个阶段（可审计）
+
+    # ------------------------------------------------------------ 审批请求阶段：冻结绑定
+    def bind_pending_approval(self, binding: PendingApprovalBinding) -> None:
+        """由 HitlRun 在创建 pending approval request 后调用。只允许绑定一次。"""
+        if not isinstance(binding, PendingApprovalBinding):
+            raise ApprovalGrantError("bind_pending_approval 需要 PendingApprovalBinding")
+        with self._lock:
+            if self._revoked:
+                raise ApprovalGrantError("运行已 deny/cancel/stop，拒绝绑定新的审批请求")
+            if self._binding is not None:
+                if self._binding.binding() != binding.binding():
+                    raise ApprovalGrantError("已存在不同的审批绑定，拒绝覆盖（fail-closed）")
+                return                          # 完全相同 → 幂等
+            self._binding = binding
+
+    def revoke(self, reason: str = "denied_or_stopped") -> None:
+        """deny / cancel / stop 之后使绑定与授权失效。"""
+        with self._lock:
+            self._revoked = True
+            self._binding = None
+            self._grant = None
+
+    @property
+    def pending_binding(self):
+        return self._binding
 
     # ------------------------------------------------------------ 批准前：零 resolve
     def _preview_only(self):
@@ -84,22 +115,64 @@ class DeferredRegistryResearchExecutor:
 
     # ------------------------------------------------------------ 授权
     def authorize(self, grant: ApprovalGrant) -> None:
-        """重新校验**全部**绑定字段。这才是真正的安全防线（凭证本身可被同进程伪造）。"""
+        """**第一次授权也走完整校验**（A.8.2a.3 只比 3 项，是被驳回的缺陷）。
+
+        比对 Grant ↔ 已冻结 binding 的全部 7 个字段，再核实 approval_granted 事件
+        真实存在且内容一致，最后确认当前预览未漂移。任一不符 → fail-closed。
+        """
         if not isinstance(grant, ApprovalGrant):
             raise ApprovalGrantError("authorize() 需要 ApprovalGrant（fail-closed）")
-        pv = self.execution_preview()                       # 当前真实预览（零 resolve）
-        expected = {"preview_hash": pv.preview_hash, "executor_id": self.executor_id,
-                    "policy_id": self._budget_policy_id}
-        actual = {"preview_hash": grant.preview_hash, "executor_id": grant.executor_id,
-                  "policy_id": grant.policy_id}
-        for k, v in expected.items():
-            if actual[k] != v:
-                raise ApprovalGrantError(
-                    f"授权与当前审批事实不符（{k}）→ 拒绝执行（provider 调用为 0）")
         with self._lock:
-            if self._grant is not None and self._grant.binding() != grant.binding():
+            if self._revoked:
+                raise ApprovalGrantError("运行已 deny/cancel/stop，拒绝授权")
+            binding = self._binding
+            existing = self._grant
+        # 1) 逐项比对审批**请求**时冻结的绑定（含 run_id / request_id / action_hash /
+        #    preview_hash / request_state_version / executor_id / policy_id）
+        compare_binding(grant, binding)
+        # 2) 授权本身的取值合法性
+        if grant.granted_event_sequence < 0:
+            raise ApprovalGrantError("granted_event_sequence < 0 → 拒绝授权")
+        if grant.granted_state_version < grant.request_state_version:
+            raise ApprovalGrantError("granted_state_version 早于 request_state_version → 拒绝")
+        if grant.executor_id != self.executor_id:
+            raise ApprovalGrantError("executor_id 与当前 executor 不符 → 拒绝授权")
+        if grant.policy_id != self._budget_policy_id:
+            raise ApprovalGrantError("policy_id 与当前预算策略不符 → 拒绝授权")
+        # 3) 核实 approval_granted 事件真实存在且内容一致（查询失败即拒绝，绝不放行）
+        self._verify_granted_event(grant)
+        # 4) 当前预览必须仍与授权一致（零 resolve）
+        if self.execution_preview().preview_hash != grant.preview_hash:
+            raise ApprovalGrantError("当前审批预览已漂移 → 拒绝执行（provider 调用为 0）")
+        with self._lock:
+            if existing is not None and existing.identity() != grant.identity():
                 raise ApprovalGrantError("已存在不同的授权，拒绝覆盖（fail-closed）")
             self._grant = grant
+
+    def _verify_granted_event(self, grant: ApprovalGrant) -> None:
+        """用只读查询口核实事件。**没有查询口 = 无法核实 = 拒绝授权**（不是放行）。"""
+        lookup = self._event_lookup
+        if not callable(lookup):
+            raise ApprovalGrantError(
+                "缺少 approval_granted 事件查询口，无法核实授权 → 拒绝（fail-closed）")
+        try:
+            ev = lookup(grant.run_id, grant.granted_event_sequence)
+        except Exception as e:                              # noqa: BLE001
+            raise ApprovalGrantError(
+                f"读取 approval_granted 事件失败 → 拒绝授权：{type(e).__name__}") from e
+        if ev is None:
+            raise ApprovalGrantError(
+                f"sequence={grant.granted_event_sequence} 上不存在事件 → 拒绝授权")
+        if getattr(ev, "event_type", None) != "approval_granted":
+            raise ApprovalGrantError(
+                f"sequence={grant.granted_event_sequence} 指向的不是 approval_granted → 拒绝")
+        if getattr(ev, "run_id", None) != grant.run_id:
+            raise ApprovalGrantError("事件 run_id 与授权不符 → 拒绝授权")
+        sp = getattr(ev, "safe_payload", None) or {}
+        if sp.get("request_id") != grant.request_id:
+            raise ApprovalGrantError("事件 request_id 与授权不符 → 拒绝授权")
+        if sp.get("action_hash") != grant.action_hash:
+            raise ApprovalGrantError("事件 action_hash 与授权不符 → 拒绝授权")
 
     @property
     def authorized(self) -> bool:

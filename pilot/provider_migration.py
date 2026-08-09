@@ -25,10 +25,10 @@ MIGRATED_CONSUMERS = (
      "was": "三个 GatedModel 由启动脚本按位置注入",
      "now": "显式接收 ProviderRegistry / 按角色 resolve 的 ProviderHandle",
      "roles": ["synthesizer", "verifier", "claim_extractor"]},
-    {"consumer": "pilot/controlled_runtime.py::build_controlled_runtime_registry + "
-                 "build_approved_research_executor",
+    {"consumer": "pilot/controlled_runtime.py::build_controlled_runtime_registry",
      "was": "无两阶段边界：from_registry 会在任何时点立即 resolve 付费客户端",
-     "now": "阶段 A 只注册并 validate（factory_calls=0）；阶段 B 需 approval_verified 才 resolve",
+     "now": "阶段 A 只注册并 validate（factory_calls=0）；授权由 ApprovalGrant 与真实 "
+            "approval_granted 事件绑定（A.8.2a.4a 已删除旧的布尔旁路与批准后工厂）",
      "roles": ["synthesizer", "verifier", "claim_extractor"]},
     {"consumer": "pilot/runtime_api.py::build_gated_research_executor",
      "was": "调用方自行构造并传入三个模型",

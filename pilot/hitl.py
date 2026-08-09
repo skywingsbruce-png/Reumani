@@ -121,6 +121,7 @@ class HitlRun:
         self._frozen_plan: Optional[dict] = None      # Approval 时冻结的执行计划
         self._approval_facts: Optional[dict] = None   # §8 审批卡上展示过的冻结证据事实
         self.approval_grant = None                    # A.8.2a.3 签发的执行授权（仅进程内）
+        self._approval_request_state_version = 0      # 创建 pending approval 时的状态版本
         self._spec_missing = False                    # 恢复出的 research run 缺 spec/executor → 不得执行
         self._recovered_plan: Optional[dict] = None   # 恢复期从 approval_requested 还原的冻结计划
         self._worker_generation = 0                   # 服务端产生的 worker 代次（客户端不可指定）
@@ -403,6 +404,18 @@ class HitlRun:
                                  "fixture": pub["fixture_evidence"],
                                  **({k: facts[k] for k in _FROZEN_FACT_EVENT_KEYS if k in facts}
                                     if facts else {})})
+        # A.8.2a.4a §3：pending request 建立后立刻冻结绑定，交给支持该接口的 executor。
+        # binding 只来自当前真实 pending request，不接受 HTTP 传入。
+        self._approval_request_state_version = int(self.state_version)
+        bind = getattr(self._executor, "bind_pending_approval", None)
+        if callable(bind) and facts:
+            from pilot.approval_grant import issue_binding, _ISSUER
+            bind(issue_binding(
+                _ISSUER, run_id=self.run_id, request_id=rid, action_hash=ah,
+                preview_hash=str(facts.get("preview_hash") or ""),
+                request_state_version=int(self.state_version),
+                executor_id=spec.executor_id,
+                policy_id=str(facts.get("budget_policy_id") or "")))
 
     def _executor_approval_facts(self):
         """向 executor 索取审批冻结事实（可选能力；fake executor 没有则返回 None）。"""
@@ -732,19 +745,27 @@ class HitlRun:
         auth = getattr(self._executor, "authorize", None)
         if not callable(auth):
             return
-        from pilot.approval_grant import issue_grant, _ISSUER
+        from pilot.approval_grant import issue_grant, ApprovalGrantError, _ISSUER
         facts = self._approval_facts or {}
-        seq = -1
+        # A.8.2a.4a：必须**读到**刚落盘的 approval_granted 事件并取其真实 sequence。
+        # 读取失败或找不到 → 不签发、不授权、不启动 worker（此前用 seq=-1 继续，是 fail-open）。
         try:
-            evs = self._store.list(self.run_id)
-            seq = max(e.sequence for e in evs if e.event_type == "approval_granted")
-        except Exception:                                    # noqa: BLE001
-            pass
+            evs = [e for e in self._store.list(self.run_id)
+                   if e.event_type == "approval_granted"
+                   and (e.safe_payload or {}).get("request_id") == req.request_id]
+        except Exception as e:                               # noqa: BLE001
+            raise ApprovalGrantError(
+                f"无法读取 approval_granted 事件 → 拒绝授权：{type(e).__name__}") from e
+        if not evs:
+            raise ApprovalGrantError(
+                "approval_granted 事件未持久化成功 → 拒绝授权（fail-closed）")
+        seq = max(e.sequence for e in evs)
         grant = issue_grant(
             _ISSUER, run_id=self.run_id, request_id=req.request_id,
             action_hash=req.action_hash,
             preview_hash=str(facts.get("preview_hash") or ""),
-            approved_state_version=int(self.state_version),
+            request_state_version=int(self._approval_request_state_version),
+            granted_state_version=int(self.state_version),
             executor_id=getattr(self._executor, "executor_id", ""),
             policy_id=str(facts.get("budget_policy_id") or ""),
             granted_event_sequence=int(seq))
