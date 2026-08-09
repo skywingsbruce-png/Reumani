@@ -186,9 +186,11 @@ def test_production_builder_never_takes_positional_models():
 
 def test_legacy_positional_builder_is_isolated_and_named():
     """§5：三模型位置参数入口必须改名为 legacy_test_only，且生产模块不调用它。"""
-    from pilot import runtime_api
-    assert hasattr(runtime_api, "build_gated_research_executor_legacy_test_only")
+    # 用源码文本核对，**不 import** runtime_api —— 它依赖 starlette，
+    # 而 CI 精简 unit 环境不装 starlette（与既有 importorskip 约定一致）。
     src_root = pathlib.Path(REPO) / "pilot"
+    api_src = (src_root / "runtime_api.py").read_text(encoding="utf-8")
+    assert "def build_gated_research_executor_legacy_test_only(" in api_src
     for name in ("controlled_runtime.py", "deferred_research_executor.py",
                  "provider_registry.py", "gated_research_executor.py", "hitl.py"):
         code = "\n".join(l for l in (src_root / name).read_text(encoding="utf-8").splitlines()
