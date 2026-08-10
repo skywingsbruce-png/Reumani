@@ -34,6 +34,8 @@ EventType = Literal[
     "research_stage_started", "research_stage_completed",
     # A.7.5.3.1 fail-closed stage errors
     "research_stage_failed",
+    # A.8.2a.4c provider lifecycle write-ahead audit（additive；不改 schema_version）
+    "provider_resolved", "model_call_started",
     "run_completed", "run_failed", "run_stopped",
 ]
 EVENT_TYPES: frozenset = frozenset(EventType.__args__)  # type: ignore[attr-defined]
@@ -72,6 +74,10 @@ SAFE_PAYLOAD_KEYS: frozenset = frozenset({
     "task_budget_usd", "worst_case_cost_usd", "preview_hash", "budget_policy_id",
     "network_allowed", "planner_allowed", "code_allowed", "device_allowed",
     "expected_artifact", "evidence_content_level",
+    # A.8.2a.4c provider lifecycle audit —— 仅脱敏标识符。
+    # 绝不含 key / prompt / 完整参数 / 模型正文 / headers / 绝对路径。
+    "role", "provider_id", "provider", "model_id", "provider_mode", "policy_id",
+    "call_index", "cost_estimate_hash",
     # A.7.5.6.1 §7 truncation diagnostics (never the truncated output itself)
     "output_truncated", "finish_reason", "output_size", "configured_output_limit",
     "truncated_role",

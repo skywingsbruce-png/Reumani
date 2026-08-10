@@ -441,6 +441,35 @@ describe('research run UI (A.7.5.3)', () => {
     expect(screen.getByTestId('research-fixture')).toBeInTheDocument()   // fixture 标记可见
   })
 
+  it('handles provider lifecycle audit events without corrupting stage state (A.8.2a.4c)', () => {
+    bootApi()
+    act(() => {
+      ctx.dispatch({ type: 'apply_event', ev: mk(0, 'run_created', {
+        safe_payload: { control_state: 'running', state_version: 1, run_type: 'research',
+          executor_id: 'gated-research-v1', stage_count: 8 } }) })
+      ctx.dispatch({ type: 'apply_event', ev: mk(1, 'research_stage_completed', {
+        safe_payload: { control_state: 'running', state_version: 1, stage: 'validate_evidence',
+          stage_index: 0, stage_count: 8 } }) })
+      // 新增的两类审计事件不携带 stage/verdict，必须被安全忽略（不新增 UI 组件）
+      for (const role of ['synthesizer', 'verifier', 'claim_extractor']) {
+        ctx.dispatch({ type: 'apply_event', ev: mk(2, 'provider_resolved', {
+          safe_payload: { control_state: 'running', state_version: 1, role,
+            provider_id: 'anthropic-opus-4-8', provider: 'anthropic',
+            model_id: 'claude-opus-4-8', provider_mode: 'native_json_schema',
+            policy_id: 'research-budget-policy-v2' } }) })
+      }
+      ctx.dispatch({ type: 'apply_event', ev: mk(3, 'model_call_started', {
+        safe_payload: { control_state: 'running', state_version: 1, role: 'synthesizer',
+          model_id: 'claude-opus-4-8', provider_mode: 'native_json_schema',
+          call_index: 1, cost_estimate_hash: 'a1b2c3d4' } }) })
+    })
+    // 时间线不被审计事件推进或清空，也不误报失败
+    expect(screen.getByTestId('stage-validate_evidence').getAttribute('data-state')).toBe('done')
+    expect(screen.getByTestId('stage-synthesizer').getAttribute('data-state')).toBe('todo')
+    expect(screen.queryByTestId('research-failure')).toBeNull()
+    expect(screen.queryByTestId('art-name')).toBeNull()
+  })
+
   it('does not render the research panel for demo runs', () => {
     bootApi()
     act(() => { ctx.dispatch({ type: 'set_control', control: { control_state: 'running',

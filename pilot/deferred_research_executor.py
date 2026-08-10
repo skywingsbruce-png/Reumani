@@ -49,6 +49,7 @@ class DeferredRegistryResearchExecutor:
         self._inner: GatedResearchExecutor | None = None
         self._lock = threading.RLock()
         self.resolved_at_stage = None          # 记录首次 resolve 发生在哪个阶段（可审计）
+        self._audit_failed = False             # 审计写入失败后本 executor 永久不可继续
 
     # ------------------------------------------------------------ 审批请求阶段：冻结绑定
     def bind_pending_approval(self, binding: PendingApprovalBinding) -> None:
@@ -200,8 +201,40 @@ class DeferredRegistryResearchExecutor:
 
     # ------------------------------------------------------------ Protocol
     def run_stage(self, *, stage, ctx, state, emit=None):
+        if self._audit_failed:
+            # 审计写入曾失败 → 永久失效，禁止靠重试绕过审计。
+            raise ApprovalGrantError(
+                "audit_event_persistence_failed：本执行器已永久失效，拒绝任何模型调用")
+        first = self._inner is None
         inner = self._ensure_resolved(stage)
+        if first:
+            # A.8.2a.4c：resolve 成功之后、**任何** provider invoke 之前写审计事件。
+            # 写失败 → 抛出，本 run fail-closed，且 executor 永久不可继续。
+            self._emit_provider_resolved(emit)
         return inner.run_stage(stage=stage, ctx=ctx, state=state, emit=emit)
+
+    def _emit_provider_resolved(self, emit):
+        if not callable(emit):
+            raise ApprovalGrantError(
+                "缺少审计事件发射器，无法记录 provider_resolved → 拒绝执行（fail-closed）")
+        try:
+            for role in ("synthesizer", "verifier", "claim_extractor"):
+                h = self._inner.provider_handles.get(role)
+                if h is None:
+                    raise ApprovalGrantError(f"角色 {role} 未解析，拒绝继续")
+                emit("provider_resolved", summary=f"provider resolved: {role}",
+                     safe_payload={"role": role, "provider_id": h.provider_id,
+                                   "provider": str(h.metadata.get("provider") or ""),
+                                   "model_id": h.model_id,
+                                   "provider_mode": h.provider_mode,
+                                   "policy_id": self._budget_policy_id})
+        except Exception as e:                           # noqa: BLE001
+            # 客户端可能已被 factory 构造（不谎称已回滚），但 provider invoke 必须为 0，
+            # 且本 executor 永久失效，防止稍后重试绕过审计。
+            self._audit_failed = True
+            raise ApprovalGrantError(
+                f"audit_event_persistence_failed(provider_resolved)："
+                f"{type(e).__name__} → 拒绝任何模型调用") from e
 
     def build_artifact(self, *, ctx, state):
         if self._inner is None:

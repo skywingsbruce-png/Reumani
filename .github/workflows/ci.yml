@@ -137,3 +137,9 @@ jobs:
       - run: pip install -r requirements-ci.txt -r requirements-runtime.txt
       - name: runtime + event + API tests
         run: pytest tests/test_runtime_events.py tests/test_event_store.py tests/test_open_task_runtime.py tests/test_runtime_api.py
+      # A.8.2a.4c §7：装上 starlette 之后再跑一次 —— 只有这里才真正执行到
+      # runtime_api 的 per-run factory 分发路径。import-safety 测试在两个 job 里都必须过。
+      - name: controlled runtime activation + per-run isolation + provider lifecycle audit
+        run: pytest tests/test_controlled_runtime_activation.py tests/test_per_run_executor_isolation.py tests/test_deferred_approval_lifecycle.py tests/test_provider_lifecycle_events.py tests/test_provider_registry.py
+      - name: runtime API must construct zero paid clients at import time
+        run: pytest tests/test_provider_registry.py tests/test_controlled_runtime_activation.py tests/test_per_run_executor_isolation.py -k "constructs_no_client or constructs_nothing or resolves_nothing or without_constructing or registers_without_constructing"

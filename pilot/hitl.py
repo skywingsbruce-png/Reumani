@@ -485,7 +485,8 @@ class HitlRun:
                                          "worker_generation": generation})
         # ---------- 锁外执行阶段本体；异常不得逃逸成未处理线程异常 ----------
         try:
-            delta = self._executor.run_stage(stage=stage, ctx=ctx, state=snapshot_state, emit=None)
+            delta = self._executor.run_stage(stage=stage, ctx=ctx, state=snapshot_state,
+                                                emit=self._stage_audit_emitter(generation))
             err = None
         except BaseException as e:                      # noqa: BLE001 — 一律收敛为 fail-closed
             delta, err = None, e
@@ -528,6 +529,37 @@ class HitlRun:
             self._emit("research_stage_completed", step_id=2, status="ok",
                        summary=f"stage done: {stage}", safe_payload=sp)
             self._exec_cursor = idx + 1
+
+    # A.8.2a.4c —— 外部副作用前的 write-ahead 审计事件发射器。
+    _STAGE_AUDIT_EVENTS = frozenset({"provider_resolved", "model_call_started"})
+
+    def _stage_audit_emitter(self, generation):
+        """返回一个只能发送两类审计事件的 callable（阶段在锁外执行时使用）。
+
+        每次发射：短暂取锁 → 独立 `_txn(None)` → `self._emit` 分配 sequence → 落盘。
+        **不**并入 stage success 事务：这是外部副作用的**前置**记录，
+        若等 stage 成功才提交，一旦进程在调用中崩溃就会永远没有该调用的痕迹。
+        写入失败直接抛出，由调用方在 provider invoke **之前**中止。
+        """
+        run_id = self.run_id
+
+        def emit_audit(event_type, *, summary="", safe_payload=None):
+            if event_type not in self._STAGE_AUDIT_EVENTS:
+                raise HC.ContractViolation(
+                    f"stage audit emitter 不接受事件类型 {event_type!r}")
+            with self._lock:
+                if generation != self._worker_generation:
+                    raise HC.ContractViolation("stale worker：拒绝写入审计事件")
+                if self.state in ("denied", "stopped", "failed", "completed"):
+                    raise HC.ContractViolation(
+                        f"运行已处于 {self.state}，拒绝写入审计事件")
+                with self._txn(None):                    # 独立短事务，不动 cursor/state
+                    self._emit(event_type, step_id=2, status="running",
+                               summary=str(summary)[:120],
+                               safe_payload=dict(safe_payload or {}))
+            return True
+
+        return emit_audit
 
     def _commit_stage_failure(self, stage, idx, err, generation):
         """持锁：阶段异常 → research_stage_failed + run_failed（fail-closed，不产成功产物）。"""

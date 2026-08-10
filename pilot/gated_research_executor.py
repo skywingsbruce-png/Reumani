@@ -525,6 +525,15 @@ class GatedResearchExecutor:
         object.__setattr__(bound, "_extra_input_tokens",
                            int(est.schema_token_estimate + est.wrapper_token_estimate))
 
+        # A.8.2a.4c：write-ahead 审计 —— 事件落盘成功后才允许真正 invoke。
+        # 写失败 → 本次 invoke 次数为 0，不消耗额度，不自动重试。
+        emit = getattr(self, "_stage_emit", None)
+        if callable(emit):
+            emit("model_call_started", summary=f"model call: {role}",
+                 safe_payload={"role": role, "model_id": capability.model_id,
+                               "provider_mode": capability.native_constraint_mode,
+                               "call_index": sum(self.role_calls.values()) + 1,
+                               "cost_estimate_hash": est.schema_hash[:32]})
         self._attempts[role] += 1                        # 额度占用：即使失败也不允许再试（retries=0）
         out = bound.invoke(prompt)
         # 逻辑调用计数只在 provider 真正返回后 +1，保证 logical calls == provider calls；
@@ -536,7 +545,13 @@ class GatedResearchExecutor:
     def run_stage(self, *, stage, ctx, state, emit=None):
         if stage not in STAGES:
             raise ResearchContractError(f"未知阶段：{stage}")
-        return getattr(self, f"_stage_{stage}")(ctx, state)
+        # 显式沿 run_stage → _stage_* → _call_role 传递（不使用全局 callback）。
+        # 每个 run 有独立 executor 实例，因此该字段不会跨 run 串位。
+        self._stage_emit = emit
+        try:
+            return getattr(self, f"_stage_{stage}")(ctx, state)
+        finally:
+            self._stage_emit = None
 
     # ---- 1) 冻结证据校验（在任何模型调用之前） ----
     def _stage_validate_evidence(self, ctx, state):

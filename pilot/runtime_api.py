@@ -81,6 +81,9 @@ def build_gated_research_executor(*, synthesizer=None, verifier=None, claim_extr
         raise ExecutorConfigError(
             f"gated-research-v1 未启用：需显式设置 {ENV_ENABLE_GATED_RESEARCH}=1（默认关闭）")
     # A.8.2a：优先走 ProviderRegistry —— 角色由声明决定，客户端惰性构造且已包 Gate。
+    # A.8.2a.4c §8：这条分支会**立即** from_registry（= 审批前 resolve），因此
+    # NOT-A-PRODUCTION-STARTUP-PATH：生产启动只走 configure_controlled_research_runtime，
+    # 由 per-run 工厂产出 DeferredRegistryResearchExecutor，在 ApprovalGrant 之后才 resolve。
     if registry is not None:
         if gate is None:
             raise ExecutorConfigError("必须注入 HardBudgetGate（价格/额度未核实则拒绝启动）")
