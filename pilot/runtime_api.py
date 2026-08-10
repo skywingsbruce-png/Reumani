@@ -155,9 +155,16 @@ class RunManager:
         from pilot.hitl import HitlRun
         from pilot.research_contracts import get_executor
         from pilot.fake_research_executor import build_default_spec
-        executor = get_executor(executor_id)              # 未注册 → ExecutorNotRegistered
+        registered = get_executor(executor_id)            # 未注册 → ExecutorNotRegistered
         spec = build_default_spec(question=question, executor_id=executor_id)
         run_id = "hitl-research-" + uuid.uuid4().hex[:8]
+        # A.8.2a.4b：受控执行器注册的是**工厂**，必须为每个 run 建独立实例 ——
+        # Deferred executor 持有 binding/grant/inner，共享单例会导致跨 run 授权串位。
+        # fake / legacy executor 仍是共享实例，保持原语义。
+        if getattr(registered, "is_per_run_factory", False):
+            executor = registered.create_for_run(run_id, self.store)
+        else:
+            executor = registered
         with self._lock:
             self._handles[run_id] = _Handle()
             run = HitlRun(run_id, self.store, spec=spec, executor=executor,
