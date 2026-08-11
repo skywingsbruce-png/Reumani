@@ -259,7 +259,8 @@ def test_manifest_does_not_claim_repo_wide_completion():
     for s in ("ssc_pi_agent.deepseek_llm_pro", "ssc_pi_agent.deepseek_llm_con",
               "ssc_pi_agent.judge_llm"):
         assert s in syms, f"清单遗漏未迁移的 legacy 单例 {s}"
-    assert all(u["planned_phase"] == "A.8.2b" for u in UNMIGRATED_LEGACY)
+    # A.8.2b.1 §5：批次已细化为 A.8.2b.2 / .3 / .6，但都仍属 A.8.2b，未提前宣称完成。
+    assert all(u["planned_phase"].startswith("A.8.2b") for u in UNMIGRATED_LEGACY)
     assert "尚未" in MANIFEST["note"] or "not" in MANIFEST["note"].lower()
 
 

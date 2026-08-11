@@ -272,6 +272,46 @@ GUARDED_MODULES = ("ssc_a1", "ssc_skill_agent")
 PAID_ATTRS = ("judge_llm", "deepseek_llm_pro", "deepseek_llm_con")
 
 
+# A.8.2b.1 §4：**不触发式**扫描原语。
+#
+# 旧实现用 `dir(mod)` + `getattr(mod, attr)`。一旦某个模块改成惰性（模块级
+# __getattr__ 或 property/描述符），扫描器就会在"检查有没有付费客户端"的过程中
+# **亲手构造**付费客户端 —— 守卫变成了触发器。这里改为只读 `vars(module)`，
+# 即模块字典里**已经真实存在**的对象，绝不走属性协议。
+_UNAUDITABLE = "<unauditable: no __dict__>"
+
+
+def _module_dict(mod) -> dict:
+    """只读模块字典。拿不到就返回空 dict，由调用方 fail-closed 报告"无法审计"。"""
+    try:
+        d = object.__getattribute__(mod, "__dict__")
+    except Exception:                              # noqa: BLE001
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _is_wrapped(obj) -> bool:
+    """判断是否已包 Gate。用 type 上的查找，避免触发实例级 __getattr__。"""
+    try:
+        return bool(object.__getattribute__(obj, _WRAPPED))
+    except Exception:                              # noqa: BLE001
+        return bool(getattr(type(obj), _WRAPPED, False))
+
+
+def unauditable_modules(module_names=None) -> list:
+    """报告哪些模块**无法**在不触发副作用的前提下审计（fail-closed，不强制构造）。"""
+    import sys
+
+    bad = []
+    for mname in (SCAN_MODULES if module_names is None else module_names):
+        mod = sys.modules.get(mname)
+        if mod is None:
+            continue                               # 未导入 = 没有可达对象，不算无法审计
+        if not _module_dict(mod):
+            bad.append(f"{mname} {_UNAUDITABLE}")
+    return bad
+
+
 def assert_import_order_clean():
     """安装 GatedModel 之前必须调用：这些模块一旦已导入，就已经把**未包装**的
     付费对象复制进了自己的命名空间，事后替换 ssc_pi_agent 属性无法覆盖它们。
@@ -289,8 +329,11 @@ def assert_import_order_clean():
         if name.startswith(("pilot", "ssc_pi_agent")) or mod is None:
             continue
         for attr in PAID_ATTRS:
-            obj = getattr(mod, attr, None)
-            if obj is not None and not getattr(obj, _WRAPPED, False):
+            # A.8.2b.1 §4：只读**已经真实存在**的模块字典条目。
+            # 用 getattr 会触发模块级 __getattr__ / 描述符，把"检查"变成"构造"——
+            # 那样扫描器自己就成了付费客户端的构造者。
+            obj = _module_dict(mod).get(attr)
+            if obj is not None and not _is_wrapped(obj):
                 leaked.append(f"{name}.{attr}")
     if leaked:
         raise GateConfigError(f"以下模块已复制未包装的付费模型对象：{leaked} → 拒绝启动")
@@ -306,7 +349,7 @@ def _is_paid_client(obj):
     """按**类型**识别付费模型客户端，不依赖属性名。"""
     if obj is None or isinstance(obj, (str, int, float, bool, dict, list, tuple, set)):
         return False
-    if getattr(obj, _WRAPPED, False):
+    if _is_wrapped(obj):
         return True                        # 已包装的也算"付费客户端"，供归属判断
     try:
         from langchain_core.language_models.chat_models import BaseChatModel
@@ -328,19 +371,32 @@ def discover_paid_clients():
         mod = sys.modules.get(mname)
         if mod is None:
             continue
-        for attr in dir(mod):
+        # A.8.2b.1 §4：遍历 vars(mod) 而不是 dir(mod)+getattr —— 不触发模块级
+        # __getattr__、不唤醒描述符/property、不为了检查而 resolve 任何 Factory。
+        for attr, obj in list(_module_dict(mod).items()):
             if attr.startswith("__"):
-                continue
-            try:
-                obj = getattr(mod, attr)
-            except Exception:
                 continue
             if not _is_paid_client(obj):
                 continue
-            wrapped = bool(getattr(obj, _WRAPPED, False))
+            wrapped = _is_wrapped(obj)
             role = object.__getattribute__(obj, "_role") if wrapped else None
             found.append((mname, attr, obj, wrapped, role))
     return found
+
+
+def discover_factory_snapshots(factories=None) -> list:
+    """审计 legacy factory：只读 `resolved_snapshot()`，**不触发解析**。
+
+    快照里没有 key / Prompt / 完整客户端配置。未解析的角色根本不会出现。
+    """
+    out = []
+    for f in (factories or ()):
+        snap = f.resolved_snapshot()
+        for row in snap:
+            if any(k in row for k in ("api_key", "key", "secret", "prompt", "client")):
+                raise GateConfigError(f"factory 快照泄漏敏感字段：{sorted(row)}")
+            out.append(dict(row))
+    return out
 
 
 def neutralize_unused_paid_clients(gate, approved=None):
