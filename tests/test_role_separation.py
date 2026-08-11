@@ -152,16 +152,18 @@ def test_shared_task_budget_still_binds_both_roles(tmp_path):
                               "verified_on": "2026-07-20", "source": "test_only",
                               "usd_per_mtok": {"input_cache_miss": 100.0, "output": 100.0},
                               "usage_fields": ["prompt_tokens", "completion_tokens"]}
-    g = mkgate(tmp_path, max_usd_task=1e-9, max_calls_per_model={"rs-priced": 99})
-    ip, iv = FakeChat(), FakeChat()
-    p = GatedModel(ip, g, role="planner", model_id="rs-priced", max_tokens=2000)
-    v = GatedModel(iv, g, role="verifier", model_id="rs-priced", max_tokens=2000)
-    g.start_task("T")
-    for m in (p, v):
-        with pytest.raises(BudgetExceeded, match="max_usd_task"):
-            m.invoke("x" * 50000)
-    assert ip.calls == 0 and iv.calls == 0
-    PR.PRICES.pop("rs-priced")
+    try:
+        g = mkgate(tmp_path, max_usd_task=1e-9, max_calls_per_model={"rs-priced": 99})
+        ip, iv = FakeChat(), FakeChat()
+        p = GatedModel(ip, g, role="planner", model_id="rs-priced", max_tokens=2000)
+        v = GatedModel(iv, g, role="verifier", model_id="rs-priced", max_tokens=2000)
+        g.start_task("T")
+        for m in (p, v):
+            with pytest.raises(BudgetExceeded, match="max_usd_task"):
+                m.invoke("x" * 50000)
+        assert ip.calls == 0 and iv.calls == 0
+    finally:                                    # 断言失败时也必须还原价格表
+        PR.PRICES.pop("rs-priced", None)
 
 
 # 8 / 9 / 10 —— 默认行为不变 / 注入生效 / 裁决权不变
@@ -211,10 +213,15 @@ def test_old_verifier_still_owns_final_answer():
 # 11 / 12 —— 动态发现未知属性名的付费客户端
 @pytest.mark.unit
 def test_discovers_paid_client_with_arbitrary_attr_name(tmp_path):
+    """A.8.2b.1.1：neutralize 会替换它**扫到的一切**（不止本测试加的随机属性），
+    因此必须对整个模块字典做身份快照后恢复；只 delattr 随机属性会污染后续测试。
+    """
     import ssc_pi_agent as P
+    from tests.global_state_guard import paid_client_globals_restored
+
     g = mkgate(tmp_path)
     attr = "zz_some_random_llm_name_9137"
-    try:
+    with paid_client_globals_restored() as guard:
         from langchain_openai import ChatOpenAI
         setattr(P, attr, ChatOpenAI(model="deepseek-v4-flash", api_key="DUMMY-not-real",
                                     base_url="https://api.deepseek.com"))
@@ -227,9 +234,9 @@ def test_discovers_paid_client_with_arbitrary_attr_name(tmp_path):
         with pytest.raises(BudgetExceeded, match="未为角色"):    # 无配额角色 → 拒绝
             g.start_task("T")
             getattr(P, attr).invoke("x")
-    finally:
-        if hasattr(P, attr):
-            delattr(P, attr)
+    # 退出 with 之后：随机属性已删除，被 neutralize 顺带包装的生产属性已按身份还原
+    assert not hasattr(P, attr)
+    assert guard.restored, "本测试确实污染了全局，恢复清单不应为空"
 
 
 @pytest.mark.unit
