@@ -6,7 +6,13 @@ Streamlit 会自动把 pages/ 目录下的脚本变成侧边栏里的多页导�
 
 import streamlit as st
 
-from ssc_pi_agent import DEEPSEEK_API_KEY, DEEPSEEK_MODEL
+# A.8.2b.2a：改为无副作用的配置来源。本页是应用入口，可以显式读 .env；
+# 但**不再** import ssc_pi_agent —— 那会在 import 期构造 3 个付费客户端。
+from pilot.legacy_runtime_config import legacy_display_settings
+
+_SETTINGS = legacy_display_settings()
+DEEPSEEK_API_KEY = _SETTINGS.deepseek_key_configured
+DEEPSEEK_MODEL = _SETTINGS.deepseek_model_label
 from ssc_writer import SCENARIOS, retrieve_literature, generate_draft, refine_draft
 from i18n import t, lang_selector
 

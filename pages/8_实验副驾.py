@@ -69,8 +69,9 @@ if go:
     st.session_state["copilot_kind"] = t("下一步建议", "Next-step suggestion")
 
 if polish:
-    from ssc_pi_agent import DEEPSEEK_API_KEY
-    if not DEEPSEEK_API_KEY:
+    # A.8.2b.2a：只判断 key 是否就绪，不再经由 ssc_pi_agent（那会构造付费客户端）。
+    from pilot.legacy_runtime_config import legacy_display_settings
+    if not legacy_display_settings().deepseek_key_configured:
         st.error(t("未检测到 DEEPSEEK_API_KEY，无法润色。", "DEEPSEEK_API_KEY not found."))
     else:
         with st.spinner(t("先组装、再让模型润色成可执行规划……", "Assembling, then polishing into an actionable plan…")):

@@ -8,7 +8,13 @@ from pathlib import Path
 
 import streamlit as st
 
-from ssc_pi_agent import DEEPSEEK_API_KEY, DEEPSEEK_MODEL
+# A.8.2b.2a：改为无副作用的配置来源。本页是应用入口，可以显式读 .env；
+# 但**不再** import ssc_pi_agent —— 那会在 import 期构造 3 个付费客户端。
+from pilot.legacy_runtime_config import legacy_display_settings
+
+_SETTINGS = legacy_display_settings()
+DEEPSEEK_API_KEY = _SETTINGS.deepseek_key_configured
+DEEPSEEK_MODEL = _SETTINGS.deepseek_model_label
 from ssc_skill_agent import build_skill_agent, WORKSPACE, skill_system
 from skill_loader import discover_skills
 from i18n import t, lang_selector, agent_lang_note

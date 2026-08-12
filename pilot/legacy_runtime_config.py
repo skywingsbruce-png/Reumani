@@ -161,7 +161,71 @@ def explicit_config(*, deepseek_api_key=None, anthropic_api_key=None,
         source=SOURCE_EXPLICIT)
 
 
+# ---------------------------------------------------------------------------
+# A.8.2b.2a —— 纯展示用的就绪状态。
+#
+# 这些字段只回答两个问题："key 配好了吗"、"legacy 会用哪个模型名"。
+# 不构造客户端、不解析 Registry、不调用 factory、不碰网络。
+# ---------------------------------------------------------------------------
+
+# FORBIDDEN_DEEPSEEK_DISPLAY_DEFAULT 是 `ssc_pi_agent.DEEPSEEK_MODEL` 现在的默认值，
+# 是一个**浮动别名**。这里保留它，只是为了**如实展示 legacy 客户端实际会用的模型名**
+# —— 显示成钉死版本反而是撒谎。它绝不用于构造任何客户端：新地基一律用
+# DEFAULT_DEEPSEEK_MODEL（见 legacy_provider_specs 的 validate_spec 会拒绝浮动别名）。
+FORBIDDEN_DEEPSEEK_DISPLAY_DEFAULT = "deepseek-chat"
+
+
+class LegacyDisplaySettings(_Strict):
+    """给 UI/入口用的只读就绪状态。不含 key 本体。"""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    deepseek_key_configured: bool
+    deepseek_model_label: str
+    anthropic_key_configured: bool
+    anthropic_model_label: str
+    source: str
+
+    def __repr__(self) -> str:                      # noqa: D105
+        return (f"LegacyDisplaySettings(deepseek={self.deepseek_key_configured}"
+                f"/{self.deepseek_model_label!r}, "
+                f"anthropic={self.anthropic_key_configured}"
+                f"/{self.anthropic_model_label!r}, source={self.source!r})")
+
+    __str__ = __repr__
+
+
+def legacy_display_settings(*, read_dotenv: bool = True,
+                            env: Optional[dict] = None) -> LegacyDisplaySettings:
+    """**应用入口专用**：读取环境（默认先载入本地 .env），返回脱敏的就绪状态。
+
+    库模块不得调用它 —— 它会读环境。Streamlit page / CLI 入口才可以，
+    因为 `ssc_pi_agent` 原本正是在 import 期替它们做了这件事。
+
+    与 `ssc_pi_agent.DEEPSEEK_API_KEY` 的唯一语义差异：占位值（如 "not-configured"、
+    "changeme"）被判为**未配置**。这是有意为之 —— 否则 UI 会显示"已就绪"，
+    然后在真正调用时才失败。
+    """
+    if env is not None:
+        cfg = from_environment(env)
+    elif read_dotenv:
+        cfg = load_local_dotenv_then_environment()
+    else:
+        cfg = from_environment()
+    import os
+
+    e = os.environ if env is None else env
+    return LegacyDisplaySettings(
+        deepseek_key_configured=cfg.is_configured("deepseek"),
+        # 展示 legacy 实际使用的模型名（未设环境变量时就是那个浮动别名）
+        deepseek_model_label=e.get("DEEPSEEK_MODEL") or FORBIDDEN_DEEPSEEK_DISPLAY_DEFAULT,
+        anthropic_key_configured=cfg.is_configured("anthropic"),
+        anthropic_model_label=e.get("ANTHROPIC_MODEL") or DEFAULT_ANTHROPIC_MODEL,
+        source=cfg.source)
+
+
 __all__ = ["LegacyRuntimeConfig", "LegacyRuntimeConfigError", "empty_config",
            "from_environment", "load_local_dotenv_then_environment", "explicit_config",
            "SOURCE_UNSET", "SOURCE_ENVIRONMENT", "SOURCE_DOTENV_THEN_ENVIRONMENT",
-           "SOURCE_EXPLICIT", "DEFAULT_DEEPSEEK_MODEL", "DEFAULT_ANTHROPIC_MODEL"]
+           "SOURCE_EXPLICIT", "DEFAULT_DEEPSEEK_MODEL", "DEFAULT_ANTHROPIC_MODEL",
+           "LegacyDisplaySettings", "legacy_display_settings",
+           "FORBIDDEN_DEEPSEEK_DISPLAY_DEFAULT"]
