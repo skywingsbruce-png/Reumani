@@ -7,80 +7,93 @@ import json
 
 import streamlit as st
 
-# A.8.2b.2a：改为无副作用的配置来源。本页是应用入口，可以显式读 .env；
-# 但**不再** import ssc_pi_agent —— 那会在 import 期构造 3 个付费客户端。
+# A.8.2b.2a.1：配置读取必须发生在**显式渲染边界**内，不得在 import 期执行。
+# 本页不再 import ssc_pi_agent（那会构造 3 个付费客户端），也不再在模块顶层
+# 调用 legacy_display_settings()（那会 load_dotenv 并读 API key）。
 from pilot.legacy_runtime_config import legacy_display_settings
 
-_SETTINGS = legacy_display_settings()
-DEEPSEEK_API_KEY = _SETTINGS.deepseek_key_configured
-DEEPSEEK_MODEL = _SETTINGS.deepseek_model_label
+
 from ssc_protocol import generate_protocol, validate_protocol
 from i18n import t, lang_selector
 
-st.set_page_config(page_title="Wet-lab Protocol", page_icon="🧫", layout="wide")
-st.markdown("<style>.block-container{padding-top:2rem;max-width:950px;}</style>", unsafe_allow_html=True)
-with st.sidebar:
-    lang_selector()
 
-st.title("🧫 " + t("湿实验协议生成 + 校验", "Wet-lab Protocol — Generate + Validate"))
-st.caption(t("把实验想法变成结构化 Protocol IR，做单位/体积/对照/材料静态检查。仅供科研设计参考。",
-             "Turns an experiment idea into a structured Protocol IR with static checks (units/volumes/controls/materials). Design aid only."))
+def get_display_settings():
+    """只在渲染时调用：此处才读 .env / 环境变量。import 本模块不触发它。"""
+    return legacy_display_settings()
 
-st.error(t(
-    "⚠️ **安全边界**：本功能**只生成协议、只做静态检查**，"
-    "**不连接、不控制任何真实仪器**。任何真实湿实验执行必须由你人工审批、亲自操作。",
-    "⚠️ **Safety boundary**: this **only generates protocols and runs static checks** — it **does NOT connect to or control any real instrument**. "
-    "Any real wet-lab execution must be approved and performed by you."))
 
-with st.sidebar:
-    if DEEPSEEK_API_KEY:
-        st.success(f"DeepSeek 已就绪（{DEEPSEEK_MODEL}）")
-    else:
-        st.error("未检测到 DEEPSEEK_API_KEY")
-    model_label = st.radio("生成用模型", ["DeepSeek（省钱）", "Claude Opus（更严谨）"], index=0)
-    model = "deepseek" if model_label.startswith("DeepSeek") else "claude"
+def render_page(settings=None):
+    settings = settings or get_display_settings()
+    DEEPSEEK_API_KEY = settings.deepseek_key_configured
+    DEEPSEEK_MODEL = settings.deepseek_model_label
 
-desc = st.text_area(
-    "实验想法",
-    placeholder="例如：验证 TGF-β1 诱导 SSc 皮肤成纤维细胞向肌成纤维细胞转化，并检测 α-SMA 表达",
-)
+    st.set_page_config(page_title="Wet-lab Protocol", page_icon="🧫", layout="wide")
+    st.markdown("<style>.block-container{padding-top:2rem;max-width:950px;}</style>", unsafe_allow_html=True)
+    with st.sidebar:
+        lang_selector()
 
-if st.button("🧪 生成并校验协议", type="primary", disabled=not (DEEPSEEK_API_KEY and desc.strip())):
-    with st.spinner("生成结构化 Protocol IR..."):
-        ir = generate_protocol(desc.strip(), model=model)
-    passed, issues = validate_protocol(ir)
+    st.title("🧫 " + t("湿实验协议生成 + 校验", "Wet-lab Protocol — Generate + Validate"))
+    st.caption(t("把实验想法变成结构化 Protocol IR，做单位/体积/对照/材料静态检查。仅供科研设计参考。",
+                 "Turns an experiment idea into a structured Protocol IR with static checks (units/volumes/controls/materials). Design aid only."))
 
-    if ir.get("error"):
-        st.error(ir["error"])
-    else:
-        st.subheader(f"📋 {ir.get('title','实验协议')}")
-        if passed:
-            st.success("✅ 静态校验通过（单位/体积/对照/材料/验收/危险齐全）。仍需你人工审批后才能执行。")
+    st.error(t(
+        "⚠️ **安全边界**：本功能**只生成协议、只做静态检查**，"
+        "**不连接、不控制任何真实仪器**。任何真实湿实验执行必须由你人工审批、亲自操作。",
+        "⚠️ **Safety boundary**: this **only generates protocols and runs static checks** — it **does NOT connect to or control any real instrument**. "
+        "Any real wet-lab execution must be approved and performed by you."))
+
+    with st.sidebar:
+        if DEEPSEEK_API_KEY:
+            st.success(f"DeepSeek 已就绪（{DEEPSEEK_MODEL}）")
         else:
-            st.warning("⚠️ 静态校验发现问题，请修订：")
-            for x in issues:
-                st.markdown(f"- {x}")
+            st.error("未检测到 DEEPSEEK_API_KEY")
+        model_label = st.radio("生成用模型", ["DeepSeek（省钱）", "Claude Opus（更严谨）"], index=0)
+        model = "deepseek" if model_label.startswith("DeepSeek") else "claude"
 
-        st.markdown(f"**目的**：{ir.get('objective','')}")
-        st.markdown("**材料**")
-        for m in ir.get("materials", []):
-            st.markdown(f"- {m.get('name')}：{m.get('amount')} {m.get('notes','')}")
-        st.markdown("**步骤**")
-        for i, s in enumerate(ir.get("steps", []), 1):
-            extra = []
-            if s.get("volume_ul") is not None: extra.append(f"{s['volume_ul']}µL")
-            if s.get("temperature_c") is not None: extra.append(f"{s['temperature_c']}°C")
-            if s.get("duration_min") is not None: extra.append(f"{s['duration_min']}min")
-            st.markdown(f"{i}. [{s.get('operation')}] {s.get('detail','')} {'｜'.join(extra)}")
-        st.markdown(f"**对照**：{ir.get('controls')}")
-        st.markdown(f"**验收标准**：{ir.get('acceptance_criteria')}")
-        st.markdown(f"**危险/生物安全**：{ir.get('hazards')}")
+    desc = st.text_area(
+        "实验想法",
+        placeholder="例如：验证 TGF-β1 诱导 SSc 皮肤成纤维细胞向肌成纤维细胞转化，并检测 α-SMA 表达",
+    )
 
-        st.download_button("💾 下载 Protocol IR（JSON）",
-                           data=json.dumps(ir, ensure_ascii=False, indent=2),
-                           file_name=f"{ir.get('protocol_id','protocol')}.json",
-                           mime="application/json")
+    if st.button("🧪 生成并校验协议", type="primary", disabled=not (DEEPSEEK_API_KEY and desc.strip())):
+        with st.spinner("生成结构化 Protocol IR..."):
+            ir = generate_protocol(desc.strip(), model=model)
+        passed, issues = validate_protocol(ir)
 
-        st.divider()
-        st.info("下一步（后期、且需人工逐步确认）：编译为 Opentrons/PyLabRobot 代码 → 模拟运行 → "
-                "人工确认 → 才可能允许设备执行 → 仪器结果回传 SSc-A1。本版止步于'生成+校验'。")
+        if ir.get("error"):
+            st.error(ir["error"])
+        else:
+            st.subheader(f"📋 {ir.get('title','实验协议')}")
+            if passed:
+                st.success("✅ 静态校验通过（单位/体积/对照/材料/验收/危险齐全）。仍需你人工审批后才能执行。")
+            else:
+                st.warning("⚠️ 静态校验发现问题，请修订：")
+                for x in issues:
+                    st.markdown(f"- {x}")
+
+            st.markdown(f"**目的**：{ir.get('objective','')}")
+            st.markdown("**材料**")
+            for m in ir.get("materials", []):
+                st.markdown(f"- {m.get('name')}：{m.get('amount')} {m.get('notes','')}")
+            st.markdown("**步骤**")
+            for i, s in enumerate(ir.get("steps", []), 1):
+                extra = []
+                if s.get("volume_ul") is not None: extra.append(f"{s['volume_ul']}µL")
+                if s.get("temperature_c") is not None: extra.append(f"{s['temperature_c']}°C")
+                if s.get("duration_min") is not None: extra.append(f"{s['duration_min']}min")
+                st.markdown(f"{i}. [{s.get('operation')}] {s.get('detail','')} {'｜'.join(extra)}")
+            st.markdown(f"**对照**：{ir.get('controls')}")
+            st.markdown(f"**验收标准**：{ir.get('acceptance_criteria')}")
+            st.markdown(f"**危险/生物安全**：{ir.get('hazards')}")
+
+            st.download_button("💾 下载 Protocol IR（JSON）",
+                               data=json.dumps(ir, ensure_ascii=False, indent=2),
+                               file_name=f"{ir.get('protocol_id','protocol')}.json",
+                               mime="application/json")
+
+            st.divider()
+            st.info("下一步（后期、且需人工逐步确认）：编译为 Opentrons/PyLabRobot 代码 → 模拟运行 → "
+                    "人工确认 → 才可能允许设备执行 → 仪器结果回传 SSc-A1。本版止步于'生成+校验'。")
+
+if __name__ == "__main__":          # Streamlit 以 __main__ 执行页面脚本
+    render_page()

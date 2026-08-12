@@ -251,3 +251,148 @@ def test_display_default_is_never_used_to_build_a_client():
 def test_manifest_still_reports_legacy_as_not_import_safe():
     from pilot.provider_migration import MANIFEST
     assert MANIFEST["legacy_ssc_pi_agent_import_safe"] is False
+
+
+# =========================================================================
+# A.8.2b.2a.1 —— import 期不得加载任何密钥/配置
+# =========================================================================
+
+# 5 个迁移模块全部采用显式渲染边界（page 8 的调用原本在顶层 if 分支里，一并收进函数）
+BOUNDARY_PAGES = MIGRATED          # 5 个迁移模块统一采用显式渲染边界
+
+# import 期一律禁止出现在**模块顶层**的配置/密钥调用
+FORBIDDEN_AT_MODULE_LEVEL = ("legacy_display_settings", "from_environment",
+                             "load_local_dotenv_then_environment", "secret_for",
+                             "load_dotenv")
+
+
+def _module_level_calls(rel):
+    """AST：模块顶层（含顶层 if/with/for 体内）实际会在 import 时执行的调用名。"""
+    tree = ast.parse(_src(rel))
+    names = []
+
+    def walk_stmt(stmt):
+        for node in ast.walk(stmt):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue                        # 函数体不在 import 期执行
+            if isinstance(node, ast.Call):
+                f = node.func
+                n = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
+                if n:
+                    names.append(n)
+
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        walk_stmt(stmt)
+    return names
+
+
+@pytest.mark.parametrize("rel", MIGRATED)
+def test_no_secret_or_config_loading_at_module_level(rel):
+    calls = _module_level_calls(rel)
+    bad = [c for c in calls if c in FORBIDDEN_AT_MODULE_LEVEL]
+    assert not bad, f"{rel} 在模块顶层执行了配置/密钥读取：{bad}"
+
+
+@pytest.mark.parametrize("rel", BOUNDARY_PAGES)
+def test_pages_expose_an_explicit_render_boundary(rel):
+    s = _src(rel)
+    assert "def get_display_settings():" in s, f"{rel} 缺少显式配置边界"
+    assert "def render_page(settings=None):" in s, f"{rel} 缺少显式渲染边界"
+    assert 'if __name__ == "__main__":' in s and "render_page()" in s, (
+        f"{rel} 缺少执行守卫 —— Streamlit 以 __main__ 执行脚本，普通 import 则不应渲染")
+
+
+@pytest.mark.parametrize("rel", BOUNDARY_PAGES)
+def test_render_page_is_injectable_for_testing(rel):
+    """settings 可注入 → 渲染路径可在不碰环境的前提下被测试。"""
+    assert "settings = settings or get_display_settings()" in _src(rel)
+
+
+# ---- 子进程实测：区分 class-1（本轮配置副作用）与 class-2（旧模型副作用） ----
+_PROBE = r'''
+import sys, types, json, os
+MODE = sys.argv[2]
+report = {"load_dotenv": 0, "key_reads": [], "rendered": 0, "error": None}
+
+import dotenv
+def _d(*a, **k):
+    report["load_dotenv"] += 1
+    return True
+dotenv.load_dotenv = _d
+
+PROTECTED = ("DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+class Counting(dict):
+    def get(self, k, d=None):
+        if k in PROTECTED: report["key_reads"].append(k)
+        return dict.get(self, k, d)
+    def __getitem__(self, k):
+        if k in PROTECTED: report["key_reads"].append(k)
+        return dict.__getitem__(self, k)
+os.environ = Counting(os.environ)
+
+class _Any:
+    def __init__(self, *a, **k): pass
+    def __getattr__(self, n): return _Any()
+    def __call__(self, *a, **k): return _Any()
+    def __enter__(self): return _Any()
+    def __exit__(self, *a): return False
+    def __bool__(self): return False
+    def __iter__(self): return iter([])
+st = types.ModuleType("streamlit")
+st.set_page_config = lambda *a, **k: report.__setitem__("rendered", report["rendered"] + 1)
+st.__getattr__ = lambda n: _Any()
+sys.modules["streamlit"] = st
+
+# class-2 打桩：旧模型消费者经 ssc_pi_agent 的副作用属于 A.8.2b.2b 阻塞项
+for _m in ("ssc_a1", "ssc_writer", "ssc_protocol", "ssc_skill_agent",
+           "experiment_copilot", "lab_knowledge", "skill_loader"):
+    _s = types.ModuleType(_m); _s.__getattr__ = lambda n: _Any(); sys.modules[_m] = _s
+
+TARGET = sys.argv[1]
+try:
+    code = compile(open(TARGET, encoding="utf-8").read(), TARGET, "exec")
+    mod = types.ModuleType("__main__" if MODE == "streamlit" else "_probe")
+    mod.__dict__["__file__"] = TARGET
+    if MODE == "streamlit":
+        sys.modules["__main__"] = mod
+    exec(code, mod.__dict__)
+except Exception as e:
+    report["error"] = f"{type(e).__name__}: {str(e)[:110]}"
+print("PROBE_JSON " + json.dumps(report, ensure_ascii=False))
+'''
+
+
+def _probe(rel, mode):
+    import json
+    import os
+
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    r = subprocess.run([sys.executable, "-c", _PROBE, rel, mode], capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
+                       timeout=300, env=env)
+    ln = [l for l in (r.stdout or "").splitlines() if l.startswith("PROBE_JSON ")]
+    assert ln, f"探针未产出结果：{(r.stdout or '')[-400:]}{(r.stderr or '')[-400:]}"
+    return json.loads(ln[0][len("PROBE_JSON "):])
+
+
+@pytest.mark.parametrize("rel", MIGRATED)
+def test_plain_import_loads_no_dotenv_and_reads_no_key(rel):
+    d = _probe(rel, "import")
+    assert d["load_dotenv"] == 0, f"{rel} import 期调用了 load_dotenv"
+    assert d["key_reads"] == [], f"{rel} import 期读取了 {sorted(set(d['key_reads']))}"
+
+
+@pytest.mark.parametrize("rel", BOUNDARY_PAGES)
+def test_plain_import_does_not_render(rel):
+    assert _probe(rel, "import")["rendered"] == 0, f"{rel} import 期就渲染了"
+
+
+@pytest.mark.parametrize("rel", BOUNDARY_PAGES)
+def test_streamlit_style_execution_still_renders_and_reads_config(rel):
+    """Streamlit 以 __main__ 执行脚本 —— 渲染必须发生，配置在渲染边界读取。"""
+    d = _probe(rel, "streamlit")
+    assert d["rendered"] >= 1, f"{rel} 在 Streamlit 执行模式下没有渲染：{d['error']}"
+    assert d["load_dotenv"] >= 1, f"{rel} 渲染时未读取配置"
+    assert "DEEPSEEK_API_KEY" in d["key_reads"]
