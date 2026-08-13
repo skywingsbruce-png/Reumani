@@ -1,15 +1,20 @@
-"""A.8.2b.2b.1 §3 —— 无状态 LLM 消费者的**最小模型注入桥**。
+"""A.8.2b.2b.1.1 —— 科研消费者的**显式注入**边界（核心路径 fail-closed）。
 
-这不是第二套 ProviderRegistry，也不是第二套 Gate、模型工厂或全局模型容器：
-- 它**不构造**任何客户端（`legacy_chat_model` 只是把 legacy 里已经存在的对象取出来）；
-- 它**不缓存**任何模型对象 —— 每次都现取。这一点是必须的：
-  `pilot/preflight_a1.py` 与 `pilot/round2_runner.py` 会在运行期把
-  `ssc_pi_agent.judge_llm` / `deepseek_llm_pro` 重绑为 GatedModel。若在这里缓存，
-  就会绕过 Gate；现取才能保证消费者永远拿到当前那个（可能已包 Gate 的）对象。
-- 它**不读** .env、不读 key、不联网。
+上一轮（A.8.2b.2b.1）这里有一个 `resolve_chat_model(role, injected=None)`：
+注入为空就自动去 import `ssc_pi_agent` 取裸客户端。那是**隐式回退**——
+即使它被叫作"具名兼容路径"，默认路径依然可能用上一个没有经过 per-run
+Registry / Gate / HITL 的裸客户端。本模块现在不再提供任何自动回退。
 
-import 本模块零副作用：`ssc_pi_agent` 只在 `legacy_chat_model()` 真正被调用时
-才惰性 import —— 这正是 A.8.2b.2b.1 的目标：把 legacy 依赖从 import 期挪到调用期。
+规则：
+- 核心解析只接受**显式注入**；缺模型/缺工具一律抛错，绝不 import legacy；
+- 角色是**科学职责**（起草 / 校验 / 抽取 / 核验），不是 provider 名称。
+  `"claude"` / `"deepseek"` 是 provider 偏好，只有显式兼容适配器才认识它；
+- **工具不是模型角色**：检索工具走独立的 `require_injected_tool`；
+- 本模块 import 零副作用，且在任何路径上都**不会** import ssc_pi_agent
+  （由测试对源码与运行时双重断言）。
+
+确需旧行为的应用入口，必须主动选用 `pilot.legacy_compat_adapter` ——
+那是一条具名、显式、可审计、且明确标注"未受控"的通道。
 """
 
 from __future__ import annotations
@@ -18,104 +23,78 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 
 class ModelInjectionError(RuntimeError):
-    """无法确定角色或拿不到模型 → fail-closed，绝不静默回退到某个默认模型。"""
+    """注入的对象不满足契约。"""
+
+
+class ModelDependencyMissing(ModelInjectionError):
+    """核心路径缺少显式模型/工具 → fail-closed，不猜、不回退、不 import legacy。"""
 
 
 @runtime_checkable
 class ChatModelProtocol(Protocol):
-    """消费者只需要这么多。与 LangChain `BaseChatModel` 兼容，故真实模型可直接注入。"""
+    """消费者只需要这么多。与 LangChain `BaseChatModel` 兼容。"""
 
     def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any: ...
 
 
-# 两个通用角色。与 pilot/legacy_provider_specs.LEGACY_ROLES 中的同名角色对应，
-# 但这里**不**引入 spec/factory —— 本轮只做注入边界，不改变模型来源。
-ROLE_GENERAL_CLAUDE = "general_claude"
-ROLE_GENERAL_DEEPSEEK = "general_deepseek"
+# ---------------------------------------------------------------------------
+# 科学职责角色。刻意**不**用 provider 名称：一个角色描述"这一步在科研上负什么责"，
+# 与用哪家模型无关。provider 偏好属于兼容适配器的输入，不属于这里。
+# ---------------------------------------------------------------------------
+ROLE_LITERATURE_DRAFTING = "literature_drafting"     # 基于检索结果起草综述/引言
+ROLE_LITERATURE_REVISION = "literature_revision"     # 在已有草稿上按要求修订
+ROLE_PROTOCOL_DRAFTING = "protocol_drafting"         # 起草可执行实验方案
+ROLE_EVIDENCE_EXTRACTION = "evidence_extraction"     # 从摘要抽取结构化证据卡片
+ROLE_CLAIM_VERIFICATION = "claim_verification"       # 用证据核验一条论断
 
-# legacy 里承载这两个角色的属性名。角色映射是**代码事实**，不是按 Prompt 文本猜的：
-# 三个消费者原本都写 `llm = judge_llm if model == "claude" else deepseek_llm_pro`。
-_ROLE_TO_LEGACY_ATTR = {
-    ROLE_GENERAL_CLAUDE: "judge_llm",
-    ROLE_GENERAL_DEEPSEEK: "deepseek_llm_pro",
-}
-
-# 公开函数里 `model=` 参数的取值 → 角色。保持与迁移前完全一致的语义：
-# 只有恰好等于 "claude" 才走 Claude，其余一律 DeepSeek。
-_CHOICE_TO_ROLE = {
-    "claude": ROLE_GENERAL_CLAUDE,
-    "deepseek": ROLE_GENERAL_DEEPSEEK,
-}
+SCIENTIFIC_ROLES: frozenset = frozenset({
+    ROLE_LITERATURE_DRAFTING, ROLE_LITERATURE_REVISION, ROLE_PROTOCOL_DRAFTING,
+    ROLE_EVIDENCE_EXTRACTION, ROLE_CLAIM_VERIFICATION,
+})
 
 
-def role_for_model_choice(model: str) -> str:
-    """把公开参数 `model=` 映射到角色。
-
-    迁移前的写法是 `judge_llm if model == "claude" else deepseek_llm_pro`，
-    即任何非 "claude" 的值都落到 DeepSeek。这里**保持该语义**（不收紧、不放宽），
-    否则会改变现有科研业务行为。
-    """
-    return _CHOICE_TO_ROLE.get(str(model), ROLE_GENERAL_DEEPSEEK)
-
-
-def legacy_chat_model(role: str) -> ChatModelProtocol:
-    """从 legacy 取出该角色当前绑定的模型对象。**惰性 import、绝不缓存**。
-
-    这是一条**具名的、被测试覆盖的**兼容路径，不是静默回退：调用方没有注入模型时，
-    行为与迁移前逐字一致。拿不到就抛，绝不返回 None 或换一个模型顶替。
-    """
-    attr = _ROLE_TO_LEGACY_ATTR.get(role)
-    if attr is None:
+def validate_model(candidate: Any) -> ChatModelProtocol:
+    """只检查契约，不构造、不替换。"""
+    if candidate is None:
+        raise ModelDependencyMissing("模型为 None")
+    if not callable(getattr(candidate, "invoke", None)):
         raise ModelInjectionError(
-            f"未知角色 {role!r}；本桥只服务 {tuple(_ROLE_TO_LEGACY_ATTR)}（不猜、不回退）")
-    try:
-        import ssc_pi_agent as _legacy          # 惰性：import 期不触发
-    except Exception as e:                      # noqa: BLE001
+            f"注入的对象不满足 ChatModelProtocol（缺可调用的 invoke）："
+            f"{type(candidate).__name__}")
+    return candidate
+
+
+def require_injected_model(role: str, injected: Optional[ChatModelProtocol] = None
+                           ) -> ChatModelProtocol:
+    """核心路径的唯一入口。**没有注入就失败**，绝不去 legacy 里找一个顶上。"""
+    if role not in SCIENTIFIC_ROLES:
+        raise ModelDependencyMissing(
+            f"未知科学职责 role={role!r}；已声明的只有 {sorted(SCIENTIFIC_ROLES)}")
+    if injected is None:
+        raise ModelDependencyMissing(
+            f"explicit model required for role={role}；"
+            "核心路径不提供默认模型，也不会自动加载 legacy。"
+            "应用入口如需旧行为，请显式使用 pilot.legacy_compat_adapter。")
+    return validate_model(injected)
+
+
+def require_injected_tool(tool_name: str, injected: Any = None) -> Any:
+    """工具**不是**模型角色，单独一条通道。同样 fail-closed。"""
+    if not str(tool_name or "").strip():
+        raise ModelDependencyMissing("工具名不能为空")
+    if injected is None:
+        raise ModelDependencyMissing(
+            f"explicit tool required for tool={tool_name}；"
+            "核心路径不会自动加载 legacy 工具。"
+            "应用入口如需旧行为，请显式使用 pilot.legacy_compat_adapter。")
+    if not callable(getattr(injected, "invoke", None)):
         raise ModelInjectionError(
-            f"无法加载 legacy 模型来源以解析角色 {role!r}：{type(e).__name__}") from e
-    # 现取而非缓存 —— preflight / round2_runner 会把这些属性重绑为 GatedModel。
-    model = getattr(_legacy, attr, None)
-    if model is None:
-        raise ModelInjectionError(f"legacy 中不存在角色 {role!r} 对应的 {attr}")
-    return model
+            f"注入的工具缺可调用的 invoke：{type(injected).__name__}")
+    return injected
 
 
-def resolve_chat_model(role: str, injected: Optional[ChatModelProtocol] = None
-                       ) -> ChatModelProtocol:
-    """注入优先；未注入才走具名的 legacy 兼容路径。两条路都 fail-closed。"""
-    if injected is not None:
-        if not hasattr(injected, "invoke"):
-            raise ModelInjectionError(
-                f"注入的模型不满足 ChatModelProtocol（缺 invoke）：{type(injected).__name__}")
-        return injected
-    if role not in _ROLE_TO_LEGACY_ATTR:
-        raise ModelInjectionError(f"未知角色 {role!r}（不猜、不回退）")
-    return legacy_chat_model(role)
-
-
-def resolve_for_choice(model: str, injected: Optional[ChatModelProtocol] = None
-                       ) -> ChatModelProtocol:
-    """消费者常用的组合：把 `model=` 参数解析成角色，再解析出模型。"""
-    return resolve_chat_model(role_for_model_choice(model), injected)
-
-
-def legacy_tool(name: str):
-    """取 legacy 里定义的工具（如 `search_literature`）。同样惰性、不缓存、fail-closed。
-
-    工具不是模型，不消耗预算；但它定义在 `ssc_pi_agent` 里，因此消费者若在模块顶层
-    import 它，legacy 仍会在 import 期被拉起。这里提供调用期取用的入口。
-    """
-    try:
-        import ssc_pi_agent as _legacy
-    except Exception as e:                      # noqa: BLE001
-        raise ModelInjectionError(
-            f"无法加载 legacy 工具来源以解析 {name!r}：{type(e).__name__}") from e
-    t = getattr(_legacy, name, None)
-    if t is None:
-        raise ModelInjectionError(f"legacy 中不存在工具 {name!r}")
-    return t
-
-
-__all__ = ["ChatModelProtocol", "ModelInjectionError", "ROLE_GENERAL_CLAUDE",
-           "ROLE_GENERAL_DEEPSEEK", "role_for_model_choice", "legacy_chat_model",
-           "resolve_chat_model", "resolve_for_choice", "legacy_tool"]
+__all__ = ["ChatModelProtocol", "ModelInjectionError", "ModelDependencyMissing",
+           "validate_model", "require_injected_model", "require_injected_tool",
+           "SCIENTIFIC_ROLES", "ROLE_LITERATURE_DRAFTING", "ROLE_LITERATURE_REVISION",
+           "ROLE_PROTOCOL_DRAFTING", "ROLE_EVIDENCE_EXTRACTION",
+           "ROLE_CLAIM_VERIFICATION"]

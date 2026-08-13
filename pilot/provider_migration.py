@@ -107,6 +107,22 @@ NON_TRIGGERING_SCANNER = True
 STATELESS_WAVE1_MIGRATED = ("ssc_writer.py", "ssc_protocol.py", "ssc_evidence.py")
 LEGACY_MODEL_BRIDGE = "pilot.legacy_model_bridge"
 
+# A.8.2b.2b.1.1：核心路径已移除隐式回退。缺显式注入即 fail-closed，核心不再
+# 自动 import ssc_pi_agent。旧行为隔离到具名适配器，由应用入口主动选用。
+CORE_PATH_FAIL_CLOSED = True
+LEGACY_COMPAT_ADAPTER = "pilot.legacy_compat_adapter"
+# **这条兼容通道未受控**：拿到的是 legacy 裸客户端，未经 per-run Registry /
+# Gate / HITL 授权与审计。不得把它描述成"正式受控模型迁移完成"。
+LEGACY_COMPAT_IS_CONTROLLED = False
+CONTROLLED_MODEL_MIGRATION_COMPLETE = False
+# 角色是科学职责，不是 provider 名称
+SCIENTIFIC_ROLES_IN_USE = ("literature_drafting", "literature_revision",
+                           "protocol_drafting", "evidence_extraction",
+                           "claim_verification")
+# 显式选用兼容通道的应用入口（出现在调用点，不藏在 resolver 默认值里）
+COMPAT_OPT_IN_ENTRYPOINTS = ("pages/1_科研写作助手.py", "pages/6_实验协议.py",
+                             "ssc_skill_agent.py")
+
 # A.8.2b.1 §1-3：无副作用地基已建立，但**尚未接入任何消费者**。
 LEGACY_FOUNDATION_MODULES = ("pilot.legacy_provider_specs", "pilot.legacy_runtime_config",
                              "pilot.legacy_provider_factory")
@@ -135,7 +151,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.2b.1",
+    "phase": "A.8.2b.2b.1.1",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -150,6 +166,12 @@ MANIFEST = {
     "legacy_foundation_wired_to_consumers": LEGACY_FOUNDATION_WIRED_TO_CONSUMERS,
     "stateless_wave1_migrated": list(STATELESS_WAVE1_MIGRATED),
     "legacy_model_bridge": LEGACY_MODEL_BRIDGE,
+    "core_path_fail_closed": CORE_PATH_FAIL_CLOSED,
+    "legacy_compat_adapter": LEGACY_COMPAT_ADAPTER,
+    "legacy_compat_is_controlled": LEGACY_COMPAT_IS_CONTROLLED,
+    "controlled_model_migration_complete": CONTROLLED_MODEL_MIGRATION_COMPLETE,
+    "scientific_roles_in_use": list(SCIENTIFIC_ROLES_IN_USE),
+    "compat_opt_in_entrypoints": list(COMPAT_OPT_IN_ENTRYPOINTS),
     "migration_batches": list(MIGRATION_BATCHES),
     "next_phase": "A.8.2b.2",
     "blocks_a83": BLOCKS_A83,
@@ -164,4 +186,7 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "LEGACY_SSC_PI_AGENT_IMPORT_SAFE", "BLOCKS_A83", "LEGACY_REBIND_SITES",
            "REBIND_COUNTS", "NON_TRIGGERING_SCANNER", "LEGACY_FOUNDATION_MODULES",
            "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
-           "STATELESS_WAVE1_MIGRATED", "LEGACY_MODEL_BRIDGE"]
+           "STATELESS_WAVE1_MIGRATED", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
+           "LEGACY_COMPAT_ADAPTER", "LEGACY_COMPAT_IS_CONTROLLED",
+           "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_ROLES_IN_USE",
+           "COMPAT_OPT_IN_ENTRYPOINTS"]

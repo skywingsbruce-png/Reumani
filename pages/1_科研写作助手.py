@@ -13,6 +13,9 @@ from pilot.legacy_runtime_config import legacy_display_settings
 
 
 from ssc_writer import SCENARIOS, retrieve_literature, generate_draft, refine_draft
+# A.8.2b.2b.1.1：核心科研路径只接受显式注入。本页作为应用入口，**主动选用**
+# 未受控的 legacy 兼容通道（见 pilot/legacy_compat_adapter 的诚实标注）。
+from pilot.legacy_compat_adapter import legacy_chat_model_for_preference, legacy_search_tool
 from i18n import t, lang_selector
 
 
@@ -111,7 +114,10 @@ def render_page(settings=None):
         st.session_state.w_topic = topic.strip()
         st.session_state.w_scenario = scenario
         with st.spinner("正在从 PubMed / 预印本检索真实文献..."):
-            st.session_state.w_lit = retrieve_literature(topic.strip(), max_results, preprints_only)
+            # A.8.2b.2b.1.1：应用入口**显式**选用未受控的 legacy 兼容通道。
+            st.session_state.w_lit = retrieve_literature(
+                topic.strip(), max_results, preprints_only,
+                search_tool=legacy_search_tool())
         st.session_state.w_draft = ""
         st.session_state.w_chat = []
         st.rerun()
@@ -138,6 +144,7 @@ def render_page(settings=None):
                     st.session_state.w_lit,
                     model=st.session_state.w_model,
                     extra_requirement=extra,
+                    chat_model=legacy_chat_model_for_preference(st.session_state.w_model),
                 )
             st.session_state.w_chat = [{"role": "assistant", "text": st.session_state.w_draft}]
             st.rerun()
@@ -173,7 +180,9 @@ def render_page(settings=None):
                 f"【修改要求】：\n{follow}"
             )
             with st.spinner("AI 正在修改..."):
-                new_draft = refine_draft(history_prompt, model=st.session_state.w_model)
+                new_draft = refine_draft(
+                    history_prompt, model=st.session_state.w_model,
+                    chat_model=legacy_chat_model_for_preference(st.session_state.w_model))
             st.session_state.w_draft = new_draft
             st.session_state.w_chat.append({"role": "assistant", "text": new_draft})
             st.rerun()

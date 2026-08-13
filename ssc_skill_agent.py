@@ -389,8 +389,12 @@ def verify_claim(claim: str, query: str) -> str:
     """【证据验证】针对某个论断，检索相关文献证据卡片，核对该论断是否真被支持、
     有没有过度解读（把小样本/动物实验/横断面当成强因果）。用于给结论做独立把关。"""
     papers = search_with_abstracts(query, n=8)
-    cards = make_evidence_cards(papers, model="deepseek")
-    return _verify_claim(claim, cards, model="claude")
+    # A.8.2b.2b.1.1：本模块尚未迁移，显式选用未受控的 legacy 兼容通道。
+    from pilot.legacy_compat_adapter import legacy_chat_model_for_preference
+    cards = make_evidence_cards(papers, model="deepseek",
+                                chat_model=legacy_chat_model_for_preference("deepseek"))
+    return _verify_claim(claim, cards, model="claude",
+                         chat_model=legacy_chat_model_for_preference("claude"))
 
 
 SKILL_AGENT_TOOLS = [

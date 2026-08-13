@@ -24,6 +24,17 @@ def _src(rel):
     return (REPO / rel).read_text(encoding="utf-8")
 
 
+def _imported_modules(rel) -> set:
+    """该文件**真实 import** 的模块名（含函数内惰性 import）。不看字符串/注释。"""
+    names = set()
+    for node in ast.walk(ast.parse(_src(rel))):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+        elif isinstance(node, ast.Import):
+            names.update(a.name for a in node.names)
+    return names
+
+
 def _run(code):
     import os
 
@@ -141,97 +152,179 @@ def test_evidence_accepts_injected_model():
     assert ssc_evidence.verify_claim("claim", [], chat_model=f2) == "VERDICT"
 
 
-# ============================================================ §1.6 角色映射
-def test_role_mapping_preserves_pre_migration_semantics():
-    """迁移前是 `judge_llm if model == "claude" else deepseek_llm_pro` —— 不得收紧或放宽。"""
-    from pilot.legacy_model_bridge import (ROLE_GENERAL_CLAUDE, ROLE_GENERAL_DEEPSEEK,
-                                           role_for_model_choice)
-    assert role_for_model_choice("claude") == ROLE_GENERAL_CLAUDE
-    assert role_for_model_choice("deepseek") == ROLE_GENERAL_DEEPSEEK
-    for other in ("", "Claude", "gpt-4", "anything", None):
-        assert role_for_model_choice(other) == ROLE_GENERAL_DEEPSEEK
+# ============================================================ 核心路径 fail-closed
+def test_core_resolver_has_no_implicit_fallback():
+    """A.8.2b.2b.1.1：核心 resolver 不接受"注入为空"，也不去 legacy 里找替身。"""
+    from pilot.legacy_model_bridge import (ModelDependencyMissing,
+                                           ROLE_LITERATURE_DRAFTING,
+                                           require_injected_model)
+    with pytest.raises(ModelDependencyMissing, match="explicit model required"):
+        require_injected_model(ROLE_LITERATURE_DRAFTING)
+    with pytest.raises(ModelDependencyMissing):
+        require_injected_model(ROLE_LITERATURE_DRAFTING, None)
 
 
-def test_injected_model_wins_over_legacy():
-    from pilot.legacy_model_bridge import ROLE_GENERAL_CLAUDE, resolve_chat_model
-    fake = FakeChat()
-    assert resolve_chat_model(ROLE_GENERAL_CLAUDE, fake) is fake
+def test_core_module_never_imports_legacy_in_any_path():
+    """源码层：核心模块任何分支都不得 **import** legacy 或兼容适配器。
+
+    判定基于 AST 的真实 import，不看字符串 —— 错误消息里指路
+    "请显式使用 pilot.legacy_compat_adapter" 是应该的，那不是依赖。
+    """
+    assert _imported_modules("pilot/legacy_model_bridge.py") & {
+        "ssc_pi_agent", "pilot.legacy_compat_adapter"} == set()
 
 
-# ============================================================ §1.8 fail-closed
-def test_unknown_role_fails_closed():
-    from pilot.legacy_model_bridge import ModelInjectionError, resolve_chat_model
-    with pytest.raises(ModelInjectionError):
-        resolve_chat_model("no_such_role")
-    with pytest.raises(ModelInjectionError):
-        resolve_chat_model("synthesizer")        # 受控链角色不在本桥服务范围
+def test_core_module_runtime_never_loads_legacy():
+    """运行时：把核心 resolver 的失败路径全跑一遍，legacy 不得被 import。"""
+    rc, out = _run(
+        "import sys\n"
+        "from pilot.legacy_model_bridge import (ModelDependencyMissing,\n"
+        "                                       ROLE_CLAIM_VERIFICATION,\n"
+        "                                       require_injected_model,\n"
+        "                                       require_injected_tool)\n"
+        "for fn, args in ((require_injected_model, (ROLE_CLAIM_VERIFICATION,)),\n"
+        "                 (require_injected_model, ('no_such_role',)),\n"
+        "                 (require_injected_tool, ('search_literature',))):\n"
+        "    try:\n"
+        "        fn(*args)\n"
+        "    except ModelDependencyMissing:\n"
+        "        pass\n"
+        "print('LEGACY', 'ssc_pi_agent' in sys.modules)")
+    assert rc == 0, out
+    assert "LEGACY False" in out, out
+
+
+@pytest.mark.parametrize("call", [
+    "ssc_writer.generate_draft('文献综述', 't', 'lit')",
+    "ssc_writer.refine_draft('h')",
+    "ssc_writer.retrieve_literature('q')",
+    "ssc_protocol.generate_protocol('d')",
+    "ssc_evidence.make_evidence_cards([{'title':'t','abstract':'a','pub_type':'j',"
+    "'authors':'A','journal':'J','year':'2026','date':'2026','link':'x'}])",
+    "ssc_evidence.verify_claim('c', [])",
+])
+def test_consumers_fail_closed_without_explicit_injection(call):
+    """不注入就必须抛，且**不得**在过程中 import ssc_pi_agent。"""
+    rc, out = _run(
+        "import sys\n"
+        "sys.path.insert(0, '.')\n"
+        "import ssc_writer, ssc_protocol, ssc_evidence\n"
+        "from pilot.legacy_model_bridge import ModelDependencyMissing\n"
+        "try:\n"
+        f"    {call}\n"
+        "    print('RESULT no_raise')\n"
+        "except ModelDependencyMissing:\n"
+        "    print('RESULT fail_closed')\n"
+        "print('LEGACY', 'ssc_pi_agent' in sys.modules)")
+    assert rc == 0, out
+    assert "RESULT fail_closed" in out, out
+    assert "LEGACY False" in out, out
 
 
 def test_injected_object_without_invoke_is_rejected():
-    from pilot.legacy_model_bridge import ModelInjectionError, resolve_chat_model
-    from pilot.legacy_model_bridge import ROLE_GENERAL_DEEPSEEK
+    from pilot.legacy_model_bridge import (ModelInjectionError, ROLE_PROTOCOL_DRAFTING,
+                                           require_injected_model)
     with pytest.raises(ModelInjectionError, match="invoke"):
-        resolve_chat_model(ROLE_GENERAL_DEEPSEEK, object())
+        require_injected_model(ROLE_PROTOCOL_DRAFTING, object())
 
 
-def test_missing_legacy_attribute_fails_closed_without_substitute(monkeypatch):
-    """拿不到就抛，绝不换一个模型顶替、也不返回 None。"""
-    import ssc_pi_agent as P
-    from pilot.legacy_model_bridge import (ModelInjectionError, ROLE_GENERAL_CLAUDE,
-                                           legacy_chat_model)
-    monkeypatch.delattr(P, "judge_llm", raising=False)
-    with pytest.raises(ModelInjectionError):
-        legacy_chat_model(ROLE_GENERAL_CLAUDE)
+def test_unknown_role_fails_closed():
+    from pilot.legacy_model_bridge import ModelDependencyMissing, require_injected_model
+    for bad in ("no_such_role", "synthesizer", "general_claude", "general_deepseek"):
+        with pytest.raises(ModelDependencyMissing):
+            require_injected_model(bad, FakeChat())
 
 
-def test_unknown_tool_fails_closed():
-    from pilot.legacy_model_bridge import ModelInjectionError, legacy_tool
-    with pytest.raises(ModelInjectionError):
-        legacy_tool("no_such_tool_9137")
+def test_roles_are_scientific_responsibilities_not_provider_names():
+    """角色必须描述科学职责；provider 名称不得充当角色。"""
+    from pilot.legacy_model_bridge import SCIENTIFIC_ROLES
+    assert SCIENTIFIC_ROLES == {"literature_drafting", "literature_revision",
+                                "protocol_drafting", "evidence_extraction",
+                                "claim_verification"}
+    for banned in ("claude", "deepseek", "anthropic", "opus", "general"):
+        assert not any(banned in r for r in SCIENTIFIC_ROLES), f"角色里混入了 provider 词 {banned}"
 
 
-# ============================================================ §1.10 不绕过 Gate
-def test_bridge_never_caches_so_gate_rebinding_still_applies(monkeypatch):
-    """preflight / round2_runner 会把 legacy 属性重绑为 GatedModel；
-    桥必须**现取**，否则会拿到未包 Gate 的旧对象。"""
-    import ssc_pi_agent as P
-    from pilot.legacy_model_bridge import ROLE_GENERAL_CLAUDE, legacy_chat_model
-
-    first = legacy_chat_model(ROLE_GENERAL_CLAUDE)
-    sentinel = FakeChat("GATED")
-    monkeypatch.setattr(P, "judge_llm", sentinel, raising=False)
-    assert legacy_chat_model(ROLE_GENERAL_CLAUDE) is sentinel, "桥缓存了模型 → 会绕过 Gate"
-    assert first is not sentinel
+def test_tool_is_not_a_model_role():
+    from pilot.legacy_model_bridge import (ModelDependencyMissing, SCIENTIFIC_ROLES,
+                                           require_injected_tool)
+    assert "search_literature" not in SCIENTIFIC_ROLES
+    with pytest.raises(ModelDependencyMissing, match="explicit tool required"):
+        require_injected_tool("search_literature")
 
 
-def test_bridge_constructs_nothing_and_holds_no_state():
-    tree = ast.parse(_src("pilot/legacy_model_bridge.py"))
-    # 只看**可执行代码**：剥掉模块/函数/类的 docstring 与 # 注释，
-    # 否则"这不是第二套 ProviderRegistry"这样的说明文字会被误判。
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
-                             ast.ClassDef)) and ast.get_docstring(node):
-            node.body = node.body[1:] or [ast.Pass()]
-    code = ast.unparse(tree)
-    for banned in ("ChatOpenAI(", "ChatAnthropic(", "create_react_agent",
-                   "load_dotenv", "ProviderRegistry", "HardBudgetGate"):
-        assert banned not in code, f"桥里出现了 {banned}"
-    # 模块级只允许常量/协议/函数，不允许可变容器缓存模型
-    for node in ast.parse(_src("pilot/legacy_model_bridge.py")).body:
-        if isinstance(node, ast.Assign):
-            for t in node.targets:
-                nm = getattr(t, "id", "")
-                assert nm.isupper() or nm.startswith("_"), f"桥有非常量模块级状态 {nm}"
+# ============================================================ 兼容适配器是唯一 legacy 通道
+def test_compat_adapter_is_the_only_module_reaching_legacy():
+    import pathlib as _pl
+    offenders = []
+    for f in (_pl.Path(REPO) / "pilot").glob("legacy_*.py"):
+        if f.name == "legacy_compat_adapter.py":
+            continue
+        # 只看真实 import；文档里解释 ssc_pi_agent 的现状是必要的，不算依赖
+        if "ssc_pi_agent" in _imported_modules(f"pilot/{f.name}"):
+            offenders.append(f.name)
+    assert offenders == [], f"这些模块不应 import legacy：{offenders}"
+    assert "ssc_pi_agent" in _imported_modules("pilot/legacy_compat_adapter.py"), \
+        "兼容适配器本应是唯一触及 legacy 的地方"
 
 
-def test_bridge_import_is_side_effect_free():
+def test_compat_adapter_import_is_side_effect_free():
     rc, out = _run(
         "import sys\n"
-        "import pilot.legacy_model_bridge as B\n"
+        "import pilot.legacy_compat_adapter as A\n"
         "print('LOADED', [m for m in ('ssc_pi_agent','langchain_openai',\n"
         "                             'langchain_anthropic','dotenv') if m in sys.modules])")
     assert rc == 0, out
     assert "LOADED []" in out, out
+
+
+def test_compat_adapter_declares_itself_uncontrolled():
+    """不得把这条通道说成受控。"""
+    from pilot.legacy_compat_adapter import compat_disclosure
+    d = compat_disclosure()
+    assert d["controlled"] is False
+    assert d["through_registry"] is False
+    assert d["through_gate"] is False
+    assert d["through_hitl"] is False
+
+
+def test_compat_adapter_preserves_provider_preference_semantics():
+    """provider 偏好语义留在兼容层：只有 "claude" 走 Claude，其余一律 DeepSeek。"""
+    import ssc_pi_agent as P
+    from pilot.legacy_compat_adapter import legacy_chat_model_for_preference as L
+    assert L("claude") is P.judge_llm
+    for other in ("deepseek", "", "gpt-4", "Claude", "anything"):
+        assert L(other) is P.deepseek_llm_pro
+
+
+def test_compat_adapter_never_caches_so_gate_rebinding_still_applies(monkeypatch):
+    import ssc_pi_agent as P
+    from pilot.legacy_compat_adapter import legacy_chat_model_for_preference as L
+    first = L("claude")
+    sentinel = FakeChat("GATED")
+    monkeypatch.setattr(P, "judge_llm", sentinel, raising=False)
+    assert L("claude") is sentinel, "适配器缓存了模型 → 会绕过 Gate"
+    assert first is not sentinel
+
+
+def test_compat_adapter_fails_closed_without_substitute(monkeypatch):
+    import ssc_pi_agent as P
+    from pilot.legacy_compat_adapter import (LegacyCompatUnavailable, legacy_search_tool,
+                                             legacy_chat_model_for_preference)
+    monkeypatch.delattr(P, "judge_llm", raising=False)
+    with pytest.raises(LegacyCompatUnavailable):
+        legacy_chat_model_for_preference("claude")
+    with pytest.raises(LegacyCompatUnavailable):
+        legacy_search_tool("no_such_tool_9137")
+
+
+def test_entry_points_opt_in_explicitly():
+    """兼容通道必须出现在**调用点**，不能藏在 resolver 默认值里。"""
+    for rel, needle in (("pages/1_科研写作助手.py", "legacy_chat_model_for_preference"),
+                        ("pages/1_科研写作助手.py", "legacy_search_tool"),
+                        ("pages/6_实验协议.py", "legacy_chat_model_for_preference"),
+                        ("ssc_skill_agent.py", "legacy_chat_model_for_preference")):
+        assert needle in _src(rel), f"{rel} 未显式选用兼容通道：{needle}"
 
 
 # ============================================================ §1.9 签名兼容
@@ -279,11 +372,18 @@ def test_pure_functions_are_untouched():
 
 
 # ============================================================ 未迁移模块仍原样
-@pytest.mark.parametrize("rel", ("ssc_a1.py", "ssc_skill_agent.py", "ssc_eval.py",
-                                 "ssc_action_discovery.py", "pages/7_方向辩论(可选).py",
-                                 "pages/9_数据对话.py"))
+@pytest.mark.parametrize("rel", ("ssc_a1.py", "ssc_eval.py", "ssc_action_discovery.py",
+                                 "pages/7_方向辩论(可选).py", "pages/9_数据对话.py"))
 def test_wave1_did_not_touch_out_of_scope_modules(rel):
     assert "A.8.2b.2b.1" not in _src(rel), f"{rel} 不在本批范围内"
+
+
+def test_ssc_skill_agent_changed_only_at_the_call_site():
+    """它**未被迁移**：只是在调用点显式选用了兼容通道，其余原样。"""
+    src = _src("ssc_skill_agent.py")
+    assert "legacy_chat_model_for_preference" in src
+    assert "from ssc_pi_agent import" in src          # 自身仍绑定 legacy 单例
+    assert "require_injected_model" not in src        # 未改成核心注入路径
 
 
 def test_ssc_pi_agent_still_untouched():
@@ -296,3 +396,17 @@ def test_ssc_pi_agent_still_untouched():
 def test_manifest_still_reports_legacy_as_not_import_safe():
     from pilot.provider_migration import MANIFEST
     assert MANIFEST["legacy_ssc_pi_agent_import_safe"] is False
+
+
+def test_manifest_does_not_claim_controlled_migration():
+    """不得把本轮说成"正式受控模型迁移完成"。"""
+    from pilot.provider_migration import MANIFEST as M
+    assert M["core_path_fail_closed"] is True
+    assert M["legacy_compat_is_controlled"] is False
+    assert M["controlled_model_migration_complete"] is False
+    assert M["legacy_foundation_wired_to_consumers"] is False
+    assert set(M["scientific_roles_in_use"]) == {
+        "literature_drafting", "literature_revision", "protocol_drafting",
+        "evidence_extraction", "claim_verification"}
+    assert set(M["compat_opt_in_entrypoints"]) == {
+        "pages/1_科研写作助手.py", "pages/6_实验协议.py", "ssc_skill_agent.py"}

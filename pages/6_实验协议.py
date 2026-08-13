@@ -14,6 +14,8 @@ from pilot.legacy_runtime_config import legacy_display_settings
 
 
 from ssc_protocol import generate_protocol, validate_protocol
+# A.8.2b.2b.1.1：应用入口主动选用未受控的 legacy 兼容通道。
+from pilot.legacy_compat_adapter import legacy_chat_model_for_preference
 from i18n import t, lang_selector
 
 
@@ -57,7 +59,10 @@ def render_page(settings=None):
 
     if st.button("🧪 生成并校验协议", type="primary", disabled=not (DEEPSEEK_API_KEY and desc.strip())):
         with st.spinner("生成结构化 Protocol IR..."):
-            ir = generate_protocol(desc.strip(), model=model)
+            # A.8.2b.2b.1.1：应用入口**显式**选用未受控的 legacy 兼容通道。
+            ir = generate_protocol(
+                desc.strip(), model=model,
+                chat_model=legacy_chat_model_for_preference(model))
         passed, issues = validate_protocol(ir)
 
         if ir.get("error"):

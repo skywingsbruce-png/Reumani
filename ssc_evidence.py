@@ -12,8 +12,10 @@ import re
 
 import requests
 
-# A.8.2b.2b.1：模型改为调用期解析，import 本模块不再拉起 ssc_pi_agent。
-from pilot.legacy_model_bridge import resolve_for_choice
+# A.8.2b.2b.1.1：核心路径只接受**显式注入**，按科学职责取模型；
+# 缺依赖即 fail-closed，绝不自动 import ssc_pi_agent。
+from pilot.legacy_model_bridge import (ROLE_CLAIM_VERIFICATION, ROLE_EVIDENCE_EXTRACTION,
+                                        require_injected_model)
 
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
@@ -64,7 +66,7 @@ def make_evidence_cards(papers, model: str = "deepseek", chat_model=None):
     have_abstract = [p for p in papers if p["abstract"]]
     if not have_abstract:
         return []
-    llm = resolve_for_choice(model, chat_model)
+    llm = require_injected_model(ROLE_EVIDENCE_EXTRACTION, chat_model)
 
     listing = ""
     for i, p in enumerate(have_abstract):
@@ -120,7 +122,7 @@ def format_cards(cards) -> str:
 
 def verify_claim(claim: str, cards, model: str = "claude", chat_model=None) -> str:
     """核对一个论断是否真被证据卡片支持，有没有过度解读。默认用 Claude（判断更稳）。"""
-    llm = resolve_for_choice(model, chat_model)
+    llm = require_injected_model(ROLE_CLAIM_VERIFICATION, chat_model)
     evidence = format_cards(cards)
     prompt = (
         "你是严格的证据验证员(Verifier)。下面是一个【论断】和一组【证据卡片】。"

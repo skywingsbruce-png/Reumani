@@ -6,9 +6,11 @@
 被 pages/1_科研写作助手.py（网页版）import 使用；也可单独调用测试。
 """
 
-# A.8.2b.2b.1：模型与工具改为**调用期**解析，import 本模块不再拉起 ssc_pi_agent、
-# 不读 .env / key、不构造客户端。未注入时走具名的 legacy 兼容路径（行为与迁移前一致）。
-from pilot.legacy_model_bridge import legacy_tool, resolve_for_choice
+# A.8.2b.2b.1.1：核心路径只接受**显式注入**，按科学职责取模型/工具；
+# 缺依赖即 fail-closed，绝不自动 import ssc_pi_agent。旧行为由应用入口显式
+# 选用 pilot.legacy_compat_adapter（那条通道明确标注未受控）。
+from pilot.legacy_model_bridge import (ROLE_LITERATURE_DRAFTING, ROLE_LITERATURE_REVISION,
+                                        require_injected_model, require_injected_tool)
 
 
 def retrieve_literature(query: str, max_results: int = 15, preprints_only: bool = False,
@@ -18,7 +20,7 @@ def retrieve_literature(query: str, max_results: int = 15, preprints_only: bool 
     `search_tool` 可注入（测试用假工具）；不注入则在**调用时**取 legacy 的
     `search_literature`（不是 import 时）。
     """
-    tool = search_tool if search_tool is not None else legacy_tool("search_literature")
+    tool = require_injected_tool("search_literature", search_tool)
     return tool.invoke({
         "query": query,
         "max_results": max_results,
@@ -88,11 +90,11 @@ def generate_draft(
         f"现在请开始撰写。"
     )
 
-    llm = resolve_for_choice(model, chat_model)
+    llm = require_injected_model(ROLE_LITERATURE_DRAFTING, chat_model)
     return llm.invoke(prompt).content
 
 
 def refine_draft(history_prompt: str, model: str = "deepseek", chat_model=None) -> str:
     """在已有草稿基础上，根据用户的修改要求继续润色/调整。history_prompt 已含上下文。"""
-    llm = resolve_for_choice(model, chat_model)
+    llm = require_injected_model(ROLE_LITERATURE_REVISION, chat_model)
     return llm.invoke(history_prompt).content
