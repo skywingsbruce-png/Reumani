@@ -12,7 +12,8 @@ import re
 
 import requests
 
-from ssc_pi_agent import deepseek_llm_pro, judge_llm
+# A.8.2b.2b.1：模型改为调用期解析，import 本模块不再拉起 ssc_pi_agent。
+from pilot.legacy_model_bridge import resolve_for_choice
 
 EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 
@@ -58,12 +59,12 @@ def _parse_json(text: str):
     return json.loads(text)
 
 
-def make_evidence_cards(papers, model: str = "deepseek"):
+def make_evidence_cards(papers, model: str = "deepseek", chat_model=None):
     """用 LLM 从摘要提取结构化证据卡片。返回 list[dict]（带 index 对应 papers）。"""
     have_abstract = [p for p in papers if p["abstract"]]
     if not have_abstract:
         return []
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+    llm = resolve_for_choice(model, chat_model)
 
     listing = ""
     for i, p in enumerate(have_abstract):
@@ -117,9 +118,9 @@ def format_cards(cards) -> str:
     return "\n\n".join(lines)
 
 
-def verify_claim(claim: str, cards, model: str = "claude") -> str:
+def verify_claim(claim: str, cards, model: str = "claude", chat_model=None) -> str:
     """核对一个论断是否真被证据卡片支持，有没有过度解读。默认用 Claude（判断更稳）。"""
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+    llm = resolve_for_choice(model, chat_model)
     evidence = format_cards(cards)
     prompt = (
         "你是严格的证据验证员(Verifier)。下面是一个【论断】和一组【证据卡片】。"

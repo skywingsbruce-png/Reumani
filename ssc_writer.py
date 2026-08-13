@@ -6,16 +6,20 @@
 被 pages/1_科研写作助手.py（网页版）import 使用；也可单独调用测试。
 """
 
-from ssc_pi_agent import (
-    search_literature,
-    judge_llm,          # Claude Opus，质量高、费用高
-    deepseek_llm_pro,   # DeepSeek，省钱
-)
+# A.8.2b.2b.1：模型与工具改为**调用期**解析，import 本模块不再拉起 ssc_pi_agent、
+# 不读 .env / key、不构造客户端。未注入时走具名的 legacy 兼容路径（行为与迁移前一致）。
+from pilot.legacy_model_bridge import legacy_tool, resolve_for_choice
 
 
-def retrieve_literature(query: str, max_results: int = 15, preprints_only: bool = False) -> str:
-    """调用 Europe PMC 真实检索，返回带链接的文献列表文本。"""
-    return search_literature.invoke({
+def retrieve_literature(query: str, max_results: int = 15, preprints_only: bool = False,
+                        search_tool=None) -> str:
+    """调用 Europe PMC 真实检索，返回带链接的文献列表文本。
+
+    `search_tool` 可注入（测试用假工具）；不注入则在**调用时**取 legacy 的
+    `search_literature`（不是 import 时）。
+    """
+    tool = search_tool if search_tool is not None else legacy_tool("search_literature")
+    return tool.invoke({
         "query": query,
         "max_results": max_results,
         "preprints_only": preprints_only,
@@ -69,6 +73,7 @@ def generate_draft(
     literature_text: str,
     model: str = "deepseek",
     extra_requirement: str = "",
+    chat_model=None,
 ) -> str:
     """根据场景 + 真实文献列表，生成写作草稿。model: 'deepseek'(省钱) 或 'claude'(质量高)。"""
     task = SCENARIOS.get(scenario, SCENARIOS["文献综述"])
@@ -83,11 +88,11 @@ def generate_draft(
         f"现在请开始撰写。"
     )
 
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+    llm = resolve_for_choice(model, chat_model)
     return llm.invoke(prompt).content
 
 
-def refine_draft(history_prompt: str, model: str = "deepseek") -> str:
+def refine_draft(history_prompt: str, model: str = "deepseek", chat_model=None) -> str:
     """在已有草稿基础上，根据用户的修改要求继续润色/调整。history_prompt 已含上下文。"""
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+    llm = resolve_for_choice(model, chat_model)
     return llm.invoke(history_prompt).content

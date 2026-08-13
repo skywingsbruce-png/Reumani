@@ -9,7 +9,8 @@
 import json
 import re
 
-from ssc_pi_agent import judge_llm, deepseek_llm_pro
+# A.8.2b.2b.1：模型改为调用期解析，import 本模块不再拉起 ssc_pi_agent。
+from pilot.legacy_model_bridge import resolve_for_choice
 
 PROTOCOL_SCHEMA_HINT = """
 输出严格 JSON（Protocol IR）：
@@ -41,9 +42,9 @@ def _parse_json(text):
     return json.loads(text)
 
 
-def generate_protocol(experiment_description, model="deepseek"):
+def generate_protocol(experiment_description, model="deepseek", chat_model=None):
     """根据实验想法生成结构化 Protocol IR。返回 dict。"""
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+    llm = resolve_for_choice(model, chat_model)
     prompt = (
         "你是严谨的实验方案设计员。根据下面的实验想法，设计一个可执行的湿实验方案，"
         "输出结构化 Protocol IR。步骤要具体、带体积/温度/时间/单位，必须包含对照和验收标准，"

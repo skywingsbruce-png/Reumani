@@ -39,16 +39,17 @@ MIGRATED_CONSUMERS = (
 # 未迁移的 legacy 消费者。理由必须具体，不能写"以后再说"。
 UNMIGRATED_LEGACY = (
     {"symbol": "ssc_pi_agent.deepseek_llm_pro", "constructed_at_import": True,
-     "reason": "10 个消费者以 `from ssc_pi_agent import ...` 绑定该名字（8 个模块级 + "
-               "experiment_copilot/shadow 为函数级）；惰性化会改变对象身份语义",
-     "consumers": 10, "planned_phase": "A.8.2b.2"},
+     "reason": "A.8.2b.2b.1 已把 ssc_writer / ssc_protocol / ssc_evidence 改为调用期"
+               "按角色解析（pilot/legacy_model_bridge），直接消费者由 10 降至 7；"
+               "其余仍以 `from ssc_pi_agent import ...` 做模块级名字绑定",
+     "consumers": 7, "planned_phase": "A.8.2b.2b"},
     {"symbol": "ssc_pi_agent.deepseek_llm_con", "constructed_at_import": True,
      "reason": "模块外**零**直接消费者；仅经 debater_con 使用。temperature=0.7，"
                "与 pro 的 0.3 不同，合并会改变旧辩论语义",
      "consumers": 0, "planned_phase": "A.8.2b.3"},
     {"symbol": "ssc_pi_agent.judge_llm", "constructed_at_import": True,
-     "reason": "9 个消费者绑定该名字；旧 judge/裁决路径使用",
-     "consumers": 9, "planned_phase": "A.8.2b.2"},
+     "reason": "A.8.2b.2b.1 之后直接消费者由 9 降至 6；旧 judge/裁决路径仍在使用",
+     "consumers": 6, "planned_phase": "A.8.2b.2b"},
     {"symbol": "ssc_pi_agent.debater_pro/debater_con/judge_agent",
      "constructed_at_import": True,
      "reason": "三个 React Agent 在 import 期就绑定了模型对象与工具；page 7 跨 "
@@ -101,6 +102,11 @@ REBIND_COUNTS = {k: len(v) for k, v in LEGACY_REBIND_SITES.items()}
 # 这是后续把 legacy 改惰性的前置条件——否则守卫自己会构造付费客户端。
 NON_TRIGGERING_SCANNER = True
 
+# A.8.2b.2b.1：第一批无状态消费者（writer/protocol/evidence）已接入调用期角色注入。
+# 桥不构造、不缓存任何模型（缓存会绕过 preflight/round2_runner 的 Gate 重绑）。
+STATELESS_WAVE1_MIGRATED = ("ssc_writer.py", "ssc_protocol.py", "ssc_evidence.py")
+LEGACY_MODEL_BRIDGE = "pilot.legacy_model_bridge"
+
 # A.8.2b.1 §1-3：无副作用地基已建立，但**尚未接入任何消费者**。
 LEGACY_FOUNDATION_MODULES = ("pilot.legacy_provider_specs", "pilot.legacy_runtime_config",
                              "pilot.legacy_provider_factory")
@@ -129,7 +135,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.1",
+    "phase": "A.8.2b.2b.1",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -142,6 +148,8 @@ MANIFEST = {
     "non_triggering_scanner": NON_TRIGGERING_SCANNER,
     "legacy_foundation_modules": list(LEGACY_FOUNDATION_MODULES),
     "legacy_foundation_wired_to_consumers": LEGACY_FOUNDATION_WIRED_TO_CONSUMERS,
+    "stateless_wave1_migrated": list(STATELESS_WAVE1_MIGRATED),
+    "legacy_model_bridge": LEGACY_MODEL_BRIDGE,
     "migration_batches": list(MIGRATION_BATCHES),
     "next_phase": "A.8.2b.2",
     "blocks_a83": BLOCKS_A83,
@@ -155,4 +163,5 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "UNMIGRATED_LEGACY", "CONTROLLED_RUNTIME_IMPORT_SAFE",
            "LEGACY_SSC_PI_AGENT_IMPORT_SAFE", "BLOCKS_A83", "LEGACY_REBIND_SITES",
            "REBIND_COUNTS", "NON_TRIGGERING_SCANNER", "LEGACY_FOUNDATION_MODULES",
-           "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES"]
+           "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
+           "STATELESS_WAVE1_MIGRATED", "LEGACY_MODEL_BRIDGE"]

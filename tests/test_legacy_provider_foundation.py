@@ -446,7 +446,11 @@ def test_manifest_still_reports_legacy_as_not_migrated():
     assert MANIFEST["blocks_A8_3_until_A8_2b"] is True
     assert MANIFEST["legacy_foundation_wired_to_consumers"] is False
     assert MANIFEST["non_triggering_scanner"] is True
-    assert MANIFEST["phase"] == "A.8.2b.1"
+    # 阶段号会随批次推进，但必须仍在 A.8.2b 内 —— 不得跳到 A.8.3。
+    assert MANIFEST["phase"].startswith("A.8.2b")
+    # A.8.2b.2b.1 接的是 legacy_model_bridge（取现有对象），**不是**本地基的 factory；
+    # 因此 factory 至今仍无生产调用者，这个 False 依然是事实。
+    assert MANIFEST["legacy_foundation_wired_to_consumers"] is False
 
 
 def test_manifest_rebind_counts_match_reality():

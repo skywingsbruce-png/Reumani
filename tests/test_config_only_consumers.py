@@ -21,21 +21,19 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 MIGRATED = ("ssc_pi_agent_web.py", "pages/1_科研写作助手.py", "pages/4_SSc-A1.py",
             "pages/6_实验协议.py", "pages/8_实验副驾.py")
 
-# 本轮**不动**的模块：它们真的调用模型，或被明令排除
-NOT_MIGRATED = ("ssc_writer.py", "ssc_protocol.py", "ssc_evidence.py", "ssc_eval.py",
-                "ssc_action_discovery.py", "ssc_skill_agent.py", "ssc_a1.py",
-                "experiment_copilot.py", "shadow.py",
+# 仍未迁移的模型消费者（A.8.2b.2b.1 已迁走 writer/protocol/evidence）
+NOT_MIGRATED = ("ssc_eval.py", "ssc_action_discovery.py", "ssc_skill_agent.py",
+                "ssc_a1.py", "experiment_copilot.py", "shadow.py",
                 "pages/7_方向辩论(可选).py", "pages/9_数据对话.py")
 
 # 迁移后**仍**经由这些依赖间接拉起 legacy 的模块 → 待 A.8.2b.2b/.3 处理
 STILL_TRANSITIVE = {
     "ssc_pi_agent_web.py": "ssc_skill_agent",
-    "pages/1_科研写作助手.py": "ssc_writer",
     "pages/4_SSc-A1.py": "ssc_a1",
-    "pages/6_实验协议.py": "ssc_protocol",
 }
-# 迁移后端到端真正 import-safe 的模块
-FULLY_CLEAN = ("pages/8_实验副驾.py",)
+# 端到端真正 import-safe 的模块。A.8.2b.2b.1 迁走 ssc_writer / ssc_protocol 之后，
+# page 1 与 page 6 也随之变干净（实测 legacy=False、dotenv=0）。
+FULLY_CLEAN = ("pages/8_实验副驾.py", "pages/1_科研写作助手.py", "pages/6_实验协议.py")
 
 
 def _src(rel):
