@@ -155,13 +155,13 @@ def test_evidence_accepts_injected_model():
 # ============================================================ 核心路径 fail-closed
 def test_core_resolver_has_no_implicit_fallback():
     """A.8.2b.2b.1.1：核心 resolver 不接受"注入为空"，也不去 legacy 里找替身。"""
-    from pilot.legacy_model_bridge import (ModelDependencyMissing,
-                                           ROLE_LITERATURE_DRAFTING,
+    from pilot.legacy_model_bridge import (ModelDependencyMissing, ScientificOperation,
                                            require_injected_model)
+    op = ScientificOperation.LITERATURE_DRAFTING
     with pytest.raises(ModelDependencyMissing, match="explicit model required"):
-        require_injected_model(ROLE_LITERATURE_DRAFTING)
+        require_injected_model(op)
     with pytest.raises(ModelDependencyMissing):
-        require_injected_model(ROLE_LITERATURE_DRAFTING, None)
+        require_injected_model(op, None)
 
 
 def test_core_module_never_imports_legacy_in_any_path():
@@ -179,10 +179,10 @@ def test_core_module_runtime_never_loads_legacy():
     rc, out = _run(
         "import sys\n"
         "from pilot.legacy_model_bridge import (ModelDependencyMissing,\n"
-        "                                       ROLE_CLAIM_VERIFICATION,\n"
+        "                                       ScientificOperation,\n"
         "                                       require_injected_model,\n"
         "                                       require_injected_tool)\n"
-        "for fn, args in ((require_injected_model, (ROLE_CLAIM_VERIFICATION,)),\n"
+        "for fn, args in ((require_injected_model, (ScientificOperation.CLAIM_VERIFICATION,)),\n"
         "                 (require_injected_model, ('no_such_role',)),\n"
         "                 (require_injected_tool, ('search_literature',))):\n"
         "    try:\n"
@@ -222,10 +222,10 @@ def test_consumers_fail_closed_without_explicit_injection(call):
 
 
 def test_injected_object_without_invoke_is_rejected():
-    from pilot.legacy_model_bridge import (ModelInjectionError, ROLE_PROTOCOL_DRAFTING,
+    from pilot.legacy_model_bridge import (ModelInjectionError, ScientificOperation,
                                            require_injected_model)
     with pytest.raises(ModelInjectionError, match="invoke"):
-        require_injected_model(ROLE_PROTOCOL_DRAFTING, object())
+        require_injected_model(ScientificOperation.PROTOCOL_DRAFTING, object())
 
 
 def test_unknown_role_fails_closed():
@@ -235,20 +235,86 @@ def test_unknown_role_fails_closed():
             require_injected_model(bad, FakeChat())
 
 
-def test_roles_are_scientific_responsibilities_not_provider_names():
-    """角色必须描述科学职责；provider 名称不得充当角色。"""
-    from pilot.legacy_model_bridge import SCIENTIFIC_ROLES
-    assert SCIENTIFIC_ROLES == {"literature_drafting", "literature_revision",
+def test_operations_are_scientific_not_provider_names():
+    """operation 必须描述科研步骤；provider 名称不得充当 operation。"""
+    from pilot.scientific_operations import OPERATION_VALUES
+    assert OPERATION_VALUES == {"literature_drafting", "literature_revision",
                                 "protocol_drafting", "evidence_extraction",
                                 "claim_verification"}
     for banned in ("claude", "deepseek", "anthropic", "opus", "general"):
-        assert not any(banned in r for r in SCIENTIFIC_ROLES), f"角色里混入了 provider 词 {banned}"
+        assert not any(banned in v for v in OPERATION_VALUES), f"operation 混入 provider 词 {banned}"
+
+
+def test_operation_and_provider_role_vocabularies_are_disjoint():
+    """A.8.2b.2b.1.2：两层词汇必须互不相交，且 operation 不得冒充 role。"""
+    from pilot.paid_transport import ROLES as A1_ROLES
+    from pilot.role_contracts import ROLE_CONTRACTS
+    from pilot.scientific_operations import OPERATION_VALUES
+
+    provider_roles = set(ROLE_CONTRACTS) | set(A1_ROLES)
+    assert OPERATION_VALUES & provider_roles == set(), "operation 与 ProviderRole 词汇重叠"
+    # 受控链角色仍是原来那三个 —— 本轮不得往里加 operation
+    assert set(ROLE_CONTRACTS) == {"synthesizer", "verifier", "claim_extractor"}
+
+
+def test_operations_never_reach_registry_gate_or_budget():
+    """五个 operation 名不得出现在任何注册 / 计费 / 预算的可执行配置里。"""
+    import pathlib as _pl
+    from pilot.scientific_operations import OPERATION_VALUES
+
+    allowed = {"scientific_operations.py", "legacy_model_bridge.py", "provider_migration.py"}
+    offenders = []
+    for f in (_pl.Path(REPO) / "pilot").glob("*.py"):
+        if f.name in allowed:
+            continue
+        code = "\n".join(ln.split("#", 1)[0] for ln in
+                         f.read_text(encoding="utf-8").splitlines())
+        for op in OPERATION_VALUES:
+            if op in code:
+                offenders.append(f"{f.name}:{op}")
+    assert offenders == [], f"operation 名泄漏进了受控配置：{offenders}"
+
+
+def test_operation_is_rejected_where_a_provider_role_is_required():
+    from pilot.scientific_operations import (ScientificOperationError,
+                                             assert_not_a_provider_role)
+    assert_not_a_provider_role("synthesizer")          # 真正的 role 放行
+    for op in ("literature_drafting", "claim_verification"):
+        with pytest.raises(ScientificOperationError, match="不是 ProviderRole"):
+            assert_not_a_provider_role(op)
+
+
+def test_no_operation_is_bound_to_a_controlled_provider_role_yet():
+    """现状是全部未绑定；谎称绑定会制造"看起来受控"的假象。"""
+    from pilot.scientific_operations import (ScientificOperation,
+                                             is_bound_to_controlled_runtime,
+                                             provider_role_for)
+    for op in ScientificOperation:
+        assert provider_role_for(op) is None
+        assert is_bound_to_controlled_runtime(op) is False
+
+
+def test_operation_module_does_not_copy_provider_role_names():
+    """operation 模块只能引用受控角色权威，不得复制名字。"""
+    src = _src("pilot/scientific_operations.py")
+    code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
+    for role in ("synthesizer", "planner", "executor", "claim_extractor"):
+        assert f'"{role}"' not in code, f"operation 模块复制了 ProviderRole 名 {role}"
+    from pilot.scientific_operations import controlled_provider_roles
+    assert controlled_provider_roles() == {"synthesizer", "verifier", "claim_extractor"}
+
+
+def test_unknown_operation_fails_closed():
+    from pilot.scientific_operations import ScientificOperationError, operation_from
+    for bad in ("synthesizer", "verifier", "no_such_op", ""):
+        with pytest.raises(ScientificOperationError):
+            operation_from(bad)
 
 
 def test_tool_is_not_a_model_role():
-    from pilot.legacy_model_bridge import (ModelDependencyMissing, SCIENTIFIC_ROLES,
-                                           require_injected_tool)
-    assert "search_literature" not in SCIENTIFIC_ROLES
+    from pilot.legacy_model_bridge import ModelDependencyMissing, require_injected_tool
+    from pilot.scientific_operations import OPERATION_VALUES
+    assert "search_literature" not in OPERATION_VALUES
     with pytest.raises(ModelDependencyMissing, match="explicit tool required"):
         require_injected_tool("search_literature")
 
@@ -405,8 +471,13 @@ def test_manifest_does_not_claim_controlled_migration():
     assert M["legacy_compat_is_controlled"] is False
     assert M["controlled_model_migration_complete"] is False
     assert M["legacy_foundation_wired_to_consumers"] is False
-    assert set(M["scientific_roles_in_use"]) == {
+    assert set(M["scientific_operations"]) == {
         "literature_drafting", "literature_revision", "protocol_drafting",
         "evidence_extraction", "claim_verification"}
+    # A.8.2b.2b.1.2：两层分开，且现状是一个 operation 都没绑定受控 ProviderRole
+    assert M["operations_bound_to_provider_role"] == []
+    assert M["unified_provider_role_type_exists"] is False
+    assert set(M["provider_role_authorities"]) == {
+        "controlled_research_chain", "legacy_a1_round2_chain"}
     assert set(M["compat_opt_in_entrypoints"]) == {
         "pages/1_科研写作助手.py", "pages/6_实验协议.py", "ssc_skill_agent.py"}

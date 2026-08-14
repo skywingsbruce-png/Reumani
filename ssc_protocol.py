@@ -11,7 +11,7 @@ import re
 
 # A.8.2b.2b.1.1：核心路径只接受**显式注入**，按科学职责取模型；
 # 缺依赖即 fail-closed，绝不自动 import ssc_pi_agent。
-from pilot.legacy_model_bridge import ROLE_PROTOCOL_DRAFTING, require_injected_model
+from pilot.legacy_model_bridge import ScientificOperation, require_injected_model
 
 PROTOCOL_SCHEMA_HINT = """
 输出严格 JSON（Protocol IR）：
@@ -45,7 +45,7 @@ def _parse_json(text):
 
 def generate_protocol(experiment_description, model="deepseek", chat_model=None):
     """根据实验想法生成结构化 Protocol IR。返回 dict。"""
-    llm = require_injected_model(ROLE_PROTOCOL_DRAFTING, chat_model)
+    llm = require_injected_model(ScientificOperation.PROTOCOL_DRAFTING, chat_model)
     prompt = (
         "你是严谨的实验方案设计员。根据下面的实验想法，设计一个可执行的湿实验方案，"
         "输出结构化 Protocol IR。步骤要具体、带体积/温度/时间/单位，必须包含对照和验收标准，"

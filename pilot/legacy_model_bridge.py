@@ -7,7 +7,8 @@ Registry / Gate / HITL 的裸客户端。本模块现在不再提供任何自动
 
 规则：
 - 核心解析只接受**显式注入**；缺模型/缺工具一律抛错，绝不 import legacy；
-- 角色是**科学职责**（起草 / 校验 / 抽取 / 核验），不是 provider 名称。
+- 第一个参数是 **ScientificOperation**（科研步骤在做什么），**不是** ProviderRole
+  （受控 Runtime 里按哪个键注册/计费）。两层由 `pilot.scientific_operations` 分开；
   `"claude"` / `"deepseek"` 是 provider 偏好，只有显式兼容适配器才认识它；
 - **工具不是模型角色**：检索工具走独立的 `require_injected_tool`；
 - 本模块 import 零副作用，且在任何路径上都**不会** import ssc_pi_agent
@@ -20,6 +21,9 @@ Registry / Gate / HITL 的裸客户端。本模块现在不再提供任何自动
 from __future__ import annotations
 
 from typing import Any, Optional, Protocol, runtime_checkable
+
+from pilot.scientific_operations import (OPERATION_VALUES, ScientificOperation,
+                                         ScientificOperationError, operation_from)
 
 
 class ModelInjectionError(RuntimeError):
@@ -38,19 +42,11 @@ class ChatModelProtocol(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# 科学职责角色。刻意**不**用 provider 名称：一个角色描述"这一步在科研上负什么责"，
-# 与用哪家模型无关。provider 偏好属于兼容适配器的输入，不属于这里。
+# A.8.2b.2b.1.2：这里消费的是 **ScientificOperation**（科研步骤在做什么），
+# 不是 ProviderRole（受控 Runtime 里由哪种模型职责执行、按哪个键计费）。
+# 两层刻意分开：把 operation 当 role 用，会让 Gate 按未登记额度的名字计费。
+# 本模块**不定义**任何角色词汇，只引用 operation 契约。
 # ---------------------------------------------------------------------------
-ROLE_LITERATURE_DRAFTING = "literature_drafting"     # 基于检索结果起草综述/引言
-ROLE_LITERATURE_REVISION = "literature_revision"     # 在已有草稿上按要求修订
-ROLE_PROTOCOL_DRAFTING = "protocol_drafting"         # 起草可执行实验方案
-ROLE_EVIDENCE_EXTRACTION = "evidence_extraction"     # 从摘要抽取结构化证据卡片
-ROLE_CLAIM_VERIFICATION = "claim_verification"       # 用证据核验一条论断
-
-SCIENTIFIC_ROLES: frozenset = frozenset({
-    ROLE_LITERATURE_DRAFTING, ROLE_LITERATURE_REVISION, ROLE_PROTOCOL_DRAFTING,
-    ROLE_EVIDENCE_EXTRACTION, ROLE_CLAIM_VERIFICATION,
-})
 
 
 def validate_model(candidate: Any) -> ChatModelProtocol:
@@ -64,15 +60,19 @@ def validate_model(candidate: Any) -> ChatModelProtocol:
     return candidate
 
 
-def require_injected_model(role: str, injected: Optional[ChatModelProtocol] = None
+def require_injected_model(operation, injected: Optional[ChatModelProtocol] = None
                            ) -> ChatModelProtocol:
-    """核心路径的唯一入口。**没有注入就失败**，绝不去 legacy 里找一个顶上。"""
-    if role not in SCIENTIFIC_ROLES:
-        raise ModelDependencyMissing(
-            f"未知科学职责 role={role!r}；已声明的只有 {sorted(SCIENTIFIC_ROLES)}")
+    """核心路径的唯一入口。**没有注入就失败**，绝不去 legacy 里找一个顶上。
+
+    第一个参数是 `ScientificOperation`（或其字符串值），**不是** ProviderRole。
+    """
+    try:
+        op = operation_from(operation)
+    except ScientificOperationError as e:
+        raise ModelDependencyMissing(str(e)) from e
     if injected is None:
         raise ModelDependencyMissing(
-            f"explicit model required for role={role}；"
+            f"explicit model required for operation={op.value}；"
             "核心路径不提供默认模型，也不会自动加载 legacy。"
             "应用入口如需旧行为，请显式使用 pilot.legacy_compat_adapter。")
     return validate_model(injected)
@@ -95,6 +95,5 @@ def require_injected_tool(tool_name: str, injected: Any = None) -> Any:
 
 __all__ = ["ChatModelProtocol", "ModelInjectionError", "ModelDependencyMissing",
            "validate_model", "require_injected_model", "require_injected_tool",
-           "SCIENTIFIC_ROLES", "ROLE_LITERATURE_DRAFTING", "ROLE_LITERATURE_REVISION",
-           "ROLE_PROTOCOL_DRAFTING", "ROLE_EVIDENCE_EXTRACTION",
-           "ROLE_CLAIM_VERIFICATION"]
+           # 转出 operation 契约供消费者使用；本模块自身不定义角色词汇。
+           "ScientificOperation", "OPERATION_VALUES"]

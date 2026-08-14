@@ -115,10 +115,24 @@ LEGACY_COMPAT_ADAPTER = "pilot.legacy_compat_adapter"
 # Gate / HITL 授权与审计。不得把它描述成"正式受控模型迁移完成"。
 LEGACY_COMPAT_IS_CONTROLLED = False
 CONTROLLED_MODEL_MIGRATION_COMPLETE = False
-# 角色是科学职责，不是 provider 名称
-SCIENTIFIC_ROLES_IN_USE = ("literature_drafting", "literature_revision",
-                           "protocol_drafting", "evidence_extraction",
-                           "claim_verification")
+# A.8.2b.2b.1.2：两层契约分开。ScientificOperation 描述科研步骤在做什么；
+# ProviderRole 才是 Registry 注册 / Gate 计费 / OutputContract 约束的键。
+# 这五个 operation **从未**进入 Registry / Gate / 预算，且目前**全部未绑定**
+# 受控 ProviderRole —— 它们的调用者不具备 HITL / Registry / Gate 上下文。
+SCIENTIFIC_OPERATIONS = ("literature_drafting", "literature_revision",
+                         "protocol_drafting", "evidence_extraction",
+                         "claim_verification")
+SCIENTIFIC_OPERATIONS_MODULE = "pilot.scientific_operations"
+OPERATIONS_BOUND_TO_PROVIDER_ROLE = ()      # 现状：一个都没绑
+# 受控 Runtime 现有的角色权威（本清单只记录来源，不复制名字）。
+# 两者是**不同作用域**（受控科研链 vs 旧 A1/Round2 链），由不同 executor 与
+# 不同 Gate 使用，不在同一次运行里混用；`verifier` / `claim_extractor` 同名
+# 但分属两个作用域 —— 统一 ProviderRole 类型属于后续阶段，本轮不重构 Runtime。
+PROVIDER_ROLE_AUTHORITIES = {
+    "controlled_research_chain": "pilot.role_contracts.ROLE_CONTRACTS",
+    "legacy_a1_round2_chain": "pilot.paid_transport.ROLES",
+}
+UNIFIED_PROVIDER_ROLE_TYPE_EXISTS = False
 # 显式选用兼容通道的应用入口（出现在调用点，不藏在 resolver 默认值里）
 COMPAT_OPT_IN_ENTRYPOINTS = ("pages/1_科研写作助手.py", "pages/6_实验协议.py",
                              "ssc_skill_agent.py")
@@ -151,7 +165,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.2b.1.1",
+    "phase": "A.8.2b.2b.1.2",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -170,7 +184,11 @@ MANIFEST = {
     "legacy_compat_adapter": LEGACY_COMPAT_ADAPTER,
     "legacy_compat_is_controlled": LEGACY_COMPAT_IS_CONTROLLED,
     "controlled_model_migration_complete": CONTROLLED_MODEL_MIGRATION_COMPLETE,
-    "scientific_roles_in_use": list(SCIENTIFIC_ROLES_IN_USE),
+    "scientific_operations": list(SCIENTIFIC_OPERATIONS),
+    "scientific_operations_module": SCIENTIFIC_OPERATIONS_MODULE,
+    "operations_bound_to_provider_role": list(OPERATIONS_BOUND_TO_PROVIDER_ROLE),
+    "provider_role_authorities": dict(PROVIDER_ROLE_AUTHORITIES),
+    "unified_provider_role_type_exists": UNIFIED_PROVIDER_ROLE_TYPE_EXISTS,
     "compat_opt_in_entrypoints": list(COMPAT_OPT_IN_ENTRYPOINTS),
     "migration_batches": list(MIGRATION_BATCHES),
     "next_phase": "A.8.2b.2",
@@ -188,5 +206,7 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
            "STATELESS_WAVE1_MIGRATED", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
            "LEGACY_COMPAT_ADAPTER", "LEGACY_COMPAT_IS_CONTROLLED",
-           "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_ROLES_IN_USE",
+           "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_OPERATIONS", "SCIENTIFIC_OPERATIONS_MODULE",
+           "OPERATIONS_BOUND_TO_PROVIDER_ROLE", "PROVIDER_ROLE_AUTHORITIES",
+           "UNIFIED_PROVIDER_ROLE_TYPE_EXISTS",
            "COMPAT_OPT_IN_ENTRYPOINTS"]
