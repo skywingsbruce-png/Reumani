@@ -33,6 +33,17 @@ class ScientificOperation(StrEnum):
     PROTOCOL_DRAFTING = "protocol_drafting"
     EVIDENCE_EXTRACTION = "evidence_extraction"
     CLAIM_VERIFICATION = "claim_verification"
+    # A.8.2b.2b.2 第二批。刻意与既有操作分开：
+    # - EVALUATION_SCORING 是**评测评分**（答案是否覆盖 key_facts、有无编造），
+    #   不是 CLAIM_VERIFICATION（用证据核验一条科学论断）。原代码用 Claude 做它，
+    #   但"用了哪个模型"不能决定科学职责。
+    # - BASELINE_ANSWERING 是**无检索的普通文本生成**，作为评测对照，
+    #   它没有 grounding 要求，与 LITERATURE_DRAFTING 不是一回事。
+    # - ACTION_EXTRACTION 从论文里抽取"值得封装成工具的科研动作"，
+    #   与 EVIDENCE_EXTRACTION（从摘要抽证据卡片）抽的是不同东西。
+    EVALUATION_SCORING = "evaluation_scoring"
+    BASELINE_ANSWERING = "baseline_answering"
+    ACTION_EXTRACTION = "action_extraction"
 
 
 #: 这些字符串**永远不允许**出现在 ProviderRegistry / Gate / 预算的 role 位置。

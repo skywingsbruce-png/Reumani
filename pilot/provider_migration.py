@@ -40,16 +40,17 @@ MIGRATED_CONSUMERS = (
 UNMIGRATED_LEGACY = (
     {"symbol": "ssc_pi_agent.deepseek_llm_pro", "constructed_at_import": True,
      "reason": "A.8.2b.2b.1 已把 ssc_writer / ssc_protocol / ssc_evidence 改为调用期"
-               "按角色解析（pilot/legacy_model_bridge），直接消费者由 10 降至 7；"
+               "按操作显式注入（pilot/legacy_model_bridge），A.8.2b.2b.2 再迁走 ssc_eval / "
+               "ssc_action_discovery，直接消费者由 10 降至 5；"
                "其余仍以 `from ssc_pi_agent import ...` 做模块级名字绑定",
-     "consumers": 7, "planned_phase": "A.8.2b.2b"},
+     "consumers": 5, "planned_phase": "A.8.2b.2b"},
     {"symbol": "ssc_pi_agent.deepseek_llm_con", "constructed_at_import": True,
      "reason": "模块外**零**直接消费者；仅经 debater_con 使用。temperature=0.7，"
                "与 pro 的 0.3 不同，合并会改变旧辩论语义",
      "consumers": 0, "planned_phase": "A.8.2b.3"},
     {"symbol": "ssc_pi_agent.judge_llm", "constructed_at_import": True,
-     "reason": "A.8.2b.2b.1 之后直接消费者由 9 降至 6；旧 judge/裁决路径仍在使用",
-     "consumers": 6, "planned_phase": "A.8.2b.2b"},
+     "reason": "两批迁移后直接消费者由 9 降至 5；旧 judge/裁决路径仍在使用",
+     "consumers": 5, "planned_phase": "A.8.2b.2b"},
     {"symbol": "ssc_pi_agent.debater_pro/debater_con/judge_agent",
      "constructed_at_import": True,
      "reason": "三个 React Agent 在 import 期就绑定了模型对象与工具；page 7 跨 "
@@ -105,6 +106,16 @@ NON_TRIGGERING_SCANNER = True
 # A.8.2b.2b.1：第一批无状态消费者（writer/protocol/evidence）已接入调用期角色注入。
 # 桥不构造、不缓存任何模型（缓存会绕过 preflight/round2_runner 的 Gate 重绑）。
 STATELESS_WAVE1_MIGRATED = ("ssc_writer.py", "ssc_protocol.py", "ssc_evidence.py")
+# A.8.2b.2b.2 第二批。ssc_eval.answer_with_agent **被排除**（React Agent + 工具循环
+# + 与未迁移的 ssc_skill_agent 强耦合），该函数本轮未改动。
+STATELESS_WAVE2_MIGRATED = ("ssc_eval.py", "ssc_action_discovery.py")
+WAVE2_EXCLUDED_FUNCTIONS = ("ssc_eval.answer_with_agent",)
+# 两个模块 import 期仍有**文件系统**副作用（读题库 / mkdir），与 legacy/key/模型无关，
+# 本轮不在范围内 —— 如实登记，不得当成已解决。
+WAVE2_REMAINING_IMPORT_EFFECTS = (
+    "ssc_eval.py: 读 ssc_eval_questions.json + RESULT_DIR.mkdir",
+    "ssc_action_discovery.py: QUEUE_DIR.mkdir",
+)
 LEGACY_MODEL_BRIDGE = "pilot.legacy_model_bridge"
 
 # A.8.2b.2b.1.1：核心路径已移除隐式回退。缺显式注入即 fail-closed，核心不再
@@ -121,7 +132,10 @@ CONTROLLED_MODEL_MIGRATION_COMPLETE = False
 # 受控 ProviderRole —— 它们的调用者不具备 HITL / Registry / Gate 上下文。
 SCIENTIFIC_OPERATIONS = ("literature_drafting", "literature_revision",
                          "protocol_drafting", "evidence_extraction",
-                         "claim_verification")
+                         "claim_verification",
+                         # A.8.2b.2b.2：评测评分 ≠ 论断核验；无检索基线 ≠ 有据起草；
+                         # 动作抽取 ≠ 证据抽取。刻意分开，不因用了哪个模型而合并。
+                         "evaluation_scoring", "baseline_answering", "action_extraction")
 SCIENTIFIC_OPERATIONS_MODULE = "pilot.scientific_operations"
 OPERATIONS_BOUND_TO_PROVIDER_ROLE = ()      # 现状：一个都没绑
 # 受控 Runtime 现有的角色权威（本清单只记录来源，不复制名字）。
@@ -135,7 +149,9 @@ PROVIDER_ROLE_AUTHORITIES = {
 UNIFIED_PROVIDER_ROLE_TYPE_EXISTS = False
 # 显式选用兼容通道的应用入口（出现在调用点，不藏在 resolver 默认值里）
 COMPAT_OPT_IN_ENTRYPOINTS = ("pages/1_科研写作助手.py", "pages/6_实验协议.py",
-                             "ssc_skill_agent.py")
+                             "ssc_skill_agent.py",
+                             # A.8.2b.2b.2：两个 CLI 入口
+                             "ssc_eval.py", "ssc_action_discovery.py")
 
 # A.8.2b.1 §1-3：无副作用地基已建立，但**尚未接入任何消费者**。
 LEGACY_FOUNDATION_MODULES = ("pilot.legacy_provider_specs", "pilot.legacy_runtime_config",
@@ -165,7 +181,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.2b.1.2",
+    "phase": "A.8.2b.2b.2",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -179,6 +195,9 @@ MANIFEST = {
     "legacy_foundation_modules": list(LEGACY_FOUNDATION_MODULES),
     "legacy_foundation_wired_to_consumers": LEGACY_FOUNDATION_WIRED_TO_CONSUMERS,
     "stateless_wave1_migrated": list(STATELESS_WAVE1_MIGRATED),
+    "stateless_wave2_migrated": list(STATELESS_WAVE2_MIGRATED),
+    "wave2_excluded_functions": list(WAVE2_EXCLUDED_FUNCTIONS),
+    "wave2_remaining_import_effects": list(WAVE2_REMAINING_IMPORT_EFFECTS),
     "legacy_model_bridge": LEGACY_MODEL_BRIDGE,
     "core_path_fail_closed": CORE_PATH_FAIL_CLOSED,
     "legacy_compat_adapter": LEGACY_COMPAT_ADAPTER,
@@ -204,7 +223,8 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "LEGACY_SSC_PI_AGENT_IMPORT_SAFE", "BLOCKS_A83", "LEGACY_REBIND_SITES",
            "REBIND_COUNTS", "NON_TRIGGERING_SCANNER", "LEGACY_FOUNDATION_MODULES",
            "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
-           "STATELESS_WAVE1_MIGRATED", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
+           "STATELESS_WAVE1_MIGRATED", "STATELESS_WAVE2_MIGRATED",
+           "WAVE2_EXCLUDED_FUNCTIONS", "WAVE2_REMAINING_IMPORT_EFFECTS", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
            "LEGACY_COMPAT_ADAPTER", "LEGACY_COMPAT_IS_CONTROLLED",
            "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_OPERATIONS", "SCIENTIFIC_OPERATIONS_MODULE",
            "OPERATIONS_BOUND_TO_PROVIDER_ROLE", "PROVIDER_ROLE_AUTHORITIES",

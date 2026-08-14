@@ -14,7 +14,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from ssc_pi_agent import judge_llm, deepseek_llm_pro
+# A.8.2b.2b.2：核心路径只接受**显式注入**，按科研操作取模型；缺依赖即 fail-closed，
+# 绝不自动 import ssc_pi_agent。CLI 入口显式选用 pilot.legacy_compat_adapter（未受控）。
+from pilot.legacy_model_bridge import ScientificOperation, require_injected_model
 
 BASE = Path(__file__).resolve().parent
 QUESTIONS = json.loads((BASE / "ssc_eval_questions.json").read_text(encoding="utf-8"))
@@ -30,13 +32,17 @@ def answer_with_agent(q):
     return m.content if hasattr(m, "content") else str(m)
 
 
-def answer_plain(q, model):
-    llm = deepseek_llm_pro if model == "deepseek" else judge_llm
+def answer_plain(q, model, chat_model=None):
+    """无检索基线回答（评测对照）。`chat_model` 必须显式注入。"""
+    llm = require_injected_model(ScientificOperation.BASELINE_ANSWERING, chat_model)
     return llm.invoke(f"请简洁回答这个系统性硬化症(SSc)相关问题：{q}").content
 
 
-def judge(q_item, answer):
-    """Claude 裁判：是否覆盖关键事实 + 是否编造。返回 (0/1, 幻觉bool, 说明)。"""
+def judge(q_item, answer, chat_model=None):
+    """评测评分：是否覆盖关键事实 + 是否编造。返回 (0/1, 幻觉bool, 说明)。
+
+    这是**评测评分**，不是科学论断核验 —— 见 ScientificOperation.EVALUATION_SCORING。
+    """
     prompt = (
         "你是严格的评分裁判。判断下面的回答是否正确覆盖了该问题的关键事实。\n"
         f"问题：{q_item['q']}\n"
@@ -45,7 +51,8 @@ def judge(q_item, answer):
         "输出严格 JSON：{\"correct\": true/false（是否覆盖了核心关键事实）, "
         "\"hallucination\": true/false（是否有明显编造的事实/文献/数据）, \"note\":\"一句话\"}"
     )
-    resp = judge_llm.invoke(prompt).content
+    scorer = require_injected_model(ScientificOperation.EVALUATION_SCORING, chat_model)
+    resp = scorer.invoke(prompt).content
     try:
         text = re.sub(r"^```(json)?|```$", "", resp.strip(), flags=re.MULTILINE).strip()
         m = re.search(r"\{.*\}", text, re.DOTALL)
@@ -55,7 +62,8 @@ def judge(q_item, answer):
         return (0, False, "裁判解析失败")
 
 
-def run(target, limit=None):
+def run(target, limit=None, answer_model=None, scoring_model=None):
+    """`answer_model` / `scoring_model` 由调用方显式提供；两者职责不同，不共用一个参数。"""
     qs = QUESTIONS[:limit] if limit else QUESTIONS
     rows, correct, halluc = [], 0, 0
     for item in qs:
@@ -63,8 +71,8 @@ def run(target, limit=None):
         if target == "agent":
             ans = answer_with_agent(item["q"])
         else:
-            ans = answer_plain(item["q"], target)
-        c, h, note = judge(item, ans)
+            ans = answer_plain(item["q"], target, chat_model=answer_model)
+        c, h, note = judge(item, ans, chat_model=scoring_model)
         correct += c
         halluc += 1 if h else 0
         rows.append({"id": item["id"], "correct": c, "hallucination": h,
@@ -86,4 +94,9 @@ if __name__ == "__main__":
         pass
     target = sys.argv[1] if len(sys.argv) > 1 else "deepseek"
     limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
-    print(run(target, limit))
+    # A.8.2b.2b.2：CLI 是应用入口，**显式**选用未受控的 legacy 兼容通道。
+    # 回答用被测系统对应的 provider；评分固定用 Claude（与迁移前一致）。
+    from pilot.legacy_compat_adapter import legacy_chat_model_for_preference
+    print(run(target, limit,
+              answer_model=legacy_chat_model_for_preference(target),
+              scoring_model=legacy_chat_model_for_preference("claude")))

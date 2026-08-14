@@ -11,7 +11,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from ssc_pi_agent import deepseek_llm_pro
+# A.8.2b.2b.2：核心路径只接受**显式注入**；缺依赖即 fail-closed，
+# 绝不自动 import ssc_pi_agent。CLI 入口显式选用 pilot.legacy_compat_adapter（未受控）。
+from pilot.legacy_model_bridge import ScientificOperation, require_injected_model
 
 BASE = Path(__file__).resolve().parent
 CORPUS = BASE / "data_lake" / "ssc_corpus" / "corpus.jsonl"
@@ -75,9 +77,11 @@ def _parse_json(text):
     return json.loads(text)
 
 
-def extract_actions_batch(papers, model="deepseek"):
+def extract_actions_batch(papers, model="deepseek", chat_model=None):
     """一次给几篇论文，让 LLM 提取可复用的科研动作候选。返回 list[dict]。"""
-    llm = deepseek_llm_pro  # 省钱，用 DeepSeek
+    # 注：`model` 参数在迁移前就未被使用（原实现硬编码 deepseek_llm_pro），
+    # 本轮保持该行为不变，只把模型来源改为显式注入。
+    llm = require_injected_model(ScientificOperation.ACTION_EXTRACTION, chat_model)
     listing = ""
     for i, p in enumerate(papers):
         listing += f"\n[{i}] PMID={p.get('pmid')} 标题：{p.get('title')}\n摘要：{p.get('abstract','')[:1200]}\n"
@@ -98,9 +102,9 @@ def extract_actions_batch(papers, model="deepseek"):
         return [{"task_name": "解析失败", "error": str(e)}]
 
 
-def extract_wet_actions_batch(papers, model="deepseek"):
+def extract_wet_actions_batch(papers, model="deepseek", chat_model=None):
     """挖【湿实验动作】：从摘要提取可复用的湿实验方案骨架（样本→处理→读出→对照）。"""
-    llm = deepseek_llm_pro
+    llm = require_injected_model(ScientificOperation.ACTION_EXTRACTION, chat_model)
     listing = ""
     for i, p in enumerate(papers):
         listing += f"\n[{i}] PMID={p.get('pmid')} 标题：{p.get('title')}\n摘要：{p.get('abstract','')[:1200]}\n"
@@ -204,8 +208,12 @@ def standardize_wet(candidates):
     return out
 
 
-def run_discovery(n_per_cat=50, batch_size=5, max_papers=None, mode="dry"):
-    """mode='dry' 挖计算动作；'wet' 挖湿实验方案（写入独立队列）。"""
+def run_discovery(n_per_cat=50, batch_size=5, max_papers=None, mode="dry",
+                  chat_model=None):
+    """mode='dry' 挖计算动作；'wet' 挖湿实验方案（写入独立队列）。
+
+    `chat_model` 由调用方显式提供，透传给抽取函数；不注入即 fail-closed。
+    """
     picked = select_papers(n_per_cat, mode=mode)
     papers = [p for lst in picked.values() for p in lst]
     if max_papers:
@@ -215,7 +223,7 @@ def run_discovery(n_per_cat=50, batch_size=5, max_papers=None, mode="dry"):
     all_cands = []
     for i in range(0, len(papers), batch_size):
         batch = papers[i:i + batch_size]
-        all_cands.extend(extractor(batch))
+        all_cands.extend(extractor(batch, chat_model=chat_model))
         print(f"  已处理 {min(i+batch_size, len(papers))}/{len(papers)}，累计候选 {len(all_cands)}", flush=True)
     ranked = standardize_wet(all_cands) if mode == "wet" else standardize_and_dedup(all_cands)
     queue_file = QUEUE_DIR / (f"wet_candidates.json" if mode == "wet" else "candidates.json")
@@ -235,4 +243,8 @@ if __name__ == "__main__":
     # 用法：python ssc_action_discovery.py [每类篇数] [dry|wet]
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 50
     mode = sys.argv[2] if len(sys.argv) > 2 else "dry"
-    print(run_discovery(n_per_cat=n, mode=mode))
+    # A.8.2b.2b.2：CLI 是应用入口，**显式**选用未受控的 legacy 兼容通道。
+    # 抽取沿用 DeepSeek（与迁移前硬编码的 deepseek_llm_pro 一致）。
+    from pilot.legacy_compat_adapter import legacy_chat_model_for_preference
+    print(run_discovery(n_per_cat=n, mode=mode,
+                        chat_model=legacy_chat_model_for_preference("deepseek")))

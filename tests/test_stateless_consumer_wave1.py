@@ -238,9 +238,8 @@ def test_unknown_role_fails_closed():
 def test_operations_are_scientific_not_provider_names():
     """operation 必须描述科研步骤；provider 名称不得充当 operation。"""
     from pilot.scientific_operations import OPERATION_VALUES
-    assert OPERATION_VALUES == {"literature_drafting", "literature_revision",
-                                "protocol_drafting", "evidence_extraction",
-                                "claim_verification"}
+    assert {"literature_drafting", "literature_revision", "protocol_drafting",
+            "evidence_extraction", "claim_verification"} <= OPERATION_VALUES
     for banned in ("claude", "deepseek", "anthropic", "opus", "general"):
         assert not any(banned in v for v in OPERATION_VALUES), f"operation 混入 provider 词 {banned}"
 
@@ -471,13 +470,15 @@ def test_manifest_does_not_claim_controlled_migration():
     assert M["legacy_compat_is_controlled"] is False
     assert M["controlled_model_migration_complete"] is False
     assert M["legacy_foundation_wired_to_consumers"] is False
-    assert set(M["scientific_operations"]) == {
-        "literature_drafting", "literature_revision", "protocol_drafting",
-        "evidence_extraction", "claim_verification"}
+    assert {"literature_drafting", "literature_revision", "protocol_drafting",
+            "evidence_extraction", "claim_verification"} <= set(M["scientific_operations"])
+    # 清单与 operation 权威必须一致，防止两边漂移
+    from pilot.scientific_operations import OPERATION_VALUES
+    assert set(M["scientific_operations"]) == OPERATION_VALUES
     # A.8.2b.2b.1.2：两层分开，且现状是一个 operation 都没绑定受控 ProviderRole
     assert M["operations_bound_to_provider_role"] == []
     assert M["unified_provider_role_type_exists"] is False
     assert set(M["provider_role_authorities"]) == {
         "controlled_research_chain", "legacy_a1_round2_chain"}
-    assert set(M["compat_opt_in_entrypoints"]) == {
-        "pages/1_科研写作助手.py", "pages/6_实验协议.py", "ssc_skill_agent.py"}
+    assert {"pages/1_科研写作助手.py", "pages/6_实验协议.py", "ssc_skill_agent.py"} <= \
+        set(M["compat_opt_in_entrypoints"])
