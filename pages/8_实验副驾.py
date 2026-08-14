@@ -84,8 +84,12 @@ def render_page(settings=None):
         if not settings.deepseek_key_configured:
             st.error(t("未检测到 DEEPSEEK_API_KEY，无法润色。", "DEEPSEEK_API_KEY not found."))
         else:
+            # A.8.2b.2b.3b：**只有用户点击之后**才取模型。这一行是整页唯一触及
+            # legacy 的地方，且通道明确未受控（不经 Registry / Gate / HITL）。
+            from pilot.legacy_compat_adapter import legacy_chat_model_for_preference
             with st.spinner(t("先组装、再让模型润色成可执行规划……", "Assembling, then polishing into an actionable plan…")):
-                plan = synthesize(_build_ctx(), model="deepseek")
+                plan = synthesize(_build_ctx(), model="deepseek",
+                                  chat_model=legacy_chat_model_for_preference("deepseek"))
             st.session_state["copilot_plan"] = plan
             st.session_state["copilot_sub"] = _sub
             st.session_state["copilot_kind"] = t("实验规划（LLM 润色）", "Experiment plan (LLM-polished)")

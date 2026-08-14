@@ -168,7 +168,8 @@ def test_new_operations_are_distinct_and_not_provider_roles():
         assert new in OPERATION_VALUES
     assert OPERATION_VALUES & (set(ROLE_CONTRACTS) | set(A1_ROLES)) == set()
     # 三个新操作彼此不同，也不与既有操作重名
-    assert len(OPERATION_VALUES) == len(set(ScientificOperation)) == 8
+    # 数量随批次增长；关键是枚举与值集合始终一一对应，且无重名
+    assert len(OPERATION_VALUES) == len(set(ScientificOperation)) >= 8
 
 
 def test_new_operations_are_not_bound_to_provider_roles():

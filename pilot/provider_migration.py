@@ -41,16 +41,17 @@ UNMIGRATED_LEGACY = (
     {"symbol": "ssc_pi_agent.deepseek_llm_pro", "constructed_at_import": True,
      "reason": "A.8.2b.2b.1 已把 ssc_writer / ssc_protocol / ssc_evidence 改为调用期"
                "按操作显式注入（pilot/legacy_model_bridge），A.8.2b.2b.2 再迁走 ssc_eval / "
-               "ssc_action_discovery，直接消费者由 10 降至 5；"
+               "ssc_action_discovery，A.8.2b.2b.3b 再迁走 experiment_copilot，"
+               "直接消费者由 10 降至 4；"
                "其余仍以 `from ssc_pi_agent import ...` 做模块级名字绑定",
-     "consumers": 5, "planned_phase": "A.8.2b.2b"},
+     "consumers": 4, "planned_phase": "A.8.2b.2b"},
     {"symbol": "ssc_pi_agent.deepseek_llm_con", "constructed_at_import": True,
      "reason": "模块外**零**直接消费者；仅经 debater_con 使用。temperature=0.7，"
                "与 pro 的 0.3 不同，合并会改变旧辩论语义",
      "consumers": 0, "planned_phase": "A.8.2b.3"},
     {"symbol": "ssc_pi_agent.judge_llm", "constructed_at_import": True,
-     "reason": "两批迁移后直接消费者由 9 降至 5；旧 judge/裁决路径仍在使用",
-     "consumers": 5, "planned_phase": "A.8.2b.2b"},
+     "reason": "三批迁移后直接消费者由 9 降至 4；旧 judge/裁决路径仍在使用",
+     "consumers": 4, "planned_phase": "A.8.2b.2b"},
     {"symbol": "ssc_pi_agent.debater_pro/debater_con/judge_agent",
      "constructed_at_import": True,
      "reason": "三个 React Agent 在 import 期就绑定了模型对象与工具；page 7 跨 "
@@ -109,6 +110,9 @@ STATELESS_WAVE1_MIGRATED = ("ssc_writer.py", "ssc_protocol.py", "ssc_evidence.py
 # A.8.2b.2b.2 第二批。ssc_eval.answer_with_agent **被排除**（React Agent + 工具循环
 # + 与未迁移的 ssc_skill_agent 强耦合），该函数本轮未改动。
 STATELESS_WAVE2_MIGRATED = ("ssc_eval.py", "ssc_action_discovery.py")
+# A.8.2b.2b.3b：孤立无状态消费者 experiment_copilot（唯一模型调用点 synthesize）。
+# 产物是建议草稿，不是已批准协议；不控制设备、不自动执行实验。
+STATELESS_WAVE3_MIGRATED = ("experiment_copilot.py",)
 WAVE2_EXCLUDED_FUNCTIONS = ("ssc_eval.answer_with_agent",)
 # A.8.2b.2b.2.1：import 期的文件系统副作用已清除（读题库 / mkdir 推迟到调用边界）。
 # 用 sys.addaudithook 在全新临时工作目录中实测：read/write/mkdir/net/dotenv/key 全 0。
@@ -133,7 +137,10 @@ SCIENTIFIC_OPERATIONS = ("literature_drafting", "literature_revision",
                          "claim_verification",
                          # A.8.2b.2b.2：评测评分 ≠ 论断核验；无检索基线 ≠ 有据起草；
                          # 动作抽取 ≠ 证据抽取。刻意分开，不因用了哪个模型而合并。
-                         "evaluation_scoring", "baseline_answering", "action_extraction")
+                         "evaluation_scoring", "baseline_answering", "action_extraction",
+                         # A.8.2b.2b.3b：实验进行中的**建议草稿**，不是结构化
+                         # Protocol IR（后者走 protocol_drafting 并过 validate_protocol）。
+                         "experiment_guidance_drafting")
 SCIENTIFIC_OPERATIONS_MODULE = "pilot.scientific_operations"
 OPERATIONS_BOUND_TO_PROVIDER_ROLE = ()      # 现状：一个都没绑
 # 受控 Runtime 现有的角色权威（本清单只记录来源，不复制名字）。
@@ -149,7 +156,9 @@ UNIFIED_PROVIDER_ROLE_TYPE_EXISTS = False
 COMPAT_OPT_IN_ENTRYPOINTS = ("pages/1_科研写作助手.py", "pages/6_实验协议.py",
                              "ssc_skill_agent.py",
                              # A.8.2b.2b.2：两个 CLI 入口
-                             "ssc_eval.py", "ssc_action_discovery.py")
+                             "ssc_eval.py", "ssc_action_discovery.py",
+                             # A.8.2b.2b.3b：仅在用户点击 polish 后才取兼容模型
+                             "pages/8_实验副驾.py")
 
 # A.8.2b.1 §1-3：无副作用地基已建立，但**尚未接入任何消费者**。
 LEGACY_FOUNDATION_MODULES = ("pilot.legacy_provider_specs", "pilot.legacy_runtime_config",
@@ -179,7 +188,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.2b.2.1",
+    "phase": "A.8.2b.2b.3b",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -194,6 +203,7 @@ MANIFEST = {
     "legacy_foundation_wired_to_consumers": LEGACY_FOUNDATION_WIRED_TO_CONSUMERS,
     "stateless_wave1_migrated": list(STATELESS_WAVE1_MIGRATED),
     "stateless_wave2_migrated": list(STATELESS_WAVE2_MIGRATED),
+    "stateless_wave3_migrated": list(STATELESS_WAVE3_MIGRATED),
     "wave2_excluded_functions": list(WAVE2_EXCLUDED_FUNCTIONS),
     "wave2_remaining_import_effects": list(WAVE2_REMAINING_IMPORT_EFFECTS),
     "wave2_import_io_free": WAVE2_IMPORT_IO_FREE,
@@ -222,7 +232,7 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "LEGACY_SSC_PI_AGENT_IMPORT_SAFE", "BLOCKS_A83", "LEGACY_REBIND_SITES",
            "REBIND_COUNTS", "NON_TRIGGERING_SCANNER", "LEGACY_FOUNDATION_MODULES",
            "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
-           "STATELESS_WAVE1_MIGRATED", "STATELESS_WAVE2_MIGRATED",
+           "STATELESS_WAVE1_MIGRATED", "STATELESS_WAVE2_MIGRATED", "STATELESS_WAVE3_MIGRATED",
            "WAVE2_EXCLUDED_FUNCTIONS", "WAVE2_REMAINING_IMPORT_EFFECTS", "WAVE2_IMPORT_IO_FREE", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
            "LEGACY_COMPAT_ADAPTER", "LEGACY_COMPAT_IS_CONTROLLED",
            "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_OPERATIONS", "SCIENTIFIC_OPERATIONS_MODULE",

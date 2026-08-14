@@ -10,6 +10,11 @@ from typing import List
 
 import lab_knowledge as LK
 
+# A.8.2b.2b.3b：核心路径只接受**显式注入**，按科研操作取模型；缺依赖即 fail-closed，
+# 绝不 import ssc_pi_agent。旧行为由应用入口（page 8）在用户点击后显式选用
+# pilot.legacy_compat_adapter（那条通道明确标注未受控）。
+from pilot.legacy_model_bridge import ScientificOperation, require_injected_model
+
 
 @dataclass
 class LabContext:
@@ -125,11 +130,17 @@ def _controls_tips(ctx):
     return tips
 
 
-def synthesize(ctx, model="deepseek"):
-    """可选：把确定性建议 + 你的假说，让 LLM 润色成一段可执行的实验规划（烧少量 API）。"""
+def synthesize(ctx, model="deepseek", chat_model=None):
+    """可选：把确定性建议 + 你的假说，润色成一段下一步实验**建议草稿**。
+
+    A.8.2b.2b.3b：模型必须由调用方 `chat_model=` 显式注入；缺模型即
+    ModelDependencyMissing，本函数**不会**去 import ssc_pi_agent 找一个顶上。
+
+    产物定位：科研决策支持的**建议草稿**，不是已批准的操作规程；
+    不控制设备、不自动执行实验、不写入任何协议或长期记忆。
+    """
     base = suggest_next(ctx, with_literature=True)
-    from ssc_pi_agent import deepseek_llm_pro, judge_llm
-    llm = judge_llm if model == "claude" else deepseek_llm_pro
+    llm = require_injected_model(ScientificOperation.EXPERIMENT_GUIDANCE_DRAFTING, chat_model)
     prompt = (
         "你是风湿免疫湿实验方法学顾问。下面是系统根据知识库+文献自动组装的结构化材料。"
         "请据此给出一段【具体、可执行的下一步实验规划】：明确要做的实验、关键对照、"

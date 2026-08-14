@@ -44,6 +44,11 @@ class ScientificOperation(StrEnum):
     EVALUATION_SCORING = "evaluation_scoring"
     BASELINE_ANSWERING = "baseline_answering"
     ACTION_EXTRACTION = "action_extraction"
+    # A.8.2b.2b.3b：把确定性组装的材料润色成"下一步该做什么实验"的**建议草稿**。
+    # 与 PROTOCOL_DRAFTING 分开：后者产出结构化 Protocol IR 并交 validate_protocol
+    # 静态校验（材料/体积/对照/验收）；这里只给实验进行中的方向性建议与排错思路，
+    # **不是**已批准的操作规程，不控制设备、不自动执行实验。
+    EXPERIMENT_GUIDANCE_DRAFTING = "experiment_guidance_drafting"
 
 
 #: 这些字符串**永远不允许**出现在 ProviderRegistry / Gate / 预算的 role 位置。

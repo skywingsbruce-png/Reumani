@@ -23,7 +23,8 @@ MIGRATED = ("ssc_pi_agent_web.py", "pages/1_科研写作助手.py", "pages/4_SSc
 
 # 仍未迁移的模型消费者（A.8.2b.2b.1 已迁走 writer/protocol/evidence）
 # A.8.2b.2b.2 已迁走 ssc_eval / ssc_action_discovery
-NOT_MIGRATED = ("ssc_skill_agent.py", "ssc_a1.py", "experiment_copilot.py", "shadow.py",
+# A.8.2b.2b.3b 已迁走 experiment_copilot
+NOT_MIGRATED = ("ssc_skill_agent.py", "ssc_a1.py", "shadow.py",
                 "pages/7_方向辩论(可选).py", "pages/9_数据对话.py")
 
 # 迁移后**仍**经由这些依赖间接拉起 legacy 的模块 → 待 A.8.2b.2b/.3 处理
