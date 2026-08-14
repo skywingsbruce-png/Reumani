@@ -110,12 +110,10 @@ STATELESS_WAVE1_MIGRATED = ("ssc_writer.py", "ssc_protocol.py", "ssc_evidence.py
 # + 与未迁移的 ssc_skill_agent 强耦合），该函数本轮未改动。
 STATELESS_WAVE2_MIGRATED = ("ssc_eval.py", "ssc_action_discovery.py")
 WAVE2_EXCLUDED_FUNCTIONS = ("ssc_eval.answer_with_agent",)
-# 两个模块 import 期仍有**文件系统**副作用（读题库 / mkdir），与 legacy/key/模型无关，
-# 本轮不在范围内 —— 如实登记，不得当成已解决。
-WAVE2_REMAINING_IMPORT_EFFECTS = (
-    "ssc_eval.py: 读 ssc_eval_questions.json + RESULT_DIR.mkdir",
-    "ssc_action_discovery.py: QUEUE_DIR.mkdir",
-)
+# A.8.2b.2b.2.1：import 期的文件系统副作用已清除（读题库 / mkdir 推迟到调用边界）。
+# 用 sys.addaudithook 在全新临时工作目录中实测：read/write/mkdir/net/dotenv/key 全 0。
+WAVE2_REMAINING_IMPORT_EFFECTS = ()
+WAVE2_IMPORT_IO_FREE = True
 LEGACY_MODEL_BRIDGE = "pilot.legacy_model_bridge"
 
 # A.8.2b.2b.1.1：核心路径已移除隐式回退。缺显式注入即 fail-closed，核心不再
@@ -181,7 +179,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.2b.2",
+    "phase": "A.8.2b.2b.2.1",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -198,6 +196,7 @@ MANIFEST = {
     "stateless_wave2_migrated": list(STATELESS_WAVE2_MIGRATED),
     "wave2_excluded_functions": list(WAVE2_EXCLUDED_FUNCTIONS),
     "wave2_remaining_import_effects": list(WAVE2_REMAINING_IMPORT_EFFECTS),
+    "wave2_import_io_free": WAVE2_IMPORT_IO_FREE,
     "legacy_model_bridge": LEGACY_MODEL_BRIDGE,
     "core_path_fail_closed": CORE_PATH_FAIL_CLOSED,
     "legacy_compat_adapter": LEGACY_COMPAT_ADAPTER,
@@ -224,7 +223,7 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "REBIND_COUNTS", "NON_TRIGGERING_SCANNER", "LEGACY_FOUNDATION_MODULES",
            "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
            "STATELESS_WAVE1_MIGRATED", "STATELESS_WAVE2_MIGRATED",
-           "WAVE2_EXCLUDED_FUNCTIONS", "WAVE2_REMAINING_IMPORT_EFFECTS", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
+           "WAVE2_EXCLUDED_FUNCTIONS", "WAVE2_REMAINING_IMPORT_EFFECTS", "WAVE2_IMPORT_IO_FREE", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
            "LEGACY_COMPAT_ADAPTER", "LEGACY_COMPAT_IS_CONTROLLED",
            "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_OPERATIONS", "SCIENTIFIC_OPERATIONS_MODULE",
            "OPERATIONS_BOUND_TO_PROVIDER_ROLE", "PROVIDER_ROLE_AUTHORITIES",

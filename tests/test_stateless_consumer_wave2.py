@@ -214,11 +214,129 @@ def test_ssc_skill_agent_and_a1_untouched_by_wave2():
         assert "A.8.2b.2b.2" not in _src(rel), f"{rel} 不在本批范围内"
 
 
-def test_remaining_import_time_filesystem_effects_are_recorded():
-    """如实登记：两个模块 import 期仍有文件系统副作用（非 legacy/key/模型）。"""
-    assert "RESULT_DIR.mkdir(exist_ok=True)" in _src("ssc_eval.py")
-    assert "QUESTIONS = json.loads(" in _src("ssc_eval.py")
-    assert "QUEUE_DIR.mkdir(exist_ok=True)" in _src("ssc_action_discovery.py")
+# ------------------------------------------------- A.8.2b.2b.2.1 import 期零 I/O
+_FS_PROBE = r"""
+import sys, json, os
+REPO = sys.argv[2]; TARGET = sys.argv[1]
+sys.path.insert(0, REPO)
+rep = {"read": [], "write": [], "mkdir": [], "net": 0, "dotenv": 0, "keys": 0,
+       "legacy": False, "error": None}
+armed = [False]
+def hook(event, args):
+    if not armed[0]:
+        return
+    try:
+        if event == "open":
+            path, mode = str(args[0]), (args[1] or "")
+            if "__pycache__" in path or path.endswith((".pyc", ".pyd", ".dll", ".so")):
+                return
+            if REPO.lower() not in path.lower():
+                return
+            (rep["write"] if any(c in mode for c in "wax+") else rep["read"]).append(
+                os.path.basename(path))
+        elif event == "os.mkdir":
+            rep["mkdir"].append(os.path.basename(str(args[0])))
+        elif event in ("socket.connect", "socket.getaddrinfo"):
+            rep["net"] += 1
+    except Exception:
+        pass
+sys.addaudithook(hook)
+import dotenv
+def _d(*a, **k):
+    rep["dotenv"] += 1
+    return True
+dotenv.load_dotenv = _d
+P = ("DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+class C(dict):
+    def get(self, k, d=None):
+        if k in P: rep["keys"] += 1
+        return dict.get(self, k, d)
+os.environ = C(os.environ)
+armed[0] = True
+try:
+    __import__(TARGET)
+except Exception as e:
+    rep["error"] = f"{type(e).__name__}: {str(e)[:100]}"
+armed[0] = False
+rep["legacy"] = "ssc_pi_agent" in sys.modules
+print("PROBE " + json.dumps(rep, ensure_ascii=False))
+"""
+
+
+def _fs_probe(module):
+    """在**全新临时工作目录**里 import，用 sys.addaudithook 捕获底层 I/O。
+
+    不依赖仓库目录是否已存在 —— mkdir(exist_ok=True) 命中已有目录时
+    仍会触发 os.mkdir 审计事件，因此不会漏掉。
+    """
+    import json
+    import os
+    import tempfile
+
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    with tempfile.TemporaryDirectory() as tmp:
+        r = subprocess.run([sys.executable, "-c", _FS_PROBE, module, str(REPO)],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", cwd=tmp, timeout=300, env=env)
+    ln = [l for l in (r.stdout or "").splitlines() if l.startswith("PROBE ")]
+    assert ln, f"探针未产出：{(r.stdout or '')[-300:]}{(r.stderr or '')[-300:]}"
+    return json.loads(ln[0][6:])
+
+
+@pytest.mark.parametrize("mod", ("ssc_eval", "ssc_action_discovery"))
+def test_import_performs_no_filesystem_network_or_model_io(mod):
+    d = _fs_probe(mod)
+    assert d["error"] is None, d["error"]
+    assert d["read"] == [], f"{mod} import 期读了文件：{d['read']}"
+    assert d["write"] == [], f"{mod} import 期写了文件：{d['write']}"
+    assert d["mkdir"] == [], f"{mod} import 期创建了目录：{d['mkdir']}"
+    assert d["net"] == 0 and d["dotenv"] == 0 and d["keys"] == 0
+    assert d["legacy"] is False
+
+
+def test_probe_itself_detects_a_real_side_effect():
+    """哨兵：探针必须能抓到副作用，否则上面的"全 0"没有意义。"""
+    d = _fs_probe("tests.fs_probe_canary")
+    assert d["mkdir"], "探针漏掉了 mkdir 副作用"
+    assert d["read"], "探针漏掉了文件读取副作用"
+
+
+def test_filesystem_access_moved_to_explicit_call_boundaries():
+    ev, ad = _src("ssc_eval.py"), _src("ssc_action_discovery.py")
+    assert "def load_eval_questions(" in ev
+    assert "QUESTIONS = json.loads(" not in ev          # 模块顶层解析已删除
+    tree = ast.parse(ev)
+    for node in tree.body:                              # 顶层不得再有 I/O 调用
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                break
+            if isinstance(sub, ast.Call):
+                name = getattr(sub.func, "attr", getattr(sub.func, "id", ""))
+                assert name not in ("mkdir", "read_text", "read_bytes", "write_text",
+                                    "makedirs", "glob", "iterdir"), f"顶层仍有 I/O：{name}"
+    assert "RESULT_DIR.mkdir(exist_ok=True)" in ev      # 但写入前仍会建目录
+    assert "QUEUE_DIR.mkdir(exist_ok=True)" in ad
+    for src, marker in ((ev, "out = RESULT_DIR /"), (ad, "queue_file = QUEUE_DIR /")):
+        assert src.index("mkdir(exist_ok=True)") < src.index(marker), "建目录必须在写入之前"
+
+
+def test_questions_are_loaded_lazily_and_cached(tmp_path):
+    import ssc_eval
+    f = tmp_path / "q.json"
+    f.write_text('[{"id": 1, "q": "Q", "key_facts": ["f"]}]', encoding="utf-8")
+    first = ssc_eval.load_eval_questions(f)
+    assert first == [{"id": 1, "q": "Q", "key_facts": ["f"]}]
+    f.write_text('[]', encoding="utf-8")               # 改文件后仍取缓存
+    assert ssc_eval.load_eval_questions(f) is first
+
+
+def test_eval_content_and_scoring_rules_unchanged():
+    """题库文件、评分提示与判定逻辑一概未改，只改了读取时机。"""
+    ev = _src("ssc_eval.py")
+    assert "你是严格的评分裁判" in ev
+    assert r'\"correct\": true/false' in ev
+    assert '(1 if d.get("correct") else 0, bool(d.get("hallucination")), d.get("note", ""))' in ev
+    assert (REPO / "ssc_eval_questions.json").exists()
 
 
 def test_ssc_pi_agent_still_untouched():

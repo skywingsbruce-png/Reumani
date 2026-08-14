@@ -19,9 +19,24 @@ from pathlib import Path
 from pilot.legacy_model_bridge import ScientificOperation, require_injected_model
 
 BASE = Path(__file__).resolve().parent
-QUESTIONS = json.loads((BASE / "ssc_eval_questions.json").read_text(encoding="utf-8"))
+QUESTIONS_FILE = BASE / "ssc_eval_questions.json"
 RESULT_DIR = BASE / "eval_results"
-RESULT_DIR.mkdir(exist_ok=True)
+
+# A.8.2b.2b.2.1：import 期不做任何文件系统操作。题库读取与结果目录创建
+# 都推迟到明确的业务调用边界（load_eval_questions / run）。
+_QUESTIONS_CACHE: dict = {}
+
+
+def load_eval_questions(path=None):
+    """读取评测题库。**只在调用时**碰文件系统；同一路径只读一次。
+
+    题目内容、标准答案与评分规则一概未改，仅改变读取时机。
+    """
+    p = Path(path) if path is not None else QUESTIONS_FILE
+    key = str(p.resolve()) if p.exists() else str(p)
+    if key not in _QUESTIONS_CACHE:
+        _QUESTIONS_CACHE[key] = json.loads(p.read_text(encoding="utf-8"))
+    return _QUESTIONS_CACHE[key]
 
 
 def answer_with_agent(q):
@@ -64,7 +79,8 @@ def judge(q_item, answer, chat_model=None):
 
 def run(target, limit=None, answer_model=None, scoring_model=None):
     """`answer_model` / `scoring_model` 由调用方显式提供；两者职责不同，不共用一个参数。"""
-    qs = QUESTIONS[:limit] if limit else QUESTIONS
+    all_qs = load_eval_questions()
+    qs = all_qs[:limit] if limit else all_qs
     rows, correct, halluc = [], 0, 0
     for item in qs:
         print(f"  Q{item['id']}: {item['q'][:30]}...", flush=True)
@@ -81,6 +97,7 @@ def run(target, limit=None, answer_model=None, scoring_model=None):
     summary = {"target": target, "n": n, "accuracy": round(correct / n, 3),
                "hallucination_rate": round(halluc / n, 3),
                "run_at": datetime.now().isoformat(timespec="seconds"), "rows": rows}
+    RESULT_DIR.mkdir(exist_ok=True)          # 写之前才建目录，import 期不建
     out = RESULT_DIR / f"{target}_{n}q.json"
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return f"[{target}] 准确率 {summary['accuracy']*100:.0f}%（{correct}/{n}），幻觉率 {summary['hallucination_rate']*100:.0f}% → {out}"

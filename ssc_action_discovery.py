@@ -18,8 +18,8 @@ from pilot.legacy_model_bridge import ScientificOperation, require_injected_mode
 BASE = Path(__file__).resolve().parent
 CORPUS = BASE / "data_lake" / "ssc_corpus" / "corpus.jsonl"
 QUEUE_DIR = BASE / "action_queue"
-QUEUE_DIR.mkdir(exist_ok=True)
 QUEUE_FILE = QUEUE_DIR / "candidates.json"
+# A.8.2b.2b.2.1：import 期不建目录 —— 队列目录在真正写入前才创建（见 run_discovery）。
 
 CATEGORIES = {
     "综述/高质量原始研究": ["review", "systematic", "consensus", "guideline", "cohort", "randomized"],
@@ -226,6 +226,7 @@ def run_discovery(n_per_cat=50, batch_size=5, max_papers=None, mode="dry",
         all_cands.extend(extractor(batch, chat_model=chat_model))
         print(f"  已处理 {min(i+batch_size, len(papers))}/{len(papers)}，累计候选 {len(all_cands)}", flush=True)
     ranked = standardize_wet(all_cands) if mode == "wet" else standardize_and_dedup(all_cands)
+    QUEUE_DIR.mkdir(exist_ok=True)           # 写之前才建目录，import 期不建
     queue_file = QUEUE_DIR / (f"wet_candidates.json" if mode == "wet" else "candidates.json")
     payload = {"built_at": datetime.now().isoformat(timespec="seconds"), "mode": mode,
                "n_papers": len(papers), "n_raw_candidates": len(all_cands),
