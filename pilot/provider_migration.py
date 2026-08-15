@@ -113,6 +113,38 @@ STATELESS_WAVE2_MIGRATED = ("ssc_eval.py", "ssc_action_discovery.py")
 # A.8.2b.2b.3b：孤立无状态消费者 experiment_copilot（唯一模型调用点 synthesize）。
 # 产物是建议草稿，不是已批准协议；不控制设备、不自动执行实验。
 STATELESS_WAVE3_MIGRATED = ("experiment_copilot.py",)
+
+# A.8.2b.2b.3c：ssc_a1 的 Planner / Verifier / Shadow-Claim 改为显式注入。
+# Executor **不迁移** —— 它经 ssc_skill_agent.build_skill_agent 取模型，而该模块
+# 有 import 期的 skill_agent 单例（ssc_skill_agent.py:475）。
+SSC_A1_IMPORT_DECOUPLED = True
+# §9 四项分列：模型/React/密钥安全，但**文件系统不安全**（经 ssc_resources）。
+# 不得写成"ssc_a1 已完全 import-safe"。
+SSC_A1_IMPORT_MODEL_SAFE = True
+SSC_A1_IMPORT_REACT_SAFE = True
+SSC_A1_IMPORT_SECRET_SAFE = True
+SSC_A1_IMPORT_FILESYSTEM_SAFE = False
+SSC_A1_PLANNER_EXPLICIT_INJECTION = True
+SSC_A1_VERIFIER_EXPLICIT_INJECTION = True
+SSC_A1_CLAIM_EXPLICIT_INJECTION = True
+SSC_A1_IMPLICIT_LEGACY_FALLBACK = False
+EXECUTOR_MIGRATION_COMPLETE = False
+SSC_SKILL_AGENT_MODULE_SINGLETON_REMOVED = False
+PLANNER_EXPLICIT_INJECTION = True
+VERIFIER_EXPLICIT_INJECTION = True
+SHADOW_CLAIM_EXPLICIT_INJECTION = True
+PLANNER_IMPLICIT_FALLBACK = False
+VERIFIER_IMPLICIT_FALLBACK = False
+CLAIM_IMPLICIT_FALLBACK = False
+EXECUTOR_MIGRATED = False
+EXECUTOR_BLOCKED_BY_SSC_SKILL_AGENT = True
+SSC_A1_CONTROLLED_REGISTRY_WIRED = False
+PAGE4_COMPAT_ENTRYPOINT = True
+# 既存、**非本轮引入**的 import 期文件 I/O：来自 ssc_resources（本轮禁止修改的模块）。
+# ssc_a1 自身的 runs/ mkdir 已推迟到写入边界。
+SSC_A1_REMAINING_IMPORT_IO = (
+    "ssc_resources: 读 6 个 data_lake JSON + mkdir data_lake（传递依赖，非 ssc_a1 自身）",
+)
 WAVE2_EXCLUDED_FUNCTIONS = ("ssc_eval.answer_with_agent",)
 # A.8.2b.2b.2.1：import 期的文件系统副作用已清除（读题库 / mkdir 推迟到调用边界）。
 # 用 sys.addaudithook 在全新临时工作目录中实测：read/write/mkdir/net/dotenv/key 全 0。
@@ -140,7 +172,10 @@ SCIENTIFIC_OPERATIONS = ("literature_drafting", "literature_revision",
                          "evaluation_scoring", "baseline_answering", "action_extraction",
                          # A.8.2b.2b.3b：实验进行中的**建议草稿**，不是结构化
                          # Protocol IR（后者走 protocol_drafting 并过 validate_protocol）。
-                         "experiment_guidance_drafting")
+                         "experiment_guidance_drafting",
+                         # A.8.2b.2b.3c：SSc-A1 三步；与 ProviderRole 同形不同层
+                         "research_planning", "research_verification",
+                         "shadow_claim_extraction")
 SCIENTIFIC_OPERATIONS_MODULE = "pilot.scientific_operations"
 OPERATIONS_BOUND_TO_PROVIDER_ROLE = ()      # 现状：一个都没绑
 # 受控 Runtime 现有的角色权威（本清单只记录来源，不复制名字）。
@@ -158,7 +193,9 @@ COMPAT_OPT_IN_ENTRYPOINTS = ("pages/1_科研写作助手.py", "pages/6_实验协
                              # A.8.2b.2b.2：两个 CLI 入口
                              "ssc_eval.py", "ssc_action_discovery.py",
                              # A.8.2b.2b.3b：仅在用户点击 polish 后才取兼容模型
-                             "pages/8_实验副驾.py")
+                             "pages/8_实验副驾.py",
+                             # A.8.2b.2b.3c：仅在用户点击运行后才取兼容模型
+                             "pages/4_SSc-A1.py")
 
 # A.8.2b.1 §1-3：无副作用地基已建立，但**尚未接入任何消费者**。
 LEGACY_FOUNDATION_MODULES = ("pilot.legacy_provider_specs", "pilot.legacy_runtime_config",
@@ -188,7 +225,7 @@ BLOCKS_A8_3_UNTIL_A8_2B = True
 
 MANIFEST = {
     "schema": "provider-migration-v1",
-    "phase": "A.8.2b.2b.3b",
+    "phase": "A.8.2b.2b.3c-R",
     "controlled_runtime_import_safe": CONTROLLED_RUNTIME_IMPORT_SAFE,
     "controlled_runtime_registry_active": CONTROLLED_RUNTIME_REGISTRY_ACTIVE,
     "blocks_A8_3_until_A8_2b": BLOCKS_A8_3_UNTIL_A8_2B,
@@ -204,6 +241,28 @@ MANIFEST = {
     "stateless_wave1_migrated": list(STATELESS_WAVE1_MIGRATED),
     "stateless_wave2_migrated": list(STATELESS_WAVE2_MIGRATED),
     "stateless_wave3_migrated": list(STATELESS_WAVE3_MIGRATED),
+    "ssc_a1_import_decoupled": SSC_A1_IMPORT_DECOUPLED,
+    "ssc_a1_import_model_safe": SSC_A1_IMPORT_MODEL_SAFE,
+    "ssc_a1_import_react_safe": SSC_A1_IMPORT_REACT_SAFE,
+    "ssc_a1_import_secret_safe": SSC_A1_IMPORT_SECRET_SAFE,
+    "ssc_a1_import_filesystem_safe": SSC_A1_IMPORT_FILESYSTEM_SAFE,
+    "ssc_a1_planner_explicit_injection": SSC_A1_PLANNER_EXPLICIT_INJECTION,
+    "ssc_a1_verifier_explicit_injection": SSC_A1_VERIFIER_EXPLICIT_INJECTION,
+    "ssc_a1_claim_explicit_injection": SSC_A1_CLAIM_EXPLICIT_INJECTION,
+    "ssc_a1_implicit_legacy_fallback": SSC_A1_IMPLICIT_LEGACY_FALLBACK,
+    "executor_migration_complete": EXECUTOR_MIGRATION_COMPLETE,
+    "ssc_skill_agent_module_singleton_removed": SSC_SKILL_AGENT_MODULE_SINGLETON_REMOVED,
+    "planner_explicit_injection": PLANNER_EXPLICIT_INJECTION,
+    "verifier_explicit_injection": VERIFIER_EXPLICIT_INJECTION,
+    "shadow_claim_explicit_injection": SHADOW_CLAIM_EXPLICIT_INJECTION,
+    "planner_implicit_fallback": PLANNER_IMPLICIT_FALLBACK,
+    "verifier_implicit_fallback": VERIFIER_IMPLICIT_FALLBACK,
+    "claim_implicit_fallback": CLAIM_IMPLICIT_FALLBACK,
+    "executor_migrated": EXECUTOR_MIGRATED,
+    "executor_blocked_by_ssc_skill_agent": EXECUTOR_BLOCKED_BY_SSC_SKILL_AGENT,
+    "ssc_a1_controlled_registry_wired": SSC_A1_CONTROLLED_REGISTRY_WIRED,
+    "page4_compat_entrypoint": PAGE4_COMPAT_ENTRYPOINT,
+    "ssc_a1_remaining_import_io": list(SSC_A1_REMAINING_IMPORT_IO),
     "wave2_excluded_functions": list(WAVE2_EXCLUDED_FUNCTIONS),
     "wave2_remaining_import_effects": list(WAVE2_REMAINING_IMPORT_EFFECTS),
     "wave2_import_io_free": WAVE2_IMPORT_IO_FREE,
@@ -232,7 +291,18 @@ __all__ = ["MANIFEST", "CONTROLLED_RUNTIME_REGISTRY_ACTIVE", "BLOCKS_A8_3_UNTIL_
            "LEGACY_SSC_PI_AGENT_IMPORT_SAFE", "BLOCKS_A83", "LEGACY_REBIND_SITES",
            "REBIND_COUNTS", "NON_TRIGGERING_SCANNER", "LEGACY_FOUNDATION_MODULES",
            "LEGACY_FOUNDATION_WIRED_TO_CONSUMERS", "MIGRATION_BATCHES",
-           "STATELESS_WAVE1_MIGRATED", "STATELESS_WAVE2_MIGRATED", "STATELESS_WAVE3_MIGRATED",
+           "STATELESS_WAVE1_MIGRATED", "STATELESS_WAVE2_MIGRATED", "STATELESS_WAVE3_MIGRATED", "SSC_A1_IMPORT_DECOUPLED", "SSC_A1_IMPORT_MODEL_SAFE",
+           "SSC_A1_IMPORT_REACT_SAFE", "SSC_A1_IMPORT_SECRET_SAFE",
+           "SSC_A1_IMPORT_FILESYSTEM_SAFE", "SSC_A1_PLANNER_EXPLICIT_INJECTION",
+           "SSC_A1_VERIFIER_EXPLICIT_INJECTION", "SSC_A1_CLAIM_EXPLICIT_INJECTION",
+           "SSC_A1_IMPLICIT_LEGACY_FALLBACK", "EXECUTOR_MIGRATION_COMPLETE",
+           "SSC_SKILL_AGENT_MODULE_SINGLETON_REMOVED",
+           "PLANNER_EXPLICIT_INJECTION", "VERIFIER_EXPLICIT_INJECTION",
+           "SHADOW_CLAIM_EXPLICIT_INJECTION", "PLANNER_IMPLICIT_FALLBACK",
+           "VERIFIER_IMPLICIT_FALLBACK", "CLAIM_IMPLICIT_FALLBACK",
+           "EXECUTOR_MIGRATED", "EXECUTOR_BLOCKED_BY_SSC_SKILL_AGENT",
+           "SSC_A1_CONTROLLED_REGISTRY_WIRED", "PAGE4_COMPAT_ENTRYPOINT",
+           "SSC_A1_REMAINING_IMPORT_IO",
            "WAVE2_EXCLUDED_FUNCTIONS", "WAVE2_REMAINING_IMPORT_EFFECTS", "WAVE2_IMPORT_IO_FREE", "LEGACY_MODEL_BRIDGE", "CORE_PATH_FAIL_CLOSED",
            "LEGACY_COMPAT_ADAPTER", "LEGACY_COMPAT_IS_CONTROLLED",
            "CONTROLLED_MODEL_MIGRATION_COMPLETE", "SCIENTIFIC_OPERATIONS", "SCIENTIFIC_OPERATIONS_MODULE",

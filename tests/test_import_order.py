@@ -68,7 +68,12 @@ def fake_roles(gate):
 
 # 1 —— 正确顺序时六个绑定全部 wrapped
 @pytest.mark.unit
-def test_correct_order_wraps_all_six_bindings():
+def test_correct_order_wraps_all_bindings_of_the_detected_topology():
+    """A.8.2b.2b.3c-R：按 `detect_binding_topology()` 判定的拓扑严格检查。
+
+    不再写死 6 —— 但**也不放宽**：六绑定拓扑必须恰好 6 项，四绑定拓扑必须恰好 4 项，
+    两者都要求 unwrapped 为空。未知/半迁移拓扑在 assert_bindings_after_import 内即抛。
+    """
     r = run_py(PRELUDE + """
 PT.assert_import_order_clean()
 gate = mkgate(); roles = fake_roles(gate)
@@ -77,15 +82,21 @@ P.judge_llm = roles["planner"]; P.deepseek_llm_pro = roles["executor"]
 PT.neutralize_unused_paid_clients(gate)
 names = PT.assert_bindings_after_import(roles, gate)
 import ssc_a1, ssc_skill_agent
+topology = PT.detect_binding_topology(ssc_a1)
 bad = [f"{m.__name__}.{a}" for m in (P, ssc_a1, ssc_skill_agent) for a in PT.PAID_ATTRS
        if getattr(m, a, None) is not None
        and not getattr(getattr(m, a), "_reumani_hard_gate_wrapped", False)]
-print("RESULT", json.dumps({"n_bindings": len(names), "unwrapped": bad}))
+print("RESULT", json.dumps({"n_bindings": len(names), "unwrapped": bad,
+                            "topology": topology}))
 """)
     assert r.returncode == 0, r.stdout + r.stderr
     out = [l for l in r.stdout.splitlines() if l.startswith("RESULT")][0]
     data = __import__("json").loads(out[len("RESULT "):])
-    assert data["n_bindings"] == 6 and data["unwrapped"] == []
+    expected = {PT.BINDING_TOPOLOGY_LEGACY_SIX: 6,
+                PT.BINDING_TOPOLOGY_INJECTED_FOUR: 4}
+    assert data["topology"] in expected, f"未知拓扑：{data['topology']}"
+    assert data["n_bindings"] == expected[data["topology"]]
+    assert data["unwrapped"] == []
 
 
 # 2 / 3 —— 提前导入即拒绝
@@ -107,11 +118,13 @@ except GateConfigError as e:
 @pytest.mark.unit
 def test_stale_binding_after_partial_patch_is_refused():
     r = run_py(PRELUDE + """
-import ssc_a1                       # 抢先导入，持有未包装绑定
+import ssc_skill_agent              # 抢先导入，持有未包装绑定
+# A.8.2b.2b.3c-R：ssc_a1 已改显式注入、不再复制 legacy 绑定，因此"陈旧副本"
+# 这一风险现在落在仍会复制它们的 ssc_skill_agent 上。保护对象换了，强度不变。
 gate = mkgate(); roles = fake_roles(gate)
 import ssc_pi_agent as P
 P.judge_llm = roles["planner"]; P.deepseek_llm_pro = roles["executor"]
-stale = not getattr(ssc_a1.judge_llm, "_reumani_hard_gate_wrapped", False)
+stale = not getattr(ssc_skill_agent.judge_llm, "_reumani_hard_gate_wrapped", False)
 try:
     PT.assert_bindings_after_import(roles, gate)
     print("RESULT leaked")

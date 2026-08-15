@@ -72,8 +72,17 @@ def render_page(settings=None):
     if st.button("🚀 " + t("运行 SSc-A1", "Run SSc-A1"), type="primary", disabled=not (DEEPSEEK_API_KEY and query.strip())):
         with st.spinner(t("Planner 制定计划 → Executor 执行 → Verifier 验证……（可能要几分钟）",
                           "Planner → Executor → Verifier… (may take a few minutes)")):
+            # A.8.2b.2b.3c：**只有用户点击之后**才取模型。这三行是整页唯一触及
+            # legacy 的地方，且通道明确未受控（不经 Registry / Gate / HITL）。
+            from pilot.legacy_compat_adapter import legacy_chat_model_for_preference
+            from shadow import build_claim_extractor
+            _planner = legacy_chat_model_for_preference("claude")
+            _verifier = legacy_chat_model_for_preference("claude")
+            _claim = build_claim_extractor(legacy_chat_model_for_preference(exec_model))
             state = run_agent(query.strip(), constraints=constraints.strip(),
-                              max_iterations=max_iter, executor_model=exec_model)
+                              max_iterations=max_iter, executor_model=exec_model,
+                              planner_model=_planner, verifier_model=_verifier,
+                              claim_extractor=_claim)
 
         st.divider()
         st.subheader("📋 " + t("最终结论", "Final answer"))

@@ -49,6 +49,12 @@ class ScientificOperation(StrEnum):
     # 静态校验（材料/体积/对照/验收）；这里只给实验进行中的方向性建议与排错思路，
     # **不是**已批准的操作规程，不控制设备、不自动执行实验。
     EXPERIMENT_GUIDANCE_DRAFTING = "experiment_guidance_drafting"
+    # A.8.2b.2b.3c —— SSc-A1 的三个科研步骤。名字描述**职责**，与受控 Runtime 的
+    # planner / verifier / claim_extractor ProviderRole **同形不同层**，
+    # 不得因名字相似而绑定（provider_role_for 仍返回 None）。
+    RESEARCH_PLANNING = "research_planning"            # 依据问题+可用资源制定研究计划
+    RESEARCH_VERIFICATION = "research_verification"    # 独立核查执行结果是否被证据支持
+    SHADOW_CLAIM_EXTRACTION = "shadow_claim_extraction"  # Shadow 链的 Claim 抽取（只记录）
 
 
 #: 这些字符串**永远不允许**出现在 ProviderRegistry / Gate / 预算的 role 位置。

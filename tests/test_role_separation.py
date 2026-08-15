@@ -1,5 +1,6 @@
 """A.6.3.3：Planner / Verifier 计量身份拆分 + 动态付费客户端发现 + preflight 证据语义。
 全部 fake provider / dry-run，**零真实 API**。"""
+import ast
 import json
 import os
 import subprocess
@@ -168,19 +169,39 @@ def test_shared_task_budget_still_binds_both_roles(tmp_path):
 
 # 8 / 9 / 10 —— 默认行为不变 / 注入生效 / 裁决权不变
 @pytest.mark.unit
-def test_default_path_is_backward_compatible():
-    """未注入时 ssc_a1 必须沿用原全局对象，签名保持向后兼容。"""
+def test_default_path_is_fail_closed_not_backward_compatible():
+    """A.8.2b.2b.3c-R：未注入时**不再**沿用全局对象，而是 fail-closed。
+
+    原断言要求"默认路径回落 judge_llm/deepseek_llm_pro"—— 那正是被移除的隐式
+    legacy fallback。签名仍保持向后兼容（三个参数默认 None），但**行为**变了：
+    默认值不再意味着"用全局"，而是"必须显式提供，否则拒绝执行"。
+    """
     import inspect
 
     import ssc_a1
+    from pilot.legacy_model_bridge import ModelDependencyMissing
+
     sig = inspect.signature(ssc_a1.run_agent)
     assert sig.parameters["planner_model"].default is None
     assert sig.parameters["verifier_model"].default is None
+    assert sig.parameters["claim_extractor"].default is None
     vsig = inspect.signature(ssc_a1.verify)
     assert vsig.parameters["verifier_model"].default is None
-    src = Path(ssc_a1.__file__).read_text(encoding="utf-8")
-    assert "planner_model or (judge_llm if judge_model" in src
-    assert "verifier_model or (judge_llm if judge_model" in src
+
+    # 源码层：隐式回退已彻底移除（不看注释/docstring，只看可执行代码）
+    tree = ast.parse(Path(ssc_a1.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)) and ast.get_docstring(node):
+            node.body = node.body[1:] or [ast.Pass()]
+    code = ast.unparse(tree)
+    assert "judge_llm" not in code and "deepseek_llm_pro" not in code
+
+    # 行为层：Planner 未注入 → 抛；Verifier 未注入 → fail-closed（不放行）
+    with pytest.raises(ModelDependencyMissing):
+        ssc_a1.plan(ssc_a1.AgentState(user_query="Q"))
+    r = ssc_a1.verify(ssc_a1.AgentState(user_query="Q", evidence_cards=[{"x": 1}]), "out")
+    assert r["passed"] is False
 
 
 @pytest.mark.unit

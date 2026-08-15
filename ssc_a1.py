@@ -22,7 +22,11 @@ def _gen_run_id():
     """唯一 run_id：时间戳 + UUID，避免同秒并发覆盖同一 run 目录/manifest。"""
     return datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
 
-from ssc_pi_agent import judge_llm, deepseek_llm_pro
+# A.8.2b.2b.3c：Planner / Verifier / Shadow-Claim 全部改为**显式注入**。
+# 本模块不再 import ssc_pi_agent、不构造客户端、不读 key。缺依赖即 fail-closed。
+# Executor 本轮**不迁移**：它经 ssc_skill_agent.build_skill_agent 取模型，
+# 而该模块有 import 期的 skill_agent 单例（见 manifest executor_blocked_by_ssc_skill_agent）。
+from pilot.legacy_model_bridge import ScientificOperation, require_injected_model
 from ssc_resources import retriever as _resource_retriever
 from tool_registry import select_tool_names, apply_approvals, all_tool_names
 from schemas import VerificationResult   # 统一契约（P0-3）
@@ -31,7 +35,7 @@ from schemas import VerificationResult   # 统一契约（P0-3）
 
 BASE = Path(__file__).resolve().parent
 RUNS_DIR = BASE / "runs"
-RUNS_DIR.mkdir(exist_ok=True)
+# A.8.2b.2b.3c：import 期不建目录 —— 推迟到 _save_run 真正写入之前。
 
 
 # ==========================================
@@ -94,8 +98,9 @@ def _parse_json(text):
 # ==========================================
 # 三个角色
 # ==========================================
-def plan(state: AgentState, judge_model="claude", failure_feedback=""):
-    llm = judge_llm if judge_model == "claude" else deepseek_llm_pro
+def plan(state: AgentState, judge_model="claude", failure_feedback="", planner_model=None):
+    """Planner：`planner_model` 必须显式注入；缺模型即 ModelDependencyMissing。"""
+    llm = require_injected_model(ScientificOperation.RESEARCH_PLANNING, planner_model)
     fb = f"\n\n上一轮验证未通过，原因：\n{failure_feedback}\n请针对性修订计划。" if failure_feedback else ""
     allowed = state.allowed_tools or all_tool_names()
     prompt = (
@@ -129,9 +134,25 @@ def execute(state: AgentState, executor_model="deepseek"):
 VERIFY_TIMEOUT = 120  # 秒
 
 
+def _require_claim_extractor(claim_extractor):
+    """Shadow 真正要跑时，Claim Extractor 必须由调用方显式提供。
+
+    绝不回退到 `shadow.default_claim_extractor`（那会按模型名回查 legacy 全局对象），
+    也绝不从 Planner / Verifier / Executor 的模型推断 Claim 模型 —— 三者职责不同。
+    """
+    from pilot.legacy_model_bridge import ModelDependencyMissing
+    if claim_extractor is None:
+        raise ModelDependencyMissing(
+            f"explicit claim_extractor required for operation="
+            f"{ScientificOperation.SHADOW_CLAIM_EXTRACTION.value}；"
+            "Shadow 已启用但未提供 Claim Extractor。核心路径不会自动加载 legacy；"
+            "应用入口如需旧行为，请显式构造后经 claim_extractor= 传入。")
+    return claim_extractor
+
+
 def _verifier_llm_call(prompt, judge_model="claude", verifier_model=None):
-    # verifier_model=None → 与修改前完全一致
-    llm = verifier_model or (judge_llm if judge_model == "claude" else deepseek_llm_pro)
+    """Verifier 的默认调用体：`verifier_model` 必须显式注入，绝不回退全局模型。"""
+    llm = require_injected_model(ScientificOperation.RESEARCH_VERIFICATION, verifier_model)
     return llm.invoke(prompt).content
 
 
@@ -220,7 +241,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
               executor_model="deepseek", judge_model="claude",
               stamp=None, approved_tools=None, shadow=True, claim_extractor=None,
               planner_model=None, verifier_model=None):
-    """planner_model / verifier_model：可选依赖注入，**默认 None = 沿用原全局 judge_llm**，
+    """planner_model / verifier_model / claim_extractor：**必须显式注入**（A.8.2b.2b.3c）。
     所有既有入口（Streamlit / CLI / 每日文献 / …）行为完全不变。
     Pilot 显式传入两个独立包装对象，以便 Planner 与 Verifier 分别计量、额度互不借用。
     注入只改"用哪个模型对象"，不改 Prompt、不改计划逻辑、不改核查规则、不改最终裁决权。"""
@@ -237,7 +258,8 @@ def run_agent(user_query, constraints="", max_iterations=2,
 
     from planner import make_plan, render_plan_text, PlanValidationError
     # 默认与修改前逐字一致；只有显式注入时才换对象
-    plan_llm = planner_model or (judge_llm if judge_model == "claude" else deepseek_llm_pro)
+    # Planner 模型必须显式注入 —— 在进入循环之前就 fail-closed，避免跑到 Executor。
+    plan_llm = require_injected_model(ScientificOperation.RESEARCH_PLANNING, planner_model)
 
     failure_feedback = ""
     best_output = ""
@@ -296,13 +318,13 @@ def run_agent(user_query, constraints="", max_iterations=2,
     # 【只记录+对比，不改最终答案】。任何异常都不影响主流程与用户可见行为。
     if shadow and last_msgs is not None:
         try:
-            from shadow import run_shadow, default_claim_extractor
+            from shadow import run_shadow
             old_v = state.verification_results[-1] if state.verification_results else {}
             state.shadow = run_shadow(
                 question=state.user_query, plan=state.research_plan,
                 allowed_tools=state.allowed_tools, selected_tools=selected,
                 final_text=best_output, messages=last_msgs, old_verify=old_v,
-                claim_extractor=claim_extractor or default_claim_extractor(executor_model),
+                claim_extractor=_require_claim_extractor(claim_extractor),
                 model_id=executor_model, stamp=run_id)
         except Exception as e:
             # Shadow 失败绝不改变旧最终答案，只结构化记录
@@ -315,6 +337,7 @@ def run_agent(user_query, constraints="", max_iterations=2,
 
 def _save_run(state: AgentState, stamp=None):
     stamp = stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    RUNS_DIR.mkdir(exist_ok=True)            # 写之前才建目录
     d = RUNS_DIR / stamp
     d.mkdir(exist_ok=True)
     (d / "run.json").write_text(

@@ -99,7 +99,9 @@ def run_chain(monkeypatch, tmp_path, verify_replies, iterations=2):
 
     state = ssc_a1.run_agent("测试问题", max_iterations=iterations, shadow=True,
                              planner_model=roles["planner"],
-                             verifier_model=roles["verifier"])
+                             verifier_model=roles["verifier"],
+                             # A.8.2b.2b.3c-R：shadow=True 现在要求显式 Claim Extractor
+                             claim_extractor=lambda *a, **k: [])
     return state, g, roles, inner
 
 
@@ -157,7 +159,7 @@ def test_verifier_exhausted_then_planner_unaffected(monkeypatch, tmp_path):
 
 # 5 —— 默认未注入路径行为与修改前一致
 @pytest.mark.unit
-def test_default_uninjected_path_uses_global_objects(monkeypatch, tmp_path):
+def test_default_uninjected_path_is_fail_closed(monkeypatch, tmp_path):
     import ssc_a1
     used = {"planner": 0, "verifier": 0}
 
@@ -166,12 +168,16 @@ def test_default_uninjected_path_uses_global_objects(monkeypatch, tmp_path):
             used["verifier"] += 1
             return SimpleNamespace(content=VERIFY_PASS)
 
-    monkeypatch.setattr(ssc_a1, "judge_llm", Probe())
     monkeypatch.setattr(ssc_a1, "_has_citations", lambda t: True)
     state = ssc_a1.AgentState(user_query="q", max_iterations=1)
     state.plan = "p"
-    ssc_a1.verify(state, "结论 PMID 1")             # 不传 verifier_model
-    assert used["verifier"] == 1, "未注入时必须回落到原全局 judge_llm"
+    # A.8.2b.2b.3c-R：未注入**不再**回落全局对象，而是 fail-closed。
+    # 原断言（"必须回落到原全局 judge_llm"）正是被移除的隐式 legacy fallback。
+    r = ssc_a1.verify(state, "结论 PMID 1")          # 不传 verifier_model / verifier_call
+    assert r["passed"] is False
+    assert r["status"] == "verifier_unavailable"
+    assert used["verifier"] == 0, "未注入时不得触达任何模型"
+    assert not hasattr(ssc_a1, "judge_llm"), "ssc_a1 不应再持有 legacy 全局绑定"
 
 
 # 6 —— Pilot 注入不影响"旧 Verifier 决定最终答案"

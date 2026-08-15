@@ -161,7 +161,9 @@ def run_via_runner_path(monkeypatch, tmp_path, exec_script, tool_obj, question,
     monkeypatch.setattr(ssc_a1, "_has_citations", lambda t: True)
     try:
         state = ssc_a1.run_agent(question, max_iterations=2, shadow=True,
-                                 planner_model=planner, verifier_model=verifier)
+                                 planner_model=planner, verifier_model=verifier,
+                                 # A.8.2b.2b.3c-R：shadow=True 需显式 Claim Extractor
+                                 claim_extractor=lambda *a, **k: [])
     finally:
         handle.restore()
     return state, g, trace, guard, reconciler, calls, exec_inner
