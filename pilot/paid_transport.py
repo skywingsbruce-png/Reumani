@@ -427,35 +427,174 @@ def assert_no_raw_paid_client_reachable(approved=None):
     return True
 
 
+# ---------- A.8.2b.2b.3c.0：版本化的合法绑定拓扑 ----------
+#
+# 历史 preflight 原本写死"六绑定"：ssc_pi_agent / ssc_a1 / ssc_skill_agent 三个模块
+# 各持有 judge_llm 与 deepseek_llm_pro，逐一断言身份。一旦 ssc_a1 改为显式注入，
+# 它就不再持有这两个名字 —— 固定六绑定必然失败。
+#
+# 这里把不变式**版本化**为两个明确拓扑，而不是放宽它：
+#   - legacy-six-bindings-v1：ssc_a1 仍是 legacy 绑定 → 严格断言全部六个；
+#   - explicit-injection-four-bindings-v1：ssc_a1 已满足显式注入契约 → 断言四个。
+#
+# 拓扑判定基于**结构证据**（模块字典里有无该绑定 + 公开函数签名是否真的接受注入），
+# 不依赖任何可伪造的布尔标记。半迁移、单边缺失、签名不符、未知形态一律 fail-closed。
+BINDING_TOPOLOGY_LEGACY_SIX = "legacy-six-bindings-v1"
+BINDING_TOPOLOGY_INJECTED_FOUR = "explicit-injection-four-bindings-v1"
+
+#: ssc_a1 要被认定为"已显式注入"，这些公开函数必须真的接受对应的注入参数。
+_SSC_A1_INJECTION_CONTRACT = {
+    "plan": ("planner_model",),
+    "run_agent": ("planner_model", "verifier_model", "claim_extractor"),
+    "_verifier_llm_call": ("verifier_model",),
+}
+
+
+#: 源码层禁止出现的 legacy 回退证据。签名对了但函数体里还能拿到全局模型，
+#: 就等于隐式回退没有真正消除 —— 因此必须两项都过。
+_LEGACY_FALLBACK_MARKERS = ("judge_llm", "deepseek_llm_pro", "deepseek_llm_con",
+                            "default_claim_extractor")
+
+
+def _ssc_a1_has_no_legacy_fallback(mod):
+    """结构证据（源码层）：模块**任何分支**都没有 legacy 回退路径。
+
+    只看真实 AST，不看字符串/注释/docstring：
+    - 不得 `import ssc_pi_agent` 或 `from ssc_pi_agent import ...`（含函数内惰性 import）；
+    - 可执行代码里不得出现 judge_llm / deepseek_llm_* / default_claim_extractor。
+
+    这一项与签名检查**互补**：签名证明"能注入"，本项证明"不注入时没有后路"。
+    """
+    import ast
+    import inspect
+
+    try:
+        path = inspect.getsourcefile(mod)
+        src = open(path, encoding="utf-8").read() if path else None
+    except Exception:                                # noqa: BLE001
+        return False, ["源码不可读（无法证明已消除回退）"]
+    if not src:
+        return False, ["源码不可用（无法证明已消除回退）"]
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return False, ["源码无法解析"]
+
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "ssc_pi_agent":
+            found.append(f"from ssc_pi_agent @L{node.lineno}")
+        elif isinstance(node, ast.Import):
+            found += [f"import ssc_pi_agent @L{node.lineno}"
+                      for a in node.names if a.name == "ssc_pi_agent"]
+    # 剥掉 docstring 后再看可执行代码，避免把"说明不再回退"的文档误判成回退
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)) and ast.get_docstring(node):
+            node.body = node.body[1:] or [ast.Pass()]
+    code = ast.unparse(tree)
+    found += [f"可执行代码含 {m}" for m in _LEGACY_FALLBACK_MARKERS if m in code]
+    return (not found), found
+
+
+def _ssc_a1_satisfies_injection_contract(mod):
+    """结构证据：公开函数确实接受显式注入参数**且**源码无 legacy 回退。
+
+    返回 (bool, 缺失说明)。两项证据缺一不可 —— 只查签名不足以证明隐式回退已移除。
+    """
+    import inspect
+
+    missing = []
+    clean, evidence = _ssc_a1_has_no_legacy_fallback(mod)
+    if not clean:
+        missing += evidence
+    for fn_name, params in _SSC_A1_INJECTION_CONTRACT.items():
+        fn = _module_dict(mod).get(fn_name)
+        if fn is None or not callable(fn):
+            missing.append(f"{fn_name}（缺函数）")
+            continue
+        try:
+            sig = set(inspect.signature(fn).parameters)
+        except (TypeError, ValueError):
+            missing.append(f"{fn_name}（签名不可读）")
+            continue
+        for p in params:
+            if p not in sig:
+                missing.append(f"{fn_name}.{p}")
+    return (not missing), missing
+
+
+def detect_binding_topology(mod=None):
+    """判定当前 ssc_a1 属于哪种合法拓扑。未知形态 → fail-closed。
+
+    只读 `vars(module)`（不触发属性协议），与 A.8.2b.1 的不触发式扫描一致。
+    """
+    import sys
+
+    m = mod if mod is not None else sys.modules.get("ssc_a1")
+    if m is None:
+        raise GateConfigError("ssc_a1 尚未导入，无法判定绑定拓扑（fail-closed）")
+    d = _module_dict(m)
+    has_judge = "judge_llm" in d
+    has_exec = "deepseek_llm_pro" in d
+    ok, missing = _ssc_a1_satisfies_injection_contract(m)
+
+    if has_judge and has_exec:
+        if ok:
+            raise GateConfigError(
+                "ssc_a1 同时持有 legacy 绑定**并且**满足显式注入契约 —— 半迁移状态，"
+                "无法确定模型来源 → 拒绝启动")
+        return BINDING_TOPOLOGY_LEGACY_SIX
+    if not has_judge and not has_exec:
+        if not ok:
+            raise GateConfigError(
+                f"ssc_a1 已无 legacy 绑定，但未满足显式注入契约（缺 {missing}）"
+                " → 未知拓扑，拒绝启动")
+        return BINDING_TOPOLOGY_INJECTED_FOUR
+    present = "judge_llm" if has_judge else "deepseek_llm_pro"
+    raise GateConfigError(
+        f"ssc_a1 只剩单边绑定（仅 {present}）—— 半迁移状态，拒绝启动")
+
+
 def assert_bindings_after_import(roles, gate):
-    """首次导入 ssc_a1 / ssc_skill_agent 之后逐项断言六个绑定的**身份**。
-    任一失败必须在任何网络请求之前终止。"""
+    """首次导入 ssc_a1 / ssc_skill_agent 之后逐项断言绑定**身份**。
+
+    合法拓扑由 `detect_binding_topology()` 判定；任一失败必须在任何网络请求之前终止。
+    """
     import ssc_a1
     import ssc_pi_agent as P
     import ssc_skill_agent
 
     expect_judge = roles["planner"]
     expect_exec = roles["executor"]
+    topology = detect_binding_topology(ssc_a1)
     checks = {
         "ssc_pi_agent.judge_llm": (P.judge_llm, expect_judge),
         "ssc_pi_agent.deepseek_llm_pro": (P.deepseek_llm_pro, expect_exec),
-        "ssc_a1.judge_llm": (getattr(ssc_a1, "judge_llm", None), expect_judge),
-        "ssc_a1.deepseek_llm_pro": (getattr(ssc_a1, "deepseek_llm_pro", None), expect_exec),
         "ssc_skill_agent.judge_llm": (getattr(ssc_skill_agent, "judge_llm", None), expect_judge),
         "ssc_skill_agent.deepseek_llm_pro":
             (getattr(ssc_skill_agent, "deepseek_llm_pro", None), expect_exec),
     }
+    if topology == BINDING_TOPOLOGY_LEGACY_SIX:
+        # ssc_a1 仍是 legacy 绑定 —— 六个一个都不能少，断言强度与迁移前完全一致。
+        checks["ssc_a1.judge_llm"] = (_module_dict(ssc_a1).get("judge_llm"), expect_judge)
+        checks["ssc_a1.deepseek_llm_pro"] = (_module_dict(ssc_a1).get("deepseek_llm_pro"),
+                                             expect_exec)
     bad = []
     for name, (actual, expect) in checks.items():
         if actual is not expect:
             bad.append(f"{name}（身份不符：{'未包装' if not getattr(actual, _WRAPPED, False) else '包装但非本轮对象'}）")
     if bad:
-        raise GateConfigError(f"绑定身份断言失败：{bad} → 在任何网络请求前终止")
+        raise GateConfigError(
+            f"绑定身份断言失败（拓扑 {topology}）：{bad} → 在任何网络请求前终止")
 
     # Shadow 的 claim extractor 是函数内 import，运行时取 —— 验证它拿到的就是包装对象
     import shadow  # noqa: F401
     if P.deepseek_llm_pro is not expect_exec:
         raise GateConfigError("Shadow claim extractor 运行时取到的不是包装对象")
+    # 返回契约保持不变：已断言的绑定名列表（六绑定拓扑下就是原来的 6 个）。
+    # 拓扑名另行经 detect_binding_topology() 查询，不混入这个返回值。
+    return list(checks)
 
     # 四个角色的 role 标签与账本必须一致
     for r in ROLES:
